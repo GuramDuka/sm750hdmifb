@@ -1,0 +1,14 @@
+$ stat -c %s <rebuilt> <original>
+49152 /mega/tmp/sm750/t17/reconstruct/reencode.bin
+49152 /mega/tmp/sm750/vbios-01-00-0.bin
+
+$ sha256sum <rebuilt> <original>
+16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551  /mega/tmp/sm750/t17/reconstruct/reencode.bin
+16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551  /mega/tmp/sm750/vbios-01-00-0.bin
+
+$ wc -c <rebuilt>
+49152 /mega/tmp/sm750/t17/reconstruct/reencode.bin
+
+$ cmp -l <rebuilt> <original>
+(no output)
+cmp exit=0

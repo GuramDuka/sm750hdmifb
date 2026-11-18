@@ -12,6 +12,17 @@
 
 extern void __iomem *mmio750;
 
+/*
+ * Test knobs whose backing store lives in the DRM layer (sm750_drm.c) but
+ * which the DDK layer reads. Declared here for the same reason as mmio750:
+ * a cross-translation-unit definition needs a declaration in scope, or
+ * sparse reports "symbol was not declared".
+ */
+extern bool sm750_test_reduced_pll_ratio;
+extern bool sm750_test_low_vco_pll;
+extern int sm750_test_panel_fifo;
+extern int sm750_test_refresh_centihz;
+
 /* software control endianness */
 static inline u32 peek32(u32 addr)
 {

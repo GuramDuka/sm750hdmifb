@@ -1,0 +1,80 @@
+# utc: 2026-11-18T11:59:50Z
+# T11 AFTER HALF - modetest -p (CRTC/plane/property enumeration) under sm750hdmidrm 0.6.0
+# host: deneb, kernel 7.3.4-100.fc43.x86_64
+# user: coder (uid 1005), groups: coder vtune
+# module in memory: 0.6.0
+
+DRIVER-REPORTED VERSION STRING OBSERVED BY THIS RUN:
+  opened device `SM750G10 SiI9024A HDMI DRM shadow driver` on driver `sm750hdmidrm` (version 0.6.0 at 0)
+
+WHAT T13 CHANGED AND HOW IT SHOWS HERE
+--------------------------------------
+T13 added a blend-mode property to the cursor plane so the DRM core no longer
+warns that an alpha format is exposed without a blend mode. The property is
+visible in the cursor plane block below (plane id 40, type Cursor):
+
+  	42 pixel blend mode:
+  		flags: enum
+  		enums: Pre-multiplied=0
+  		value: 0
+
+Cursor plane source of truth: src/sm750_drm.c:3491 creates the property with
+DRM_MODE_BLEND_PREMULTI only (COVERAGE deliberately not offered; see the
+comment block above it).
+
+---- stdout+stderr (verbatim) ----
+trying to open device '/dev/dri/card0'... done
+opened device `SM750G10 SiI9024A HDMI DRM shadow driver` on driver `sm750hdmidrm` (version 0.6.0 at 0)
+CRTCs:
+id	fb	pos	size
+38	44	(0,0)	(1920x1080)
+  #0 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500 flags: phsync, pvsync; type: preferred, driver
+  props:
+	25 VRR_ENABLED:
+		flags: range
+		values: 0 1
+		value: 0
+
+Planes:
+id	crtc	fb	CRTC x,y	x,y	gamma size	possible crtcs
+36	38	44	0,0		0,0	0       	0x00000001
+  formats: XR24
+  props:
+	9 type:
+		flags: immutable enum
+		enums: Overlay=0 Primary=1 Cursor=2
+		value: 1
+	32 IN_FORMATS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000100000018000000
+			01000000200000005852323400000000
+			01000000000000000000000000000000
+			0000000000000000
+		in_formats blob decoded:
+			 XR24:  LINEAR(0x0)
+40	0	0	0,0		0,0	0       	0x00000001
+  formats: AR24
+  props:
+	9 type:
+		flags: immutable enum
+		enums: Overlay=0 Primary=1 Cursor=2
+		value: 2
+	32 IN_FORMATS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000100000018000000
+			01000000200000004152323400000000
+			01000000000000000000000000000000
+			0000000000000000
+		in_formats blob decoded:
+			 AR24:  LINEAR(0x0)
+	42 pixel blend mode:
+		flags: enum
+		enums: Pre-multiplied=0
+		value: 0
+

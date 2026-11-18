@@ -1,0 +1,138 @@
+# utc: 2026-11-18T15:22:21Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# compiler: gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+# command: tar -tzf dist/sm750hdmifb-0.6.0-source.tar.gz | sed 's|/$||' | sort
+# env: PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm LD_LIBRARY_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64 CC=/usr/bin/gcc
+# workdir: /mega/tmp/sm750/t18/tree
+# scope: defect A29. The manifest of the tarball built by build-package.sh
+# after the change, with the development-only directory counts. The archive is
+# the tracked tree (163 files at HEAD d33cfe3) minus docs/plan (1),
+# docs/evidence (69) and docs/images (3), which is 90 files.
+
+## counts
+
+$ tar -tzf dist/sm750hdmifb-0.6.0-source.tar.gz | wc -l
+90
+$ tar -tzf dist/sm750hdmifb-0.6.0-source.tar.gz | grep -c '^sm750hdmifb-0.6.0/docs/plan/'
+0
+$ tar -tzf dist/sm750hdmifb-0.6.0-source.tar.gz | grep -c '^sm750hdmifb-0.6.0/docs/evidence/'
+0
+$ tar -tzf dist/sm750hdmifb-0.6.0-source.tar.gz | grep -c '^sm750hdmifb-0.6.0/docs/images/'
+0
+$ git ls-files -- . ':(exclude)docs/plan' ':(exclude)docs/evidence' ':(exclude)docs/images' | wc -l
+90
+$ git ls-files | wc -l
+163
+
+The audit compares the shipped list against `git ls-files` minus the same
+list, and the comparison is empty, so the 90 entries below are exactly the
+tracked tree without the development-only directories.
+
+## manifest
+
+AGENTS.md
+build-package.sh
+dkms.conf
+docs/AUDIT.md
+docs/DEFECTS.md
+docs/DELIVERABLES.md
+docs/ENVIRONMENT.md
+docs/HARDWARE.md
+docs/LOGBOOK.md
+docs/MODES.md
+docs/PACKAGING-RPM.md
+docs/PARAMETERS.md
+docs/PROVENANCE.md
+docs/REGISTERS.md
+docs/RELEASE-NOTES.md
+docs/ROOT-ACTIONS.md
+docs/specs/GAPS.md
+docs/specs/INDEX.md
+docs/specs/REGISTER-MAP.md
+docs/specs/SHA256SUMS
+docs/STAGING-BENCHMARK.md
+docs/TESTING.md
+docs/TEST-STRATEGY.md
+docs/VBLANK.md
+.gem-team.yaml
+.github/workflows/build.yml
+.gitignore
+LICENSE
+Makefile
+packaging/20-sm750hdmidrm.conf
+packaging/copyright
+packaging/drm-postinst
+packaging/drm-postrm
+packaging/drm-prerm
+packaging/sm750hdmidrm.conf
+packaging/sm750hdmidrm.modules-load
+packaging/sm750hdmifb.spec
+packaging/write-xorg-config.sh
+README.md
+src/ddk750_chip.c
+src/ddk750_chip.h
+src/ddk750_display.c
+src/ddk750_display.h
+src/ddk750.h
+src/ddk750_hwi2c.c
+src/ddk750_hwi2c.h
+src/ddk750_mode.c
+src/ddk750_mode.h
+src/ddk750_power.c
+src/ddk750_power.h
+src/ddk750_reg.h
+src/ddk750_swi2c.c
+src/ddk750_swi2c.h
+src/Kconfig
+src/Makefile
+src/sii902x.c
+src/sii902x.h
+src/sm750_dither.c
+src/sm750_dither.h
+src/sm750_drm.c
+src/sm750_drm_mode.c
+src/sm750_drm_mode.h
+tests/audit-release.sh
+tests/build-all-kernels.sh
+tests/check-backbuffer-staging.sh
+tests/check-drm-module.sh
+tests/check-drm-packaging.sh
+tests/check-drm-policy.sh
+tests/check-drm-xorg-config.sh
+tests/check-hardware-cursor.sh
+tests/check-release-version.sh
+tests/check-rpm-dkms.sh
+tests/check-shadow-async.sh
+tests/check-shadow-dma.sh
+tests/check-shadow-source-damage.sh
+tests/check-softscale-codegen.sh
+tests/check-softscale-map.sh
+tests/check-softscale-sharpen.sh
+tests/check-vblank.c
+tests/test-bbdither-rgb565.c
+tests/test-scale-optimizations.c
+tests/test-staging-results.py
+tests/test-vblank-timer.py
+tools/bbdither-rgb565.c
+tools/bbdither-rgb565.h
+tools/benchmark-staging.sh
+tools/generate-bbdither8.js
+tools/live-reload.sh
+tools/staging-pattern.c
+tools/staging-results.py
+
+## before the change, for comparison
+
+The HEAD form of build-package.sh excluded only docs/images, so the same
+command produced 160 entries with docs/plan 1 and docs/evidence 69:
+
+$ tar -tzf dist/sm750hdmifb-0.6.0-source.tar.gz | wc -l
+160
+$ ... | grep -c '^sm750hdmifb-0.6.0/docs/plan/'
+1
+$ ... | grep -c '^sm750hdmifb-0.6.0/docs/evidence/'
+69
+$ ... | grep -c '^sm750hdmifb-0.6.0/docs/images/'
+0
+
+# exit: 0

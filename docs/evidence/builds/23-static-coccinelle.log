@@ -1,0 +1,114 @@
+# utc: 2026-11-18T13:22:11Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# compiler: gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+# command: spatch -D report --sp-file <patch> --no-includes --include-headers src/*.c (one run per patch, issued by tests/check-static.sh)
+# env: CC=/usr/bin/gcc; spatch 1.3 (OCaml 5.3.0); 12 patches: 3 in tests/static/cocci/ plus 9 from /usr/src/kernels/7.3.4-100.fc43.x86_64/scripts/coccinelle/
+# workdir: /home/coder/sm750hdmifb
+# scope: coccinelle 1.3 over src/. Exit 0, zero findings for all 12 patches. Each patch logs a HANDLING line naming every analysed file, which is the proof the files were parsed. The planted-bug control at the end shows all three custom patches fire on the defect shapes they look for (ST rows for the driver findings are in docs/STATIC-ANALYSIS.md).
+
+## coccinelle 1.3, tree 7.3.4-100.fc43.x86_64, zero findings
+
+# deref-under-null-check.cocci
+init_defs_builtins: /usr/lib64/coccinelle/standard.h
+HANDLING: /home/coder/sm750hdmifb/src/ddk750_chip.c /home/coder/sm750hdmifb/src/ddk750_display.c /home/coder/sm750hdmifb/src/ddk750_hwi2c.c /home/coder/sm750hdmifb/src/ddk750_mode.c /home/coder/sm750hdmifb/src/ddk750_power.c /home/coder/sm750hdmifb/src/ddk750_swi2c.c /home/coder/sm750hdmifb/src/sii902x.c /home/coder/sm750hdmifb/src/sm750_dither.c /home/coder/sm750hdmifb/src/sm750_drm.c /home/coder/sm750hdmifb/src/sm750_drm_mode.c /home/coder/sm750hdmifb/src/sm750hdmidrm.mod.c
+SPECIAL NAMES: adding DEFINE_SIMPLE_DEV_PM_OPS as a declarer
+SPECIAL NAMES: adding list_for_each_entry as a iterator
+SPECIAL NAMES: adding list_for_each_entry_safe as a iterator
+SPECIAL NAMES: adding drm_atomic_for_each_plane_damage as a iterator
+# missing-unlock.cocci
+init_defs_builtins: /usr/lib64/coccinelle/standard.h
+egrep: warning: egrep is obsolescent; using grep -E
+HANDLING: /home/coder/sm750hdmifb/src/ddk750_chip.c /home/coder/sm750hdmifb/src/ddk750_display.c /home/coder/sm750hdmifb/src/ddk750_hwi2c.c /home/coder/sm750hdmifb/src/ddk750_mode.c /home/coder/sm750hdmifb/src/ddk750_power.c /home/coder/sm750hdmifb/src/ddk750_swi2c.c /home/coder/sm750hdmifb/src/sii902x.c /home/coder/sm750hdmifb/src/sm750_dither.c /home/coder/sm750hdmifb/src/sm750_drm.c /home/coder/sm750hdmifb/src/sm750_drm_mode.c /home/coder/sm750hdmifb/src/sm750hdmidrm.mod.c
+SPECIAL NAMES: adding DEFINE_SIMPLE_DEV_PM_OPS as a declarer
+SPECIAL NAMES: adding list_for_each_entry as a iterator
+SPECIAL NAMES: adding list_for_each_entry_safe as a iterator
+SPECIAL NAMES: adding drm_atomic_for_each_plane_damage as a iterator
+# sizeof-pointer.cocci
+init_defs_builtins: /usr/lib64/coccinelle/standard.h
+egrep: warning: egrep is obsolescent; using grep -E
+HANDLING: /home/coder/sm750hdmifb/src/ddk750_chip.c /home/coder/sm750hdmifb/src/ddk750_display.c /home/coder/sm750hdmifb/src/ddk750_hwi2c.c /home/coder/sm750hdmifb/src/ddk750_mode.c /home/coder/sm750hdmifb/src/ddk750_power.c /home/coder/sm750hdmifb/src/ddk750_swi2c.c /home/coder/sm750hdmifb/src/sii902x.c /home/coder/sm750hdmifb/src/sm750_dither.c /home/coder/sm750hdmifb/src/sm750_drm.c /home/coder/sm750hdmifb/src/sm750_drm_mode.c /home/coder/sm750hdmifb/src/sm750hdmidrm.mod.c
+SPECIAL NAMES: adding DEFINE_SIMPLE_DEV_PM_OPS as a declarer
+SPECIAL NAMES: adding list_for_each_entry as a iterator
+SPECIAL NAMES: adding list_for_each_entry_safe as a iterator
+SPECIAL NAMES: adding drm_atomic_for_each_plane_damage as a iterator
+# kernel null/deref_null.cocci
+init_defs_builtins: /usr/lib64/coccinelle/standard.h
+HANDLING: /home/coder/sm750hdmifb/src/ddk750_chip.c /home/coder/sm750hdmifb/src/ddk750_display.c /home/coder/sm750hdmifb/src/ddk750_hwi2c.c /home/coder/sm750hdmifb/src/ddk750_mode.c /home/coder/sm750hdmifb/src/ddk750_power.c /home/coder/sm750hdmifb/src/ddk750_swi2c.c /home/coder/sm750hdmifb/src/sii902x.c /home/coder/sm750hdmifb/src/sm750_dither.c /home/coder/sm750hdmifb/src/sm750_drm.c /home/coder/sm750hdmifb/src/sm750_drm_mode.c /home/coder/sm750hdmifb/src/sm750hdmidrm.mod.c
+SPECIAL NAMES: adding DEFINE_SIMPLE_DEV_PM_OPS as a declarer
+SPECIAL NAMES: adding list_for_each_entry as a iterator
+SPECIAL NAMES: adding list_for_each_entry_safe as a iterator
+SPECIAL NAMES: adding drm_atomic_for_each_plane_damage as a iterator
+# kernel api/err_cast.cocci
+init_defs_builtins: /usr/lib64/coccinelle/standard.h
+egrep: warning: egrep is obsolescent; using grep -E
+HANDLING: /home/coder/sm750hdmifb/src/ddk750_chip.c /home/coder/sm750hdmifb/src/ddk750_display.c /home/coder/sm750hdmifb/src/ddk750_hwi2c.c /home/coder/sm750hdmifb/src/ddk750_mode.c /home/coder/sm750hdmifb/src/ddk750_power.c /home/coder/sm750hdmifb/src/ddk750_swi2c.c /home/coder/sm750hdmifb/src/sii902x.c /home/coder/sm750hdmifb/src/sm750_dither.c /home/coder/sm750hdmifb/src/sm750_drm.c /home/coder/sm750hdmifb/src/sm750_drm_mode.c /home/coder/sm750hdmifb/src/sm750hdmidrm.mod.c
+SPECIAL NAMES: adding DEFINE_SIMPLE_DEV_PM_OPS as a declarer
+SPECIAL NAMES: adding list_for_each_entry as a iterator
+SPECIAL NAMES: adding list_for_each_entry_safe as a iterator
+SPECIAL NAMES: adding drm_atomic_for_each_plane_damage as a iterator
+# kernel misc/array_size.cocci
+init_defs_builtins: /usr/lib64/coccinelle/standard.h
+egrep: warning: egrep is obsolescent; using grep -E
+HANDLING: /home/coder/sm750hdmifb/src/ddk750_chip.c /home/coder/sm750hdmifb/src/ddk750_display.c /home/coder/sm750hdmifb/src/ddk750_hwi2c.c /home/coder/sm750hdmifb/src/ddk750_mode.c /home/coder/sm750hdmifb/src/ddk750_power.c /home/coder/sm750hdmifb/src/ddk750_swi2c.c /home/coder/sm750hdmifb/src/sii902x.c /home/coder/sm750hdmifb/src/sm750_dither.c /home/coder/sm750hdmifb/src/sm750_drm.c /home/coder/sm750hdmifb/src/sm750_drm_mode.c /home/coder/sm750hdmifb/src/sm750hdmidrm.mod.c
+SPECIAL NAMES: adding DEFINE_SIMPLE_DEV_PM_OPS as a declarer
+SPECIAL NAMES: adding list_for_each_entry as a iterator
+SPECIAL NAMES: adding list_for_each_entry_safe as a iterator
+SPECIAL NAMES: adding drm_atomic_for_each_plane_damage as a iterator
+# kernel locks/double_lock.cocci
+init_defs_builtins: /usr/lib64/coccinelle/standard.h
+egrep: warning: egrep is obsolescent; using grep -E
+HANDLING: /home/coder/sm750hdmifb/src/ddk750_chip.c /home/coder/sm750hdmifb/src/ddk750_display.c /home/coder/sm750hdmifb/src/ddk750_hwi2c.c /home/coder/sm750hdmifb/src/ddk750_mode.c /home/coder/sm750hdmifb/src/ddk750_power.c /home/coder/sm750hdmifb/src/ddk750_swi2c.c /home/coder/sm750hdmifb/src/sii902x.c /home/coder/sm750hdmifb/src/sm750_dither.c /home/coder/sm750hdmifb/src/sm750_drm.c /home/coder/sm750hdmifb/src/sm750_drm_mode.c /home/coder/sm750hdmifb/src/sm750hdmidrm.mod.c
+SPECIAL NAMES: adding DEFINE_SIMPLE_DEV_PM_OPS as a declarer
+SPECIAL NAMES: adding list_for_each_entry as a iterator
+SPECIAL NAMES: adding list_for_each_entry_safe as a iterator
+SPECIAL NAMES: adding drm_atomic_for_each_plane_damage as a iterator
+# kernel null/kmerr.cocci
+init_defs_builtins: /usr/lib64/coccinelle/standard.h
+egrep: warning: egrep is obsolescent; using grep -E
+HANDLING: /home/coder/sm750hdmifb/src/ddk750_chip.c /home/coder/sm750hdmifb/src/ddk750_display.c /home/coder/sm750hdmifb/src/ddk750_hwi2c.c /home/coder/sm750hdmifb/src/ddk750_mode.c /home/coder/sm750hdmifb/src/ddk750_power.c /home/coder/sm750hdmifb/src/ddk750_swi2c.c /home/coder/sm750hdmifb/src/sii902x.c /home/coder/sm750hdmifb/src/sm750_dither.c /home/coder/sm750hdmifb/src/sm750_drm.c /home/coder/sm750hdmifb/src/sm750_drm_mode.c /home/coder/sm750hdmifb/src/sm750hdmidrm.mod.c
+SPECIAL NAMES: adding DEFINE_SIMPLE_DEV_PM_OPS as a declarer
+SPECIAL NAMES: adding list_for_each_entry as a iterator
+SPECIAL NAMES: adding list_for_each_entry_safe as a iterator
+SPECIAL NAMES: adding drm_atomic_for_each_plane_damage as a iterator
+# kernel api/kfree_mismatch.cocci
+init_defs_builtins: /usr/lib64/coccinelle/standard.h
+egrep: warning: egrep is obsolescent; using grep -E
+HANDLING: /home/coder/sm750hdmifb/src/ddk750_chip.c /home/coder/sm750hdmifb/src/ddk750_display.c /home/coder/sm750hdmifb/src/ddk750_hwi2c.c /home/coder/sm750hdmifb/src/ddk750_mode.c /home/coder/sm750hdmifb/src/ddk750_power.c /home/coder/sm750hdmifb/src/ddk750_swi2c.c /home/coder/sm750hdmifb/src/sii902x.c /home/coder/sm750hdmifb/src/sm750_dither.c /home/coder/sm750hdmifb/src/sm750_drm.c /home/coder/sm750hdmifb/src/sm750_drm_mode.c /home/coder/sm750hdmifb/src/sm750hdmidrm.mod.c
+SPECIAL NAMES: adding DEFINE_SIMPLE_DEV_PM_OPS as a declarer
+SPECIAL NAMES: adding list_for_each_entry as a iterator
+SPECIAL NAMES: adding list_for_each_entry_safe as a iterator
+SPECIAL NAMES: adding drm_atomic_for_each_plane_damage as a iterator
+# kernel misc/minmax.cocci
+init_defs_builtins: /usr/lib64/coccinelle/standard.h
+HANDLING: /home/coder/sm750hdmifb/src/ddk750_chip.c /home/coder/sm750hdmifb/src/ddk750_display.c /home/coder/sm750hdmifb/src/ddk750_hwi2c.c /home/coder/sm750hdmifb/src/ddk750_mode.c /home/coder/sm750hdmifb/src/ddk750_power.c /home/coder/sm750hdmifb/src/ddk750_swi2c.c /home/coder/sm750hdmifb/src/sii902x.c /home/coder/sm750hdmifb/src/sm750_dither.c /home/coder/sm750hdmifb/src/sm750_drm.c /home/coder/sm750hdmifb/src/sm750_drm_mode.c /home/coder/sm750hdmifb/src/sm750hdmidrm.mod.c
+SPECIAL NAMES: adding DEFINE_SIMPLE_DEV_PM_OPS as a declarer
+SPECIAL NAMES: adding list_for_each_entry as a iterator
+SPECIAL NAMES: adding list_for_each_entry_safe as a iterator
+SPECIAL NAMES: adding drm_atomic_for_each_plane_damage as a iterator
+# kernel misc/struct_size.cocci
+init_defs_builtins: /usr/lib64/coccinelle/standard.h
+egrep: warning: egrep is obsolescent; using grep -E
+HANDLING: /home/coder/sm750hdmifb/src/ddk750_chip.c /home/coder/sm750hdmifb/src/ddk750_display.c /home/coder/sm750hdmifb/src/ddk750_hwi2c.c /home/coder/sm750hdmifb/src/ddk750_mode.c /home/coder/sm750hdmifb/src/ddk750_power.c /home/coder/sm750hdmifb/src/ddk750_swi2c.c /home/coder/sm750hdmifb/src/sii902x.c /home/coder/sm750hdmifb/src/sm750_dither.c /home/coder/sm750hdmifb/src/sm750_drm.c /home/coder/sm750hdmifb/src/sm750_drm_mode.c /home/coder/sm750hdmifb/src/sm750hdmidrm.mod.c
+SPECIAL NAMES: adding DEFINE_SIMPLE_DEV_PM_OPS as a declarer
+SPECIAL NAMES: adding list_for_each_entry as a iterator
+SPECIAL NAMES: adding list_for_each_entry_safe as a iterator
+SPECIAL NAMES: adding drm_atomic_for_each_plane_damage as a iterator
+# kernel null/badzero.cocci
+init_defs_builtins: /usr/lib64/coccinelle/standard.h
+Using native version of ocamlc/ocamlopt/ocamldep
+ocamlopt.opt -shared -o /tmp/ocaml_cocci_e723ac.cmxs -g -I /usr/lib64/coccinelle/ocaml  -I /usr/lib64/ocaml -for-pack Coccinelle_modules /tmp/ocaml_cocci_e723ac.ml
+Compilation OK!
+Loading ML code of the SP...
+HANDLING: /home/coder/sm750hdmifb/src/ddk750_chip.c /home/coder/sm750hdmifb/src/ddk750_display.c /home/coder/sm750hdmifb/src/ddk750_hwi2c.c /home/coder/sm750hdmifb/src/ddk750_mode.c /home/coder/sm750hdmifb/src/ddk750_power.c /home/coder/sm750hdmifb/src/ddk750_swi2c.c /home/coder/sm750hdmifb/src/sii902x.c /home/coder/sm750hdmifb/src/sm750_dither.c /home/coder/sm750hdmifb/src/sm750_drm.c /home/coder/sm750hdmifb/src/sm750_drm_mode.c /home/coder/sm750hdmifb/src/sm750hdmidrm.mod.c
+SPECIAL NAMES: adding DEFINE_SIMPLE_DEV_PM_OPS as a declarer
+SPECIAL NAMES: adding list_for_each_entry as a iterator
+SPECIAL NAMES: adding list_for_each_entry_safe as a iterator
+SPECIAL NAMES: adding drm_atomic_for_each_plane_damage as a iterator
+
+## control: the three custom patches on a throwaway copy with planted defects
+## (overrunning array, sizeof(pointer) as a copy length, null deref under a
+## NULL check, mutex_lock with an early return before the unlock)
+
+deref-under-null-check: /mega/tmp/sm750/t19/gateproof/src/sii902x.c:693
+missing-unlock: /mega/tmp/sm750/t19/gateproof/src/sii902x.c:697
+sizeof-pointer: /mega/tmp/sm750/t19/gateproof/src/sii902x.c:692

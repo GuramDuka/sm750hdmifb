@@ -59,7 +59,9 @@ cd sm750hdmifb
 
 work=$(mktemp -d) && topdir=$work/rpmbuild
 mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS}
-git ls-files -z -- . ':(exclude)docs/images/*' >"$work/tracked"
+. ./packaging/source-excludes.sh
+mapfile -t skip < <(sm750_dev_only_pathspecs)
+git ls-files -z -- . "${skip[@]}" >"$work/tracked"
 tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.0-source.tar.gz" \
     --transform='s|^|sm750hdmifb-0.6.0/|' --null -T "$work/tracked"
 
@@ -351,6 +353,41 @@ The driver sets up fbdev emulation through `DRM_FBDEV_TTM_DRIVER_OPS` and
 `drm_client_setup()`. A `/dev/fb0` node appears only when the kernel is built
 with fbdev emulation and no other framebuffer driver already owns the device.
 KMS output works without it, so a missing `/dev/fb0` is not a driver fault.
+
+### What the HDMI output actually shows
+
+On the reference host the SM750 HDMI output carries the kernel console, and the
+desktop is on a different card. This is observed behaviour, not a configuration
+instruction:
+
+- The driver registers its own in-kernel fbdev client at probe, through
+  `drm_client_setup(&sdev->drm, drm_format_info(DRM_FORMAT_XRGB8888))` at
+  `src/sm750_drm.c:3784`. That client is the only user of the SM750 CRTC.
+- The kernel log records the console takeover and the framebuffer device, both
+  before any userspace client attaches:
+
+  ```text
+  [    6.265979] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+  [    6.291648] Console: switching to colour frame buffer device 240x67
+  [    6.341676] sm750hdmidrm 0000:01:00.0: [drm] fb0: sm750hdmidrmdrm frame buffer device
+  ```
+
+  `4147200` bytes is `1920 * 1080 * 2`, the size of one RGB565 buffer at the
+  mode the fbdev client sets.
+- No `/dev/fb*` node appears despite that registration, because
+  `CONFIG_FB_DEVICE` is unset on this kernel (recorded as A24 in
+  `docs/DEFECTS.md`). The console still reaches the panel; only the character
+  device is missing.
+- The monitor stays attached to the SM750 HDMI connector: `card0-HDMI-A-1`
+  reports `connected` at every probe, and nothing detaches it.
+- The user's desktop runs on the NVIDIA GTX 1070, not on the SM750. On this
+  host `card1` is `0000:02:00.0` with `card1-DVI-D-1` connected and
+  `kwin_wayland` running against it; `card0` has no userspace DRM master.
+
+So the SM750 is a second, permanent output that shows the console, and the
+graphical session is unaffected by anything done to it. A modeset on `card0`
+from a test tool temporarily replaces the console; closing the tool lets the
+fbdev client restore its own 1920x1080 mode.
 
 ## Developers
 

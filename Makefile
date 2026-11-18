@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
-.PHONY: all clean check check-deps check-package check-all-kernels module-info package
+.PHONY: all clean check check-deps check-package check-all-kernels module-info package static vbios-re
 
 all:
 	$(MAKE) -C $(KDIR) M=$(CURDIR)/src modules
@@ -50,8 +50,26 @@ check: check-deps all tests/check-vblank tests/test-bbdither-rgb565 \
 check-all-kernels:
 	./tests/build-all-kernels.sh
 
+# Opt-in static analysis (sparse, smatch, cppcheck, coccinelle, pahole). Kept
+# out of `check` on purpose: the recipe command count of `check` is asserted by
+# tests/check-drm-module.sh and documented in docs/AUDIT.md, and the analysers
+# are not a build requirement. Baseline: tests/static/baseline/, triage:
+# docs/STATIC-ANALYSIS.md.
+static:
+	./tests/check-static.sh
+
 module-info: all
 	/sbin/modinfo src/sm750hdmidrm.ko
+
+# Opt-in rebuild of the board option ROM from the 16-bit reconstruction. The
+# captured image is vendor material and is never committed, so this SKIPS when
+# it is absent (the harness exits 77, the recipe turns that into a skip); it is
+# not a `check` dependency for the same reason `static` is not (see
+# docs/VBIOS-REVERSE-ENGINEERING.md).
+vbios-re:
+	@./tools/vbios-re/check.sh; rc=$$?; \
+	if [ $$rc -eq 77 ]; then exit 0; fi; \
+	exit $$rc
 
 tests/check-vblank: tests/check-vblank.c
 	$(CC) -O2 -Wall -Wextra -Werror $$(pkg-config --cflags libdrm) \

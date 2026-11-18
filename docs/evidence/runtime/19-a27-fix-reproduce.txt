@@ -1,0 +1,207 @@
+# utc: 2026-11-18T12:46:35Z
+T20 - A27 FIX: POST-FIX REPRODUCTION, 108 ATTEMPTS
+===================================================
+
+Question this file answers: with the fixed module loaded, does the A27 cascade
+still appear when the trigger that produced it is run?
+
+Trigger (unchanged from T16, the shape that worked): send SIGINT to a kmscube
+300 ms into its first commit, then run `modetest -s 35@38:1024x768-60`, then
+restore 1920x1080. The `-110` that A27 turns into a WARNING lands on the
+1920x1080 restore that drm_release issues when modetest closes the device.
+
+Symptom markers counted per attempt (a27_hits): the drm_atomic_helper WARNING,
+`flip_done timed out`, `commit wait timed out`, `refcount_t: underflow` and
+`use-after-free`. The fail-path message is counted separately (failpath): it is
+not a symptom, it is the driver reporting that the modeset did not complete,
+and after the fix it is expected to occur without any of the markers.
+
+Host: kernel 7.3.4-100.fc43.x86_64, user coder (uid 1005), unprivileged
+(/dev/dri/card0 carries ACL user:coder:rw-, so kmscube and modetest run without
+root). Module under test: sm750hdmidrm 0.6.0, srcversion
+07E8F503FC7D839EEC5EE64, i.e. the fixed build delivered in
+18-a27-fix-install.txt. Harness: /mega/tmp/sm750/t20/repro.sh; raw log
+/mega/tmp/sm750/t20/logs/reproduce.log; the dmesg window of every attempt that
+saw the fail path is kept in /mega/tmp/sm750/t20/repro-windows.txt.
+
+1. RESULT
+----------
+
+108 attempts, 0 A27 markers, 0 attempts left the panel in a bad state.
+
+=== totals: a27_hits=0 failpath=4
+=== done 2026-11-18T16:35:46+03:00 state=connected/enabled/On/ attempts_run=108 panel_stuck=0
+
+The acceptance criterion asks for at least 36 attempts; 108 were run because
+T16 measured the pre-fix rate at 1/36 for this shape, so 36 attempts would have
+left a 36 % chance of missing a still-broken path. 108 attempts give a 95 %
+chance of seeing at least one hit at that rate, and the fail path did in fact
+fire five times (section 2) - the run exercised the code under test, it did not
+merely fail to reach it.
+
+2. THE FAIL PATH FIRED FIVE TIMES AND PRODUCED NO MARKER
+---------------------------------------------------------
+Attempts 76, 78, 79 and 82 logged the fail path (82 twice). Verbatim dmesg
+windows from /mega/tmp/sm750/t20/repro-windows.txt:
+
+--- attempt=76 rc=0 t0=7600 a27_hits=0 failpath=1 2026-11-18T16:20:59+03:00 state=connected/enabled/On/
+[ 7616.752457] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI mode: -110 (commit finished, event consumed)
+[ 7620.382576] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+[ 7620.386251] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (1572864 bytes per buffer)
+[ 7622.964555] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+[ 7622.968240] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+[ 7626.680440] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+[ 7626.684153] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+[ 7629.548457] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+[ 7629.552140] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+--- attempt=78 rc=0 t0=7661 a27_hits=0 failpath=1 2026-11-18T16:22:00+03:00 state=connected/enabled/On/
+[ 7679.234675] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+[ 7679.239315] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+[ 7683.028442] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+[ 7683.033063] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (1572864 bytes per buffer)
+[ 7686.034650] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+[ 7686.042242] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+[ 7689.980522] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+[ 7689.985171] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+[ 7691.007385] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI mode: -110 (commit finished, event consumed)
+--- attempt=79 rc=0 t0=7692 a27_hits=0 failpath=1 2026-11-18T16:22:30+03:00 state=connected/enabled/On/
+[ 7709.916233] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+[ 7709.919889] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+[ 7713.963176] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+[ 7713.966823] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (1572864 bytes per buffer)
+[ 7714.387576] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI mode: -110 (commit finished, event consumed)
+[ 7718.127159] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+[ 7718.130797] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+[ 7720.962150] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+[ 7720.966117] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+--- attempt=82 rc=0 t0=7783 a27_hits=0 failpath=2 2026-11-18T16:24:01+03:00 state=connected/enabled/On/
+[ 7802.431907] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+[ 7802.435567] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+[ 7806.263859] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+[ 7806.267493] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (1572864 bytes per buffer)
+[ 7806.742207] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI mode: -110 (commit finished, event consumed)
+[ 7808.564495] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI mode: -110 (commit finished, event consumed)
+[ 7811.672778] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+[ 7811.676444] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+
+Every one of those five `*ERROR* failed to enable HDMI mode: -110` lines is
+followed only by the normal re-enable sequence (`SiI9024A receiver not ready
+after 2000 ms ... enabling for compatibility`, `full-frame backbuffer staging
+enabled (N bytes per buffer)`). There is no WARNING, no flip_done timeout, no
+commit wait timeout and no refcount underflow in any window.
+
+That is the whole point of the fix: the `-110` is a hardware/link condition the
+driver cannot prevent (the producer is still unidentified, GAP-B8), but the
+abandoned commit now completes instead of wedging the atomic path.
+
+3. WHOLE-BOOT MARKER AUDIT: 9 MARKERS, ALL BEFORE THE RELOAD
+-------------------------------------------------------------
+/mega/tmp/sm750/t20/audit.sh walks the current boot's dmesg, stamps every line
+with its uptime and counts the A27 markers on both sides of the reload
+(modprobe -r + modprobe at 12:44:44Z, dmesg t=5456).
+
+# utc: 2026-11-18T13:57:19Z
+# host: 7.3.4-100.fc43.x86_64
+# module: sm750hdmidrm 0.6.0 srcversion 07E8F503FC7D839EEC5EE64
+# reload: modprobe -r + modprobe at 2026-11-18T12:44:44Z (dmesg t=5456)
+
+== A27 marker lines (WARNING, flip_done/commit wait timeout, refcount underflow, use-after-free)
+2889: [ 2889.882047] WARNING: drivers/gpu/drm/drm_atomic_helper.c:2758 at drm_atomic_helper_commit_hw_done+0x102/0x130, CPU#21: kmscube/322140
+2899: [ 2899.954215] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* flip_done timed out
+2899: [ 2899.954223] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* [CRTC:38:crtc-0] commit wait timed out
+2910: [ 2910.194059] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* flip_done timed out
+2910: [ 2910.194067] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* [PLANE:36:plane-0] commit wait timed out
+2910: [ 2910.194126] refcount_t: underflow; use-after-free.
+2910: [ 2910.194128] WARNING: lib/refcount.c:28 at refcount_warn_saturate+0x59/0x90, CPU#0: kworker/0:1/316731
+2920: [ 2920.432972] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* flip_done timed out
+2920: [ 2920.432986] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* [CONNECTOR:35:HDMI-A-1] commit wait timed out
+
+== count before the reload (t < 5456)
+9
+== count after the reload (t > 5456)
+0
+
+== fail-path lines (the fixed build appends 'commit finished, event consumed')
+2889: [ 2889.882009] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI mode: -110
+7616: [ 7616.752457] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI mode: -110 (commit finished, event consumed)
+7691: [ 7691.007385] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI mode: -110 (commit finished, event consumed)
+7714: [ 7714.387576] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI mode: -110 (commit finished, event consumed)
+7806: [ 7806.742207] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI mode: -110 (commit finished, event consumed)
+7808: [ 7808.564495] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI mode: -110 (commit finished, event consumed)
+
+== fail-path count before / after the reload
+before=1 after=5
+
+Reading: the nine markers are T11's pre-fix capture of the same defect on the
+unfixed 0.6.0 (t=2889.882 to 2920.433, `docs/evidence/runtime/18-kernel-log-0.6.0.txt`),
+including the 62.4 s-later refcount underflow. After the fixed module was
+loaded the count is zero, and the five fail-path occurrences are all in that
+clean window - the same event, without the cascade.
+
+4. PER-ATTEMPT LOG (HEAD AND TAIL)
+-----------------------------------
+# utc: 2026-11-18T12:46:35Z
+# host: 7.3.4-100.fc43.x86_64
+# module: sm750hdmidrm 0.6.0 srcversion 07E8F503FC7D839EEC5EE64
+# shape: SIGINT kmscube 300 ms into its first commit, then modetest -s 35@38:1024x768-60, then restore 1920x1080
+# harness: /mega/tmp/sm750/t20/repro.sh
+
+=== T20 A27 post-fix reproduction start 2026-11-18T15:46:35+03:00 attempts=108 state=connected/enabled/On/ srcversion=07E8F503FC7D839EEC5EE64
+attempt=1    rc=0    elapsed=27 s lines=10   a27_hits=0 failpath=0 total=2541 state=connected/enabled/On/
+...
+attempt=106  rc=0    elapsed=27 s lines=10   a27_hits=0 failpath=0 total=2426 state=connected/enabled/On/
+attempt=107  rc=0    elapsed=27 s lines=10   a27_hits=0 failpath=0 total=2421 state=connected/enabled/On/
+attempt=108  rc=0    elapsed=27 s lines=10   a27_hits=0 failpath=0 total=2416 state=connected/enabled/On/
+=== done 2026-11-18T16:35:46+03:00 state=connected/enabled/On/ attempts_run=108 panel_stuck=0
+=== totals: a27_hits=0 failpath=4
+TRAP restore 2026-11-18T16:35:46+03:00
+
+Each of the 108 lines carries rc=0, a27_hits=0 and state=connected/enabled/On/.
+Attempt duration is 21-34 s (the harness waits out the 2 s receiver-not-ready
+poll on the modesets it issues).
+
+5. PANEL AND MODULE STATE AFTER THE RUN
+----------------------------------------
+/mega/tmp/sm750/t20/logs/final-state.log, recorded 45 s after the last attempt:
+
+# utc: 2026-11-18T13:36:45Z
+# final state after the 108-attempt run
+
+== connector
+connected
+enabled
+On
+
+== module
+version=0.6.0 srcversion=07E8F503FC7D839EEC5EE64 refcnt=0
+
+== crtc mode (modetest -p)
+CRTCs:
+id	fb	pos	size
+38	44	(0,0)	(1920x1080)
+
+== a27 markers in the whole boot
+9
+== fail-path occurrences in the whole boot
+6
+
+The refcnt of 0 is the second half of the defect statement: the refcount
+underflow A27 could produce came from a plane state destroyed while a commit
+was still pending. With the commit finished, nothing is left outstanding and
+the module has no users when the harness goes idle.
+
+6. REGISTER SANITY
+-------------------
+Three `sudo -n /usr/local/sbin/sm750-regs` samples 20 ms apart after the run:
+PANEL_DISPLAY_CTRL 0x0f010105 in all three (bit 8 TIMING and bit 2 PLANE set,
+so the panel is enabled), and PANEL_CURRENT_LINE advancing 0x0000009a ->
+0x0000003c -> 0x000002ac, i.e. the raster is running. Full 49-register dump:
+/mega/tmp/sm750/t20/logs/regs-after.log.
+
+7. WHAT THIS DOES NOT PROVE
+----------------------------
+It does not identify which of the five fallible calls in sm750_program_mode
+returns -110 (GAP-B8 stays open); it does not raise or lower any framebuffer or
+plane limit; and it does not make the -110 rarer. It shows that when the -110
+happens, the commit finishes, vblank accounting is back on, and neither the
+WARNING, the 30 s of stalled commits nor the refcount underflow follow.

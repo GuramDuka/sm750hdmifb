@@ -125,6 +125,27 @@ comm -23 <(find docs -type f | sort) \
 Expected: no output, meaning every file under `docs/` is named by this file.
 `README.md` links every user-facing document; see section 5.
 
+### 2.8 Static analysis (opt-in, not part of `check`)
+
+```sh
+make static
+KDIR=/usr/src/kernels/7.3.4-100.fc43.x86_64 \
+  STATIC_KERNELS=/mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64 \
+  ./tests/check-static.sh --logs "$(mktemp -d)"
+```
+
+Expected: exit 0 and `static gate: PASS`. The target runs sparse, smatch,
+cppcheck, coccinelle and pahole over `src/`, normalises each finding to a
+fingerprint without line numbers and fails on any fingerprint missing from
+`tests/static/baseline/`. It is deliberately outside `check`, whose 17 recipe
+commands are asserted by `tests/check-drm-module.sh`, and it exits 0 with an
+`analysers not installed, skipping` notice where the toolchain is absent, so
+building and packaging need nothing new. Triage of every recorded finding, the
+planted-defect control proving each analyser analysed the files, and the
+non-default tool configuration are in [STATIC-ANALYSIS.md](STATIC-ANALYSIS.md);
+the one accepted residual is `A28` in [DEFECTS.md](DEFECTS.md). Evidence:
+`docs/evidence/builds/20-static-sparse.log` to `25-static-gate.log`.
+
 ## 3. Root-only steps
 
 These are the steps that need root. Four are now closed or partly closed on
@@ -136,20 +157,43 @@ bodies and the recovery recipe for a broken allowlist are in
 
 | Step | `ROOT-REQUIRED` command | Observed state |
 | --- | --- | --- |
-| Register readback | `sudo /usr/local/sbin/sm750-regs > /mega/tmp/sm750/regs-before.txt` (resolves the `dri/<N>` index from the by-path link) | **GAP-B4** until the 0.6.0 module is installed (T11). The debugfs facility exists and the grant works, but the loaded module is still 0.5.9 and has no `regs` file. |
-| VBIOS image | `sudo /usr/local/sbin/sm750-vbios-dump /mega/tmp/sm750/vbios-01-00-0.bin` | **CLOSED, GAP-B1.** Captured 2026-11-18T10:11Z: 49152 bytes, sha256 `16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551`. The image is complete at 48 KiB (header size 0x60, PCIR image length 0x0060, whole-image checksum 0), so the helper's exit 2 and its `expected 65536` warning are a stale constant, not a short read. Signature `55 aa`, PCIR at 0x1c, 126f:0750, VBE 2.0, version 1.00.59-, build 05/14/19 16:25. Binary stays in `/mega/tmp/sm750/`, not committed; transcript `docs/evidence/baseline/18-vbios-dump.txt`. |
+| Register readback | `sudo /usr/local/sbin/sm750-regs > /mega/tmp/sm750/regs-before.txt` (resolves the `dri/<N>` index from the by-path link) | **CLOSED, GAP-B4.** Exit 0 on the loaded 0.6.0 module, 49 registers with `# card node: /dev/dri/card0 (debugfs dri/0)`; captured as `docs/evidence/runtime/08-register-dump.txt`. |
+| VBIOS image | `sudo /usr/local/sbin/sm750-vbios-dump /mega/tmp/sm750/vbios-01-00-0.bin` | **CLOSED, GAP-B1.** Captured 2026-11-18T10:11Z: 49152 bytes, sha256 `16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551`. The image is complete at 48 KiB (header size 0x60, PCIR image length 0x0060, whole-image checksum 0), so the helper's exit 2 and its `expected 65536` warning are a stale constant, not a short read. Signature `55 aa`, PCIR at 0x1c, 126f:0750, VBE 2.0, version 1.00.59-, build 05/14/19 16:25. The v3 body documented in `docs/ROOT-ACTIONS.md` section 3.3 sets `EXPECT=49152` and adds the `55 aa` check; it was installed by the host owner on 2026-11-18T12:07Z and re-executed with exit 0, `signature 55aa, checksum ok`, hashing to the same value. Binary stays in `/mega/tmp/sm750/`, not committed; transcript `docs/evidence/baseline/18-vbios-dump.txt`. |
 | Kernel log | `sudo -n dmesg` (also `sudo -n journalctl -k -b -q --no-pager`) | **CLOSED, GAP-B2.** Exit 0; 169860 bytes with 240 `sm750` lines measured 2026-11-18T09:36Z (154236 bytes / 150 lines at the earlier capture). |
 | PCI config space > 0x40 | `sudo /usr/local/sbin/sm750-lspci` | **CLOSED, GAP-B5.** Exit 0, 9465 bytes, capability list above 0x40 present. |
-| KMS clients | `modetest -c -M sm750hdmidrm`, `kmscube -D /dev/dri/card0 -c 60`, IGT `kms_setmode` | **PARTIAL, GAP-B3.** The card node opens unprivileged through the udev ACL; `modetest` and `kmscube` pass as pre-fix baselines (`docs/evidence/runtime/04-modeset.txt`, `05-kmscube.txt`), IGT fails (`06-igt.txt`). No scanout CRC or external capture. |
-| RPM install | `sudo -n dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm` | **GAP-B7.** Granted, not executed. |
-| Installed-state assertion | `sudo -n dkms status -m sm750hdmifb -v 0.6.0` (expected `: installed`) and `sudo -n modprobe sm750hdmidrm` | **GAP-B7.** Follows the install row; `dkms status` currently reports 0.5.9. |
-| RPM erase | `sudo -n dnf remove -y sm750hdmifb` then `sudo -n dkms status -m sm750hdmifb -v 0.6.0` (expected no output) | **GAP-B7.** Granted, not executed. |
+| KMS clients | `modetest -c -M sm750hdmidrm`, `kmscube -D /dev/dri/card0 -c 60`, IGT `kms_setmode` | **PARTIAL, GAP-B3.** The card node opens unprivileged through the udev ACL; `modetest` and `kmscube` pass as pre-fix baselines (`docs/evidence/runtime/04-modeset.txt`, `05-kmscube.txt`), IGT on 0.6.0 (`docs/evidence/runtime/19-igt-0.6.0.txt`) runs `kms_addfb_basic` to completion with 26 SUCCESS / 14 SKIP / 1 FAIL, the single failure being `size-max` at `tests/kms_addfb_basic.c:594` which A26 records as correct by design. The `/dev/tty0` ACL in `docs/ROOT-ACTIONS.md` section 4.1 was installed on 2026-11-18T12:08Z, so the five binaries that used to abort at `kmstest_set_vt_graphics_mode` with `errno 13` can open the VT. No scanout CRC or external capture. |
+| RPM install | `sudo -n dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm` | **CLOSED, GAP-B7.** Executed 2026-11-18; `%posttrans` built and installed the module for 7.2.15-100, 7.3.3-100 and 7.3.4-100 (`docs/evidence/runtime/12-rpmbuild-0.6.0.txt`). |
+| Installed-state assertion | `sudo -n dkms status -m sm750hdmifb -v 0.6.0` (expected `: installed`) and `sudo -n modprobe sm750hdmidrm` | **CLOSED, GAP-B7.** `dkms status` reports 0.6.0 `installed` for all three kernels, the module loads, and `/sys/module/sm750hdmidrm/version` reads 0.6.0. The only remaining stale rows are two `0.5.9 ... built` registrations, which task T22 removes. |
+| RPM erase | `sudo -n dnf remove -y sm750hdmifb` then `sudo -n dkms status -m sm750hdmifb -v 0.6.0` (expected no output) | **CLOSED, GAP-B7.** Executed as the rollback proof: `%preun` ran `dkms remove --all`, the object file was deleted and the display survived (`docs/evidence/runtime/20-rollback.txt`). Recorded hazard: the erase leaves the module loaded with no file on disk, so a reboot in that state would leave card0 driverless; 0.6.0 was reinstalled and a `modprobe -r`/`modprobe` cycle proved the fresh package loads. |
 
 The KMS row no longer needs a privilege step: `/etc/udev/rules.d/99-sm750-coder-acl.rules`
 grants `u:coder:rw` on the card node at every probe, and the SM750 registers no
 render node, so `/dev/dri/renderD128` (the NVIDIA card at `02:00.0`) is not a
 substitute. The three access mechanisms and their state are recorded in
 `docs/ENVIRONMENT.md` section 5.1.
+
+### 3.1 Second output: the console on the SM750 HDMI port
+
+Why these root actions are safe to run while someone is using the machine. The
+SM750 HDMI output shows the kernel console because the driver registers its own
+in-kernel fbdev client at
+`drm_client_setup(&sdev->drm, drm_format_info(DRM_FORMAT_XRGB8888))`
+(`src/sm750_drm.c:3784`); that client is the only user of the SM750 CRTC. The
+kernel log records the console takeover before any userspace client attaches:
+
+```text
+[    6.265979] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+[    6.291648] Console: switching to colour frame buffer device 240x67
+[    6.341676] sm750hdmidrm 0000:01:00.0: [drm] fb0: sm750hdmidrmdrm frame buffer device
+```
+
+`4147200` is `1920 * 1080 * 2`, one RGB565 buffer at the mode the fbdev client
+sets. No `/dev/fb*` node exists because `CONFIG_FB_DEVICE` is unset (A24 in
+`docs/DEFECTS.md`); the console still reaches the panel. The monitor stays
+attached to the SM750 connector: `card0-HDMI-A-1` reports `connected`, and
+nothing detaches it. The user's desktop runs on the NVIDIA GTX 1070 instead
+(`card1`, `0000:02:00.0`, `card1-DVI-D-1` connected, `kwin_wayland` pid 2252),
+and `card0` has no userspace DRM master.
 
 ## 4. Clean-checkout reproduction
 
@@ -272,7 +316,9 @@ rm -rf -- "$topdir"
 mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS}
 
 tracked=$work/tracked
-git ls-files -z -- . ':(exclude)docs/images/*' >"$tracked"
+. ./packaging/source-excludes.sh
+mapfile -t skip < <(sm750_dev_only_pathspecs)
+git ls-files -z -- . "${skip[@]}" >"$tracked"
 tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.0-source.tar.gz" \
     --transform='s|^|sm750hdmifb-0.6.0/|' --null -T "$tracked"
 
@@ -282,6 +328,12 @@ rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb.spec
 Expected: `RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm` and the matching
 `.src.rpm`, exit 0. Prerequisites: `rpm-build`, `git`, `tar`. The package is a
 noarch DKMS source carrier; nothing is compiled at RPM build time.
+
+Archive-content rule: the source tarball is exactly the tracked tree minus the
+development-only directories declared once in `packaging/source-excludes.sh`
+(`docs/plan`, `docs/evidence`, `docs/images`), the same list `build-package.sh`
+and `tests/audit-release.sh` read, so `docs/` additions ship unless they are
+declared there.
 
 ### Step 7: RPM/DKMS gate and sandbox
 
@@ -332,6 +384,7 @@ list.
 | `docs/AUDIT.md` | repository audit, 24 defects with reproduction and evidence |
 | `docs/DEFECTS.md` | one disposition per defect: fixed, accepted or deferred |
 | `docs/TEST-STRATEGY.md` | suites S1-S8, recorded results, remaining gaps |
+| `docs/STATIC-ANALYSIS.md` | static-analysis gate, per-tool counts, triage of every finding, tool configuration and limits |
 | `docs/PACKAGING-RPM.md` | spec purpose, build recipe, install, verify, rollback |
 | `docs/ENVIRONMENT.md` | host, header trees, tool matrix, privilege state |
 | `docs/DELIVERABLES.md` | this index and the reproduction guide |
@@ -393,6 +446,12 @@ list.
 | `docs/evidence/builds/17-check-rpm-dkms-0.6.0.log` | full `tests/check-rpm-dkms.sh` run at 0.6.0 |
 | `docs/evidence/builds/18-sudoers-verify-0.6.0.log` | regenerated allowlist: zero colons, `visudo -c -f` twice |
 | `docs/evidence/builds/19-cursor-alpha-fix.log` | T13: the blend-mode property, the object proof, `make check` and both kernel matrices after the fix |
+| `docs/evidence/builds/20-static-sparse.log` | T19: sparse 0.6.4 over `src/`, 7.3.4-100 and 6.17.1-300, exit 0 / 0 warnings after the declaration fix, plus the four pre-fix lines |
+| `docs/evidence/builds/21-static-smatch.log` | T19: smatch 1.73 over both trees, exit 0, 5 and 3 driver findings, all kernel-macro false positives |
+| `docs/evidence/builds/22-static-cppcheck.log` | T19: bear 3.1.6 compile database plus cppcheck 2.19.1, zero findings, with the planted-defect control |
+| `docs/evidence/builds/23-static-coccinelle.log` | T19: coccinelle 1.3, 12 patches (3 local, 9 kernel), zero findings, with the planted-defect control |
+| `docs/evidence/builds/24-static-pahole.log` | T19: pahole v1.32, BTF absent and every driver struct layout |
+| `docs/evidence/builds/25-static-gate.log` | T19: the gate passing on the tree, failing on a planted copy, and skipping with exit 0 when the analysers are absent |
 | `docs/evidence/packaging/01-rpmbuild.log` | `rpmbuild -ba`, exit 0 (0.6.0; the 0.5.9 run is archived in `docs/evidence/packaging/0.5.9/`) |
 | `docs/evidence/packaging/02-rpm-qp-scripts.log` | scriptlet assertions |
 | `docs/evidence/packaging/03-rpm-qlp.log` | `%files` list, 36 files |

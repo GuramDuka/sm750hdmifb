@@ -1,0 +1,30 @@
+Toolchain constraint: why the reconstruction is 16-bit assembly
+
+$ /usr/bin/gcc --version | head -1
+gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+$ clang --version | head -1
+clang version 21.1.8 (Fedora 21.1.8-6.fc43)
+$ nasm -v
+NASM version 2.16.03 compiled on Jul 22 2026
+
+--- 1. gcc -m16 cannot emit 16-bit ROM code ---
+$ printf "void f(void){ __asm__(\\"push %%%%ebp\\"); }" > p.c
+void f(void){ __asm__("push %ebp"); }
+$ /usr/bin/gcc -m16 -O2 -c p.c -o p.o && objdump -d p.o | tail -3
+00000000 <f>:
+   0:	66 55                	push   %bp
+   2:	66 c3                	retw
+
+$ printf "int g(int a,int b){return a+b;}" > p2.c && /usr/bin/gcc -m16 -O2 -c p2.c -o p2.o && objdump -d p2.o | tail -4
+int g(int a, int b) { return a + b; }
+   0:	67 66 8b 44 24       	mov    0x24(%si),%ax
+   5:	08 67 66             	or     %ah,0x66(%edi)
+   8:	03 44 24 04          	add    0x4(%esp),%eax
+   c:	66 c3                	retw
+
+--- 2. clang -m16 cannot emit 16-bit ROM code ---
+$ clang -m16 -O2 -c p2.c -o q.o && objdump -d q.o | tail -4
+   0:	67 66 8b 44 24       	mov    0x24(%si),%ax
+   5:	08 67 66             	or     %ah,0x66(%edi)
+   8:	03 44 24 04          	add    0x4(%esp),%eax
+   c:	66 c3                	retw

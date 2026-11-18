@@ -1,0 +1,106 @@
+# utc: 2026-11-18T12:11:27Z
+# T11 AFTER HALF - TIER 6: IGT under sm750hdmidrm 0.6.0 (T10 counterpart: 06-igt.txt)
+# host: deneb, kernel 7.3.4-100.fc43.x86_64
+# module in memory: 0.6.0
+# IGT version banner: IGT-Version: 2.4-NO-GIT (x86_64) (Linux: 7.3.4-100.fc43.x86_64 x86_64)
+# environment (identical to T10, nothing installed):
+#   IGT=/mega/tmp/sm750/t10/x/igt-gpu-tools-2.4-1.fc43.x86_64
+#   LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr/lib64
+#   B=$IGT/usr/libexec/igt-gpu-tools
+# raw: /mega/tmp/sm750/t11/igt-core.{out,err}, igt-addfb-full.{out,err},
+#      igt-addfb.{out,err} (the single-subtest control run)
+
+======================================================================
+RUN 1: core_getversion --device /dev/dri/card0   -> exit=0
+======================================================================
+  IGT-Version: 2.4-NO-GIT (x86_64) (Linux: 7.3.4-100.fc43.x86_64 x86_64)
+  Using IGT_SRANDOM=1795003413 for randomisation
+  Opened device: /dev/dri/card0
+  Starting subtest: basic
+  0: sm750hdmidrm v0.6 0 SM750G10 SiI9024A HDMI DRM shadow driver
+  Subtest basic: SUCCESS (0.000s)
+  Starting subtest: all-cards
+  0: sm750hdmidrm v0.6 0 SM750G10 SiI9024A HDMI DRM shadow driver
+  Subtest all-cards: SUCCESS (0.007s)
+  stderr (benign device-scan noise, present in T10 too):
+    (core_getversion:333643) igt_device_scan-WARNING: No filter class matching [/dev/dri/card0]
+    (core_getversion:333643) igt_device_scan-WARNING: Warning on condition !is_valid in function igt_device_filter_add, file ../lib/igt_device_scan.c:2088
+
+  THE VERSION TRANSITION IS VISIBLE IN IGT ITSELF:
+    T10 (06-igt.txt): 0: sm750hdmidrm v0.1 0 SM750G10 SiI9024A HDMI DRM shadow driver
+    T11 (this file) : 0: sm750hdmidrm v0.6 0 SM750G10 SiI9024A HDMI DRM shadow driver
+  IGT derives that from DRM_IOCTL_VERSION against the open node, so it is an
+  independent confirmation of AC-4 alongside modinfo and modetest -c.
+
+======================================================================
+RUN 2: kms_addfb_basic --device /dev/dri/card0   -> exit=98
+======================================================================
+  Tally: 26 SUCCESS / 14 SKIP / 1 FAIL - identical to T10's 06-igt.txt.
+  dmesg delta for the run: 2 lines, neither sm750-related.
+  SUCCESS: unused-handle, unused-pitches, unused-offsets, unused-modifier,
+           legacy-format, no-handle, basic, bad-pitch-0, bad-pitch-32,
+           bad-pitch-63, bad-pitch-128, bad-pitch-256, bad-pitch-1024,
+           bad-pitch-999, bad-pitch-65536, invalid-get-prop,
+           invalid-get-prop-any, invalid-set-prop, invalid-set-prop-any,
+           master-rmfb, too-wide, too-high, bo-too-small, small-bo,
+           addfb25-modifier-no-flag, addfb25-bad-modifier.
+  SKIP (14): all Intel-only requirements - clobberred-modifier, basic-x-tiled-legacy,
+           framebuffer-vs-set-tiling, tile-pitch-mismatch, basic-y-tiled-legacy,
+           bo-too-small-due-to-tiling, invalid-smem-bo-on-discrete and the
+           addfb25 y-tile/4-tile families. Requirement text: 'is_i915_device(fd)'
+           or 'is_intel_device(fd)'. Not a driver result either way.
+
+  THE ONE FAILURE - size-max - IS UNCHANGED FROM T10/T15:
+    Starting subtest: size-max
+    Stack trace:
+      #0 [__igt_fail_assert+0x177]
+      #1 [<unknown>+0x402f0f]
+      #2 [<unknown>+0x405c6b]
+      #3 [<unknown>+0x4059b6]
+      #4 ../sysdeps/nptl/libc_start_call_main.h:74 __libc_start_call_main()
+      #5 ../csu/libc-start.c:128 __libc_start_main@@GLIBC_2.34()
+      #6 [<unknown>+0x400645]
+    Subtest size-max: FAIL (0.043s)
+    Starting subtest: too-wide
+    Subtest too-wide: SUCCESS (0.000s)
+  Verbatim assertion from stderr:
+    (kms_addfb_basic:355146) CRITICAL: Test assertion failure function size_tests, file ../tests/kms_addfb_basic.c:594:
+    (kms_addfb_basic:355146) CRITICAL: Failed assertion: igt_ioctl((fd), ((((2U|1U) << (((0+8)+8)+14)) | ((('d')) << (0+8)) | (((0xB8)) << 0) | ((((sizeof(struct drm_mode_fb_cmd2)))) << ((0+8)+8)))), (&f_16)) == 0
+    (kms_addfb_basic:355146) CRITICAL: Last errno: 22, Invalid argument
+    (kms_addfb_basic:355146) CRITICAL: error: -1 != 0
+    Subtest size-max failed.
+
+  Interpretation: DRM_IOCTL_MODE_ADDFB2 on a 1024x1024 XRGB8888 buffer with
+  pitch 4096 succeeds (the first do_ioctl and rmfb pass), then the SAME buffer
+  with depth 16 / bpp 16 (f_16) is rejected EINVAL at kms_addfb_basic.c:594.
+  This is the pre-existing addfb2 depth/format-validation defect T15 recorded in
+  docs/evidence/runtime/10-addfb-size-max.txt, reproduced identically on 0.6.0.
+  No T5/T9/T13 change touched it. It stays open, owned by the defect entry in
+  docs/DEFECTS.md, not by T11.
+
+======================================================================
+RUN 2b: control run, kms_addfb_basic --run-subtest size-max  -> exit=98
+======================================================================
+  Same failure, same line 594, same errno 22 - the standalone invocation does not
+  change the verdict. It does however interleave unrelated 'Test requirement not
+  met ... is_intel_device(fd)' lines from the sibling tiling fixtures, which can
+  be misread as 'size-max was skipped'. It was not: the subtest ran and failed.
+  The full-binary run (RUN 2) is the citable one; this run is recorded so the
+  misleading interleaving is documented rather than discovered again later.
+    Test requirement not met in function igt_require_intel, file ../lib/drmtest.c:957:
+    Test requirement: is_intel_device(fd)
+    Starting subtest: size-max
+    Stack trace:
+      #0 [__igt_fail_assert+0x177]
+      #1 [<unknown>+0x402f0f]
+      #2 [<unknown>+0x405c6b]
+      #3 [<unknown>+0x4059b6]
+      #4 ../sysdeps/nptl/libc_start_call_main.h:74 __libc_start_call_main()
+      #5 ../csu/libc-start.c:128 __libc_start_main@@GLIBC_2.34()
+
+======================================================================
+VERDICT FOR AC-6 (IGT tier)
+======================================================================
+  core_getversion: PASS and now reports v0.6 (was v0.1).
+  kms_addfb_basic: identical tally to the pre-fix baseline; the single FAIL is a
+  pre-existing defect, not a regression introduced by the 0.6.0 install.

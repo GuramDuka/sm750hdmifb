@@ -1,0 +1,61 @@
+# utc: 2026-11-18T12:09:14Z
+# T11 AFTER HALF - KMSCUBE under sm750hdmidrm 0.6.0 (same commands as T10)
+# host: deneb, kernel 7.3.4-100.fc43.x86_64, user coder (uid 1005)
+# module in memory: 0.6.0
+# T10 counterpart: docs/evidence/runtime/05-kmscube.txt (stale 0.5.9 build)
+# binary: /mega/tmp/sm750/t10/x/kmscube-0-11.20241006.git311eaaa.fc43.x86_64/usr/bin/kmscube
+# stdin held open with 'tail -f /dev/null |' as T10 established, else kmscube exits on EOF
+
+===== RUN 1: kmscube -c 120 =====
+  command: tail -f /dev/null | kmscube -D /dev/dri/card0 -c 120
+  exit=0
+  dmesg delta=5 lines; the only sm750 lines were one probe pair:
+    SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+    full-frame backbuffer staging enabled (4147200 bytes per buffer)
+  frame lines (verbatim):
+    Rendered 108 frames in 2.000073 sec (53.998037 fps)
+    Rendered 119 frames in 2.200024 sec (54.090311 fps)
+  stderr:
+    pci id for fd 3: 126f:0750, driver (null)
+    pci id for fd 4: 126f:0750, driver (null)
+    pci id for fd 5: 126f:0750, driver (null)
+    pci id for fd 4: 126f:0750, driver (null)
+    pci id for fd 5: 126f:0750, driver (null)
+
+  T10 comparison: -c 120 gave 113 frames/2.000 s = 56.50 fps and 119/2.100 s = 56.66 fps.
+  T11 gives 53.998037 fps and 54.090311 fps. Same rate within run-to-run variance; llvmpipe software rendering, not SM750 acceleration.
+
+===== RUN 2: kmscube -c 300 (LONG RUN) =====
+  command: tail -f /dev/null | kmscube -D /dev/dri/card0 -c 300
+  exit=0
+  dmesg delta=71 lines. THIS RUN TRIGGERED THE T16 -110 EPISODE. See
+  docs/evidence/runtime/18-kernel-log-0.6.0.txt for the full trace and
+  docs/DEFECTS.md for the disposition. Summary of what happened:
+    - at 2889.882 the driver logged '*ERROR* failed to enable HDMI mode: -110'
+      while kmscube was still rendering, followed by the drm_atomic_helper
+      WARNING at drm_atomic_helper.c:2758 from drm_release -> drm_fbdev_client_restore
+    - at 2899.95/2910.19/2920.43 three 'flip_done timed out' + 'commit wait timed out'
+      errors for CRTC 38, PLANE 36 and CONNECTOR 35
+    - at 2910.194 a refcount_t underflow WARNING from drm_fb_helper_damage_work ->
+      drm_atomic_helper_dirtyfb -> __drm_atomic_commit_free
+    - the panel SURVIVED: status=connected enabled=enabled dpms=On, CRTC 38 at
+      1920x1080, module refcnt 0, kmscube still reported 299 rendered frames.
+  frame lines (verbatim):
+    Rendered 84 frames in 2.032513 sec (41.328147 fps)
+    Rendered 162 frames in 4.032570 sec (40.172897 fps)
+    Rendered 244 frames in 6.049256 sec (40.335540 fps)
+    Rendered 299 frames in 7.415893 sec (40.318813 fps)
+  stderr:
+    pci id for fd 3: 126f:0750, driver (null)
+    pci id for fd 4: 126f:0750, driver (null)
+    pci id for fd 5: 126f:0750, driver (null)
+    pci id for fd 4: 126f:0750, driver (null)
+    pci id for fd 5: 126f:0750, driver (null)
+
+  T10 comparison: -c 300 gave 299 frames in 5.066709 s = 59.01 fps.
+  T11 gives 40.318813 fps. Lower because the -110 episode stalled the commit path for
+  ~30 s of flip_done timeouts during the run. Recorded, not explained away.
+
+  NOTE ON THE EPISODE: T16 owns the -110 / refcount underflow investigation
+  (plan.yaml:617-635). T11 observed it reproduce on 0.6.0 and hands the capture
+  over; T11 does not diagnose it.

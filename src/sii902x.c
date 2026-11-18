@@ -66,8 +66,6 @@ static bool sii902x_rom_hdmi;
 static bool sii902x_force_black;
 static bool sii902x_mode_prepared;
 
-extern int sm750_test_refresh_centihz;
-
 module_param_named(sii9024_dvi, sii902x_force_dvi, bool, 0444);
 MODULE_PARM_DESC(sii9024_dvi,
 		 "Force DVI signalling over the HDMI connector (default: false)");

@@ -1,0 +1,319 @@
+# utc: 2026-11-18T13:22:25Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# compiler: gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+# command: make KDIR=/usr/src/kernels/7.3.4-100.fc43.x86_64 CC=/usr/bin/gcc KCFLAGS=-g all; pahole --version; pahole -F btf src/sm750hdmidrm.ko; pahole -C <struct> src/sm750_drm.o (issued by tests/check-static.sh)
+# env: CC=/usr/bin/gcc; KDIR=/usr/src/kernels/7.3.4-100.fc43.x86_64; pahole v1.32 (dwarves); KCFLAGS=-g
+# workdir: /home/coder/sm750hdmifb
+# scope: pahole 1.32 over the built objects. Exit 0, informational only: the gate fails on a pahole build error, never on a layout. BTF status and every struct layout below. No cacheline-scale padding; the 1 to 5 byte gaps are member alignment and are recorded as ST-12 in docs/STATIC-ANALYSIS.md.
+
+## pahole v1.32 (dwarves), tree 7.3.4-100.fc43.x86_64
+
+make: Entering directory '/mega/tmp/sm750/t19/evlogs/pahole-tree'
+make -C /usr/src/kernels/7.3.4-100.fc43.x86_64 M=/mega/tmp/sm750/t19/evlogs/pahole-tree/src modules
+make[1]: Entering directory '/usr/src/kernels/7.3.4-100.fc43.x86_64'
+make[2]: Entering directory '/mega/tmp/sm750/t19/evlogs/pahole-tree/src'
+  CC [M]  sm750_drm.o
+  CC [M]  sm750_drm_mode.o
+  CC [M]  sm750_dither.o
+  CC [M]  ddk750_chip.o
+  CC [M]  ddk750_mode.o
+  CC [M]  ddk750_power.o
+  CC [M]  ddk750_display.o
+  CC [M]  ddk750_swi2c.o
+  CC [M]  ddk750_hwi2c.o
+  CC [M]  sii902x.o
+  LD [M]  sm750hdmidrm.o
+  MODPOST Module.symvers
+  CC [M]  sm750hdmidrm.mod.o
+  CC [M]  .module-common.o
+  LD [M]  sm750hdmidrm.ko
+  BTF [M] sm750hdmidrm.ko
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+make[2]: Leaving directory '/mega/tmp/sm750/t19/evlogs/pahole-tree/src'
+make[1]: Leaving directory '/usr/src/kernels/7.3.4-100.fc43.x86_64'
+make: Leaving directory '/mega/tmp/sm750/t19/evlogs/pahole-tree'
+## pahole --version
+v1.32
+## BTF status of sm750hdmidrm.ko
+BTF: absent (no vmlinux BTF for the target tree;
+     see docs/STATIC-ANALYSIS.md, out of scope)
+## driver struct layouts
+struct sm750_drm_device {
+	struct drm_device          drm __attribute__((__aligned__(8))); /*     0  1560 */
+
+	/* XXX last struct has 6 holes */
+
+	/* --- cacheline 24 boundary (1536 bytes) was 24 bytes ago --- */
+	struct pci_dev *           pdev;                 /*  1560     8 */
+	struct drm_simple_display_pipe pipe __attribute__((__aligned__(8))); /*  1568  3168 */
+	/* --- cacheline 74 boundary (4736 bytes) --- */
+	struct drm_plane           cursor_plane __attribute__((__aligned__(8))); /*  4736  1352 */
+
+	/* XXX last struct has 3 holes */
+
+	/* --- cacheline 95 boundary (6080 bytes) was 8 bytes ago --- */
+	struct drm_connector       connector __attribute__((__aligned__(8))); /*  6088  2264 */
+
+	/* XXX last struct has 12 holes */
+
+	/* --- cacheline 130 boundary (8320 bytes) was 32 bytes ago --- */
+	struct mutex               mode_lock __attribute__((__aligned__(8))); /*  8352    24 */
+	struct mutex               shadow_lock __attribute__((__aligned__(8))); /*  8376    24 */
+	/* --- cacheline 131 boundary (8384 bytes) was 16 bytes ago --- */
+	struct mutex               cursor_lock __attribute__((__aligned__(8))); /*  8400    24 */
+	struct mutex               async_lock __attribute__((__aligned__(8))); /*  8424    24 */
+	/* --- cacheline 132 boundary (8448 bytes) --- */
+	struct workqueue_struct *  shadow_workqueue;     /*  8448     8 */
+	struct work_struct         shadow_work;          /*  8456    32 */
+	struct hrtimer             vblank_timer __attribute__((__aligned__(8))); /*  8488    80 */
+
+	/* XXX last struct has 1 hole */
+
+	/* --- cacheline 133 boundary (8512 bytes) was 56 bytes ago --- */
+	spinlock_t                 vblank_lock __attribute__((__aligned__(4))); /*  8568     4 */
+
+	/* XXX 4 bytes hole, try to pack */
+
+	/* --- cacheline 134 boundary (8576 bytes) --- */
+	void *                     regs;                 /*  8576     8 */
+	void *                     vram;                 /*  8584     8 */
+	resource_size_t            vram_base;            /*  8592     8 */
+	u32                        vram_size;            /*  8600     4 */
+	u32                        scanout_pitch;        /*  8604     4 */
+	u32                        softscale_source_width; /*  8608     4 */
+
+	/* XXX 4 bytes hole, try to pack */
+
+	struct sm750_dither *      dither;               /*  8616     8 */
+	struct sm750_dither_scale_map * dither_scale_map; /*  8624     8 */
+	u32 *                      dither_source_line;   /*  8632     8 */
+	/* --- cacheline 135 boundary (8640 bytes) --- */
+	u32 *                      shadow_source_snapshot; /*  8640     8 */
+	u32 *                      async_source;         /*  8648     8 */
+	u16 *                      rgb565_scanout_snapshot; /*  8656     8 */
+	u32 *                      softscale_output_line; /*  8664     8 */
+	u32 *                      xrgb_output_line;     /*  8672     8 */
+	u32 *                      cursor_source;        /*  8680     8 */
+	u8 *                       cursor_image;         /*  8688     8 */
+	void *                     dma_staging[2];       /*  8696    16 */
+	/* --- cacheline 136 boundary (8704 bytes) was 8 bytes ago --- */
+	dma_addr_t                 dma_staging_address[2]; /*  8712    16 */
+	struct completion          dma_completion __attribute__((__aligned__(8))); /*  8728    32 */
+
+	/* XXX last struct has 1 hole */
+
+	u16 *                      dither_output_line;   /*  8760     8 */
+	/* --- cacheline 137 boundary (8768 bytes) --- */
+	u32                        cursor_offset;        /*  8768     4 */
+	u32                        cursor_encoded_width; /*  8772     4 */
+	u32                        dma_master_base[2];   /*  8776     8 */
+	u32                        dma_source_address[2]; /*  8784     8 */
+	u32                        dma_pending_destination; /*  8792     4 */
+
+	/* XXX 4 bytes hole, try to pack */
+
+	size_t                     dma_pending_size;     /*  8800     8 */
+	u32                        dma_active_destination; /*  8808     4 */
+
+	/* XXX 4 bytes hole, try to pack */
+
+	size_t                     dma_active_size;      /*  8816     8 */
+	size_t                     dma_batch_limit;      /*  8824     8 */
+	/* --- cacheline 138 boundary (8832 bytes) --- */
+	u64                        staging_started_ns;   /*  8832     8 */
+	u32                        staging_batches;      /*  8840     4 */
+
+	/* XXX 4 bytes hole, try to pack */
+
+	u64                        staging_bytes;        /*  8848     8 */
+	unsigned int               staging_rows;         /*  8856     4 */
+	bool                       staging_measure;      /*  8860     1 */
+
+	/* XXX 3 bytes hole, try to pack */
+
+	u32                        shadow_upload_offset; /*  8864     4 */
+	u32                        scanout_offset;       /*  8868     4 */
+	u32                        backbuffer_offset;    /*  8872     4 */
+	u32                        scanout_frame_size;   /*  8876     4 */
+	unsigned int               dma_fill_index;       /*  8880     4 */
+	unsigned int               dma_active_index;     /*  8884     4 */
+	struct drm_rect            async_damage[32];     /*  8888   512 */
+	/* --- cacheline 146 boundary (9344 bytes) was 56 bytes ago --- */
+	unsigned int               async_damage_count;   /*  9400     4 */
+	u32                        shadow_source_width;  /*  9404     4 */
+	/* --- cacheline 147 boundary (9408 bytes) --- */
+	u32                        shadow_source_height; /*  9408     4 */
+	u32                        disconnected_width;   /*  9412     4 */
+	u32                        disconnected_height;  /*  9416     4 */
+	u32                        disconnected_refresh; /*  9420     4 */
+	u32                        hotplug_preferred_width; /*  9424     4 */
+	u32                        hotplug_preferred_height; /*  9428     4 */
+	u32                        hotplug_preferred_refresh; /*  9432     4 */
+	u8                         connected_edid[256];  /*  9436   256 */
+
+	/* XXX 4 bytes hole, try to pack */
+
+	/* --- cacheline 151 boundary (9664 bytes) was 32 bytes ago --- */
+	u64                        vblank_line_ns;       /*  9696     8 */
+	u64                        vblank_frame_ns;      /*  9704     8 */
+	u16                        vblank_start;         /*  9712     2 */
+	u16                        vblank_vtotal;        /*  9714     2 */
+	bool                       vblank_timer_enabled; /*  9716     1 */
+	bool                       phase_falling;        /*  9717     1 */
+	bool                       shadow_scanout;       /*  9718     1 */
+	bool                       rgb565;               /*  9719     1 */
+	bool                       bbdither;             /*  9720     1 */
+	bool                       softscale_active;     /*  9721     1 */
+	bool                       shadow_source_snapshot_valid; /*  9722     1 */
+	bool                       rgb565_scanout_snapshot_valid; /*  9723     1 */
+	bool                       hardware_cursor;      /*  9724     1 */
+	bool                       cursor_image_valid;   /*  9725     1 */
+	bool                       shadow_dma_enabled;   /*  9726     1 */
+	bool                       shadow_dma_broken;    /*  9727     1 */
+	/* --- cacheline 152 boundary (9728 bytes) --- */
+	bool                       dma_irq_enabled;      /*  9728     1 */
+	bool                       dma_irq_armed;        /*  9729     1 */
+	bool                       dma_active;           /*  9730     1 */
+	bool                       backbuffer_available; /*  9731     1 */
+	bool                       backbuffer_ready;     /*  9732     1 */
+	bool                       backbuffer_mirror;    /*  9733     1 */
+
+	/* XXX 2 bytes hole, try to pack */
+
+	u32                        dma_irq_mask_saved;   /*  9736     4 */
+	bool                       shadow_write_pending; /*  9740     1 */
+	bool                       async_source_valid;   /*  9741     1 */
+	bool                       async_stopping;       /*  9742     1 */
+	bool                       connected_edid_valid; /*  9743     1 */
+	bool                       monitor_disconnected; /*  9744     1 */
+	bool                       disconnected_mode_valid; /*  9745     1 */
+	bool                       hotplug_preferred_valid; /*  9746     1 */
+
+	/* size: 9752, cachelines: 153, members: 94 */
+	/* sum members: 9718, holes: 8, sum holes: 29 */
+	/* padding: 5 */
+	/* member types with holes: 5, total: 23 */
+	/* forced alignments: 11 */
+	/* last cacheline: 24 bytes */
+} __attribute__((__aligned__(8)));
+
+struct sm750_scanout_mode {
+	u32                        clock_khz;            /*     0     4 */
+	u16                        hdisplay;             /*     4     2 */
+	u16                        hsync_start;          /*     6     2 */
+	u16                        hsync_end;            /*     8     2 */
+	u16                        htotal;               /*    10     2 */
+	u16                        vdisplay;             /*    12     2 */
+	u16                        vsync_start;          /*    14     2 */
+	u16                        vsync_end;            /*    16     2 */
+	u16                        vtotal;               /*    18     2 */
+	u32                        flags;                /*    20     4 */
+	u32                        pitch;                /*    24     4 */
+	u32                        offset;               /*    28     4 */
+	u8                         cpp;                  /*    32     1 */
+
+	/* size: 36, cachelines: 1, members: 13 */
+	/* padding: 3 */
+	/* last cacheline: 36 bytes */
+};
+
+struct mode_parameter {
+	long unsigned int          horizontal_total;     /*     0     8 */
+	long unsigned int          horizontal_display_end; /*     8     8 */
+	long unsigned int          horizontal_sync_start; /*    16     8 */
+	long unsigned int          horizontal_sync_width; /*    24     8 */
+	enum spolarity             horizontal_sync_polarity; /*    32     4 */
+
+	/* XXX 4 bytes hole, try to pack */
+
+	long unsigned int          vertical_total;       /*    40     8 */
+	long unsigned int          vertical_display_end; /*    48     8 */
+	long unsigned int          vertical_sync_start;  /*    56     8 */
+	/* --- cacheline 1 boundary (64 bytes) --- */
+	long unsigned int          vertical_sync_height; /*    64     8 */
+	enum spolarity             vertical_sync_polarity; /*    72     4 */
+
+	/* XXX 4 bytes hole, try to pack */
+
+	long unsigned int          pixel_clock;          /*    80     8 */
+	long unsigned int          horizontal_frequency; /*    88     8 */
+	long unsigned int          vertical_frequency;   /*    96     8 */
+	enum spolarity             clock_phase_polarity; /*   104     4 */
+
+	/* size: 112, cachelines: 2, members: 14 */
+	/* sum members: 100, holes: 2, sum holes: 8 */
+	/* padding: 4 */
+	/* last cacheline: 48 bytes */
+};
+
+struct sm750_dither {
+	u8                         quantise5[64][256];   /*     0 16384 */
+	/* --- cacheline 256 boundary (16384 bytes) --- */
+	u8                         quantise6_green[64][256]; /* 16384 16384 */
+	/* --- cacheline 512 boundary (32768 bytes) --- */
+	s8                         sharpen8_adjustment[1024]; /* 32768  1024 */
+
+	/* size: 33792, cachelines: 528, members: 3 */
+};
+
+struct sm750_dither_scale_map {
+	u32                        src_width;            /*     0     4 */
+	u32                        dst_width;            /*     4     4 */
+	struct reciprocal_value    divisor;              /*     8     8 */
+
+	/* XXX last struct has 2 bytes of padding */
+
+	struct sm750_dither_scale_sample sample[2048];   /*    16 20480 */
+
+	/* size: 20496, cachelines: 321, members: 4 */
+	/* paddings: 1, sum paddings: 2 */
+	/* last cacheline: 16 bytes */
+};
+
+struct sm750_dither_scale_sample {
+	u16                        first;                /*     0     2 */
+	u16                        weight[3];            /*     2     6 */
+	u8                         taps;                 /*     8     1 */
+
+	/* size: 10, cachelines: 1, members: 3 */
+	/* padding: 1 */
+	/* last cacheline: 10 bytes */
+};
+
+struct sm750_source_run {
+	unsigned int               x1;                   /*     0     4 */
+	unsigned int               x2;                   /*     4     4 */
+
+	/* size: 8, cachelines: 1, members: 2 */
+	/* last cacheline: 8 bytes */
+};
+
+struct pll_value {
+	enum clock_type            clock_type;           /*     0     4 */
+
+	/* XXX 4 bytes hole, try to pack */
+
+	long unsigned int          input_freq;           /*     8     8 */
+	long unsigned int          M;                    /*    16     8 */
+	long unsigned int          N;                    /*    24     8 */
+	long unsigned int          OD;                   /*    32     8 */
+	long unsigned int          POD;                  /*    40     8 */
+
+	/* size: 48, cachelines: 1, members: 6 */
+	/* sum members: 44, holes: 1, sum holes: 4 */
+	/* last cacheline: 48 bytes */
+};
+
+struct initchip_param {
+	short unsigned int         power_mode;           /*     0     2 */
+	short unsigned int         chip_clock;           /*     2     2 */
+	short unsigned int         mem_clock;            /*     4     2 */
+	short unsigned int         master_clock;         /*     6     2 */
+	short unsigned int         set_all_eng_off;      /*     8     2 */
+	unsigned char              reset_memory;         /*    10     1 */
+
+	/* size: 12, cachelines: 1, members: 6 */
+	/* padding: 1 */
+	/* last cacheline: 12 bytes */
+};
+

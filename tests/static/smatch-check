@@ -1,0 +1,11 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Checker wrapper for `make C=2 CHECK=tests/static/smatch-check`.
+#
+# Same two header compatibility defines as tests/static/sparse-check (see the
+# rationale there); smatch is a sparse front end and fails identically.
+exec /usr/bin/smatch -p=kernel \
+	-D'__typeof_unqual__(x)=__typeof__(x)' \
+	-D'__builtin_strlen(s)=(sizeof(s)-1)' \
+	"$@"

@@ -1,0 +1,113 @@
+# utc: 2026-11-18T12:14:53Z
+# T11 - ROLLBACK PROOF: sudo -n dnf remove -y sm750hdmifb, then reinstall
+# host: deneb, kernel 7.3.4-100.fc43.x86_64
+# raw: /mega/tmp/sm750/t11/remove.log, pre-removal.txt, post-removal.txt
+# rationale for doing it at all: the SM750 output carries the kernel console only;
+#   the desktop is on card1 (0000:02:00.0, nvidia driver, DVI-D-1 connected).
+#   Erasing the SM750 package therefore cannot take the user's session down, so
+#   the rollback path was actually exercised rather than argued about.
+
+======================================================================
+STATE IMMEDIATELY BEFORE ERASE
+======================================================================
+  ### PRE-REMOVAL SNAPSHOT 2026-11-18T12:11:46Z
+  rpm -q: sm750hdmifb-0.6.0-1.fc43.noarch
+  module version: 0.6.0
+  /proc/modules: sm750hdmidrm 167936 0 - Live 0xffffffffc25d7000 (OE)
+  refcnt: 0
+  sm750 display: connected/enabled/On
+  card1 (Plasma) DVI-D-1: connected/enabled/On
+  kwin_wayland: 2
+  installed object: -rw-r--r-- 1 root root 61620 Nov 18 14:22 /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+  usr/src tree: /usr/src/sm750hdmifb-0.5.9 /usr/src/sm750hdmifb-0.6.0 
+  sm750hdmifb/0.5.9, 7.3.3-100.fc43.x86_64, x86_64: built
+  sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: built
+  sm750hdmifb/0.6.0, 7.2.15-100.fc43.x86_64, x86_64: installed
+  sm750hdmifb/0.6.0, 7.3.3-100.fc43.x86_64, x86_64: installed
+  sm750hdmifb/0.6.0, 7.3.4-100.fc43.x86_64, x86_64: installed
+
+======================================================================
+THE ERASE
+======================================================================
+  command: sudo -n dnf remove -y sm750hdmifb
+  exit=0
+  scriptlets that ran:
+    Removing:
+     Removing:           1 package
+    >>> Running %preun scriptlet: sm750hdmifb-0:0.6.0-1.fc43.noarch                 
+    >>> Finished %preun scriptlet: sm750hdmifb-0:0.6.0-1.fc43.noarch                
+    >>> Before uninstall, this module version was ACTIVE on this kernel.            
+    >>> Before uninstall, this module version was ACTIVE on this kernel.            
+    >>> Before uninstall, this module version was ACTIVE on this kernel.            
+    >>> Deleting module sm750hdmifb/0.6.0 completely from the DKMS tree.            
+    Complete!
+
+  %preun is the load-bearing part. From packaging/sm750hdmifb.spec:179-190 it
+  runs 'dkms remove -m sm750hdmifb -v 0.6.0 --all' when $1 == 0 (last version
+  erased). It fired: three 'Before uninstall, this module version was ACTIVE on
+  this kernel' lines (one per kernel the module was installed for: 7.2.15-100,
+  7.3.3-100, 7.3.4-100) followed by 'Deleting module sm750hdmifb/0.6.0
+  completely from the DKMS tree.' No %postun exists by design, and no initramfs
+  was rebuilt - correct for a display driver that is not needed to mount root.
+
+======================================================================
+STATE IMMEDIATELY AFTER ERASE
+======================================================================
+  ### POST-REMOVAL SNAPSHOT 2026-11-18T12:14:04Z
+  rpm -q: package sm750hdmifb is not installed
+  rpm -qa | grep -c sm750: 0
+  module still loaded: sm750hdmidrm 167936 0 - Live 0xffffffffc25d7000 (OE)
+  module version (live): modinfo: ERROR: Module sm750hdmidrm not found.
+  installed object: ls: cannot access '/lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz': No such file or directory
+  usr/src tree: /usr/src/sm750hdmifb-0.5.9 
+  sm750 display: connected/enabled/On
+  card0 CRTC: 38	44	(0,0)	(1920x1080)
+  card1 (Plasma) DVI-D-1: connected/enabled/On
+  kwin_wayland: 2
+  card0 node: lrwxrwxrwx 1 root root 8 Nov 18 14:48 /dev/dri/by-path/pci-0000:01:00.0-card -> ../card0
+  sm750hdmifb/0.5.9, 7.3.3-100.fc43.x86_64, x86_64: built
+  sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: built
+
+======================================================================
+WHAT THE ERASE PROVED, AND THE ONE HAZARD IT LEFT
+======================================================================
+  PROVEN (all four are what a rollback has to guarantee):
+    1. rpm -q sm750hdmifb -> 'package sm750hdmifb is not installed';
+       rpm -qa | grep -c sm750hdmifb -> 0. Clean package database.
+    2. dkms status drops to the two orphaned 0.5.9 'built' rows; the 0.6.0
+       registrations are gone from /var/lib/dkms and /usr/src/sm750hdmifb-0.6.0
+       is removed. Only /usr/src/sm750hdmifb-0.5.9 survives (residue of the
+       pre-fix install, see the note below).
+    3. The installed object for the running kernel is deleted:
+       /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz -> No such file.
+    4. THE DISPLAY SURVIVED: card0-HDMI-A-1 connected/enabled/On, CRTC 38 still
+       at (0,0) 1920x1080, /dev/dri/card0 still present, kwin_wayland still 2
+       processes on card1. Erasing the package does not blank either output.
+
+  HAZARD - the erase leaves an unloadable system, and this is the reason the
+  machine was NOT left in the erased state:
+    The module remains LOADED (sm750hdmidrm 167936 0 - Live) while its file is
+    gone: modinfo now reports 'ERROR: Module sm750hdmidrm not found', and
+    'find /lib/modules/$(uname -r) -name sm750hdmidrm*' returns nothing.
+    So the console keeps working only because the resident copy is still in
+    memory. A reboot - or any accidental 'modprobe -r' - would leave card0
+    with no driver and no module to load, i.e. no console on the SM750 output.
+    dnf cannot unload a module and this package deliberately has no %postun
+    that would, so this is inherent to the design, not a scriptlet bug.
+
+  RESIDUE (pre-existing, not created by this erase): /usr/src/sm750hdmifb-0.5.9
+  and two dkms 'built' rows for 0.5.9 remain. They are orphaned by the 0.6.0
+  install (0.6.0 owns the /lib/modules path) and are harmless, but they mean a
+  future 'dkms install -m sm750hdmifb -v 0.5.9' could still resurrect the stale
+  build. Recorded for cleanup; not deleted here because 0.5.9 is outside T11's
+  package version and removing it would edit another task's artefact.
+
+======================================================================
+DECISION: REINSTALL TO LEAVE THE MACHINE IN THE BETTER STATE
+======================================================================
+  The erase was executed as proof, then 0.6.0 was reinstalled immediately, so
+  the host ends with a module file on disk for the running kernel and 0.6.0 in
+  memory. Reason: leaving the machine with a live-but-unloadable driver is a
+  worse end state than the one T11 started from, and the acceptance criterion
+  asks for a rollback PROOF, not for a permanent downgrade. See
+  21-final-state.txt for the post-reinstall verification.

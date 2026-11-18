@@ -50,20 +50,27 @@ for forbidden in .audit-source .package-build xorg-sm750shadow xorg-sm750.strace
 done
 
 # Untracked developer material must never ship (defect A02), and the
-# screenshots are deliberately kept out of the build-only archive (A22).
-for dev_only in docs/plan docs/evidence docs/images; do
+# development-only directories - the screenshots, the session plans and the
+# captured transcripts - are deliberately kept out of the build-only archive
+# (defects A22, A29). The list is declared once, in
+# packaging/source-excludes.sh, which build-package.sh also reads, so the gate
+# and the packager cannot drift apart again.
+# shellcheck source=../packaging/source-excludes.sh
+. "$project_dir/packaging/source-excludes.sh"
+for dev_only in "${sm750_dev_only[@]}"; do
 	if [[ -e $source_root/$dev_only ]]; then
 		echo "Source archive contains development-only content: $dev_only" >&2
 		exit 1
 	fi
 done
 
-# The archive is the tracked tree minus docs/images; anything else means the
+# The archive is the tracked tree minus that same list; anything else means the
 # packaging script has drifted from the repository again.
 if git -C "$project_dir" rev-parse --git-dir >/dev/null 2>&1; then
+	mapfile -t exclude_pathspecs < <(sm750_dev_only_pathspecs)
 	(cd "$source_root" && find . -type f -printf '%P\n' | sort) \
 		>"$tmpdir/shipped"
-	git -C "$project_dir" ls-files -- . ':(exclude)docs/images/*' |
+	git -C "$project_dir" ls-files -- . "${exclude_pathspecs[@]}" |
 		sort >"$tmpdir/tracked"
 	if ! diff -u "$tmpdir/tracked" "$tmpdir/shipped" >"$tmpdir/manifest.diff"; then
 		cat "$tmpdir/manifest.diff" >&2

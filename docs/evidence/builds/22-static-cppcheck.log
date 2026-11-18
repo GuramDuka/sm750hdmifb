@@ -1,0 +1,52 @@
+# utc: 2026-11-18T13:21:31Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# compiler: gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+# command: bear --output compile_commands.json -- /usr/bin/make -C <tree> M=<copy>/src CC=/usr/bin/gcc modules; python3 tests/static/mk-cppdb.py compile_commands.json cppcheck-db.json; cppcheck --project=cppcheck-db.json --enable=warning,performance,portability --inline-suppr --std=c11 --platform=unix64 --template=... --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=unknownMacro -q
+# env: CC=/usr/bin/gcc; KDIR=/usr/src/kernels/7.3.4-100.fc43.x86_64; cppcheck 2.19.1, bear 3.1.6; run by tests/check-static.sh in its own copy of src/
+# workdir: /home/coder/sm750hdmifb
+# scope: cppcheck 2.19.1 over src/. Exit 0, zero findings. The compile database is bear-derived and then stripped by tests/static/mk-cppdb.py: with the kernel -I flags kept, cppcheck bails out on __has_attribute() and keeps 5 of 975 checkers active (it misses a planted out-of-bounds write); with them stripped 81 checkers are active and the planted bug is caught. Control below: 1 checkers-report line count and the suppressed unknownMacro occurrence are documented in docs/STATIC-ANALYSIS.md ST-10 and section 6.
+
+## bear 3.1.6 + cppcheck 2.19.1, tree 7.3.4-100.fc43.x86_64
+
+## step 1: compile database
+
+make: Entering directory '/mega/tmp/sm750/t19/evlogs/cppcheck-tree'
+make -C /usr/src/kernels/7.3.4-100.fc43.x86_64 M=/mega/tmp/sm750/t19/evlogs/cppcheck-tree/src modules
+make[1]: Entering directory '/usr/src/kernels/7.3.4-100.fc43.x86_64'
+make[2]: Entering directory '/mega/tmp/sm750/t19/evlogs/cppcheck-tree/src'
+  CC [M]  sm750_drm.o
+  CC [M]  sm750_drm_mode.o
+  CC [M]  sm750_dither.o
+  CC [M]  ddk750_chip.o
+  CC [M]  ddk750_mode.o
+  CC [M]  ddk750_power.o
+  CC [M]  ddk750_display.o
+  CC [M]  ddk750_swi2c.o
+  CC [M]  ddk750_hwi2c.o
+  CC [M]  sii902x.o
+  LD [M]  sm750hdmidrm.o
+  MODPOST Module.symvers
+  CC [M]  sm750hdmidrm.mod.o
+  CC [M]  .module-common.o
+  LD [M]  sm750hdmidrm.ko
+  BTF [M] sm750hdmidrm.ko
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+make[2]: Leaving directory '/mega/tmp/sm750/t19/evlogs/cppcheck-tree/src'
+make[1]: Leaving directory '/usr/src/kernels/7.3.4-100.fc43.x86_64'
+make: Leaving directory '/mega/tmp/sm750/t19/evlogs/cppcheck-tree'
+12 entries -> /mega/tmp/sm750/t19/evlogs/cppcheck-tree/cppcheck-db.json
+
+## step 2: cppcheck findings (empty output = no findings)
+
+(end of cppcheck output)
+
+## control: the same recipe on a throwaway copy with a planted overrun
+## (u8 small[4] written at index 4) - proves cppcheck analysed the files
+
+/mega/tmp/sm750/t19/evplanted/cppcheck-tree/src/sii902x.c:691:8: error: arrayIndexOutOfBounds: Array 'small[4]' accessed at index 4, which is out of bounds.
+/mega/tmp/sm750/t19/evplanted/cppcheck-tree/src/sii902x.c:693:23: warning: nullPointerRedundantCheck: Either the condition 'state==NULL' is redundant or there is possible null pointer dereference: state.
+/mega/tmp/sm750/t19/evplanted/cppcheck-tree/src/sii902x.c:694:3: warning: nullPointerRedundantCheck: Either the condition 'state==NULL' is redundant or there is possible null pointer dereference: state.
+/mega/tmp/sm750/t19/evplanted/cppcheck-tree/src/sii902x.c:692:2: error: overlappingWriteFunction: Overlapping read/write in memcpy() is undefined behavior
+
+## control: checkers active with the derived database
+Yes lines in checkers report: 81

@@ -1,0 +1,36 @@
++ python3 tools/vbios-re/reencode.py --out /mega/tmp/sm750/t17/reconstruct
+PASS  region table tiles 49152 bytes 239 regions
+PASS  image is a whole number of 512-byte blocks 96
+PASS  assembled size 49152
+PASS  checksum byte 6b captured 6b
+PASS  size byte 60 captured 60
+PASS  PCIR image length 0060 captured 0060
+PASS  whole image sums to 0 mod 256
+PASS  byte-for-byte comparison 0 differing bytes
+PASS  sha256 16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551
+PASS  decode equality over all code regions 7734 instructions
+
+slots 7734 {'exact': 6879, 'canon': 838, 'db': 17}
+code 18034 bytes, carried as data 61 bytes
+coverage 99.66 percent (floor 85)
+canonicalised slots 838
+PASS  coverage above floor 99.66
+residual 0051f 3 bytes: mov    ebp,dr0
+residual 008ca 2 bytes: addr32 fwait
+residual 01bca 4 bytes: mov    WORD PTR [bx+si+0x10],dx
+residual 01c01 4 bytes: mov    dx,WORD PTR [bx+0x10]
+residual 01c5b 4 bytes: mov    dx,WORD PTR [di+0x10]
+residual 02056 4 bytes: and    ch,BYTE PTR [bx+0x22]
+residual 0209f 4 bytes: mov    dx,WORD PTR [si+0x10]
+residual 02140 4 bytes: mov    dx,WORD PTR [bx+0x10]
+residual 025cc 4 bytes: mov    dx,WORD PTR [di+0x10]
+residual 02a38 4 bytes: fistp  QWORD PTR [bp+0x6]
+residual 02ed7 3 bytes: addr32 fucomi st,st(0)
+residual 02edb 4 bytes: fstp   TBYTE PTR [bp+di+0x5f]
+residual 03463 5 bytes: sar    BYTE PTR [bx+di+0x19],0xe8
+residual 064e1 3 bytes: add    BYTE PTR [bx+si+0x0],ah
+residual 066f5 2 bytes: inc    di
+residual 07e5a 4 bytes: add    BYTE PTR ds:[bx+si+0x0],al
+residual 07f0e 3 bytes: add    ah,BYTE PTR [bx+si+0x0]
+
+OK: rebuilt /mega/tmp/sm750/t17/reconstruct/reencode.bin is byte-identical to /mega/tmp/sm750/vbios-01-00-0.bin

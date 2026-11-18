@@ -1,0 +1,66 @@
+# utc: 2026-11-18T12:00:07Z
+# T11 AFTER HALF - MODESET under sm750hdmidrm 0.6.0 (same commands as T10)
+# host: deneb, kernel 7.3.4-100.fc43.x86_64, user coder (uid 1005)
+# module in memory: 0.6.0
+# T10 counterpart: docs/evidence/runtime/04-modeset.txt (stale 0.5.9 build)
+#
+# WHY THERE ARE TWO ALTERNATE-MODE STEPS
+# modetest -s commits the mode and exits at once. When its DRM fd is the last one
+# open, drm_lastclose runs the driver's own in-kernel fbdev client restore, which
+# re-asserts the preferred 1920x1080 mode. So a dump taken immediately after
+# modetest -s returns shows the RESTORED state, not the state that was set. Step 2
+# records exactly that (same result T10 saw); step 2b keeps the client alive so the
+# 1024x768 CRTC state is observable.
+
+===== BASELINE (unchanged, before any -s) =====
+    sysfs card0-HDMI-A-1: status=connected enabled=enabled dpms=On
+    modetest -p CRTC line: 38	44	(0,0)	(1920x1080)
+    modetest -p mode line:   #0 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500 flags: phsync, pvsync; type: preferred, driver
+
+===== STEP 1: re-apply the ALREADY-ACTIVE mode (no visible change) =====
+  command: /usr/bin/modetest -s 35@38:1920x1080
+  exit=0
+    trying to open device '/dev/dri/card0'... done
+    opened device `SM750G10 SiI9024A HDMI DRM shadow driver` on driver `sm750hdmidrm` (version 0.6.0 at 0)
+    setting mode 1920x1080-60.00Hz on connectors 35, crtc 38
+  state after step 1:
+    sysfs card0-HDMI-A-1: status=connected enabled=enabled dpms=On
+    modetest -p CRTC line: 38	44	(0,0)	(1920x1080)
+    modetest -p mode line:   #0 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500 flags: phsync, pvsync; type: preferred, driver
+
+===== STEP 2: switch to ONE ALTERNATE mode =====
+  command: /usr/bin/modetest -s 35@38:1024x768-60
+  exit=0
+    trying to open device '/dev/dri/card0'... done
+    opened device `SM750G10 SiI9024A HDMI DRM shadow driver` on driver `sm750hdmidrm` (version 0.6.0 at 0)
+    setting mode 1024x768-60.00Hz on connectors 35, crtc 38
+  state after step 2 (client already exited; the driver's in-kernel fbdev
+  client may have re-asserted the preferred mode - see the note in the header):
+    sysfs card0-HDMI-A-1: status=connected enabled=enabled dpms=On
+    modetest -p CRTC line: 38	44	(0,0)	(1920x1080)
+    modetest -p mode line:   #0 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500 flags: phsync, pvsync; type: preferred, driver
+
+===== STEP 2b: same alternate mode with the setting client HELD OPEN =====
+  This is the only way to observe the 1024x768 CRTC state: modetest -s exits
+  immediately after the commit, and on the last close drm_lastclose runs the
+  in-kernel fbdev client restore which puts the preferred mode back.
+  client pid=318842 alive=yes
+  state with client held:
+    sysfs card0-HDMI-A-1: status=connected enabled=enabled dpms=On
+    modetest -p CRTC line: 38	46	(0,0)	(1024x768)
+    modetest -p mode line:   #0 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500 flags: phsync, pvsync; type: preferred, driver
+  state after the held client exits:
+    sysfs card0-HDMI-A-1: status=connected enabled=enabled dpms=On
+    modetest -p CRTC line: 38	44	(0,0)	(1920x1080)
+    modetest -p mode line:   #0 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500 flags: phsync, pvsync; type: preferred, driver
+
+===== RESTORATION (always runs) =====
+  command: /usr/bin/modetest -s 35@38:1920x1080
+  exit=0
+    trying to open device '/dev/dri/card0'... done
+    opened device `SM750G10 SiI9024A HDMI DRM shadow driver` on driver `sm750hdmidrm` (version 0.6.0 at 0)
+    setting mode 1920x1080-60.00Hz on connectors 35, crtc 38
+  post-restore state:
+    sysfs card0-HDMI-A-1: status=connected enabled=enabled dpms=On
+    modetest -p CRTC line: 38	44	(0,0)	(1920x1080)
+    modetest -p mode line:   #0 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500 flags: phsync, pvsync; type: preferred, driver

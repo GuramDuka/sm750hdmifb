@@ -300,6 +300,33 @@ Status: `PARTIAL`. Device access and connector/mode enumeration are verified;
 modeset, readback, CRC and external capture remain `GAP`. See
 `docs/ENVIRONMENT.md` section 5.1.
 
+Update (T11, 2026-11-18T12:33Z): the modeset and conformance tiers named as
+`GAP` above have since been executed, twice, without root - T10 on the stale
+build and T11 on 0.6.0 - so this row is re-scoped rather than left overstated:
+
+- modeset: `docs/evidence/runtime/04-modeset.txt` (pre-fix) and
+  `16-modeset-0.6.0.txt` (0.6.0), including the 1024x768-60 set and the
+  restoration, with the CRTC line proving each state.
+- `kmscube`: `05-kmscube.txt` and `17-kmscube-0.6.0.txt`, rendering at ~54 fps
+  through llvmpipe on 0.6.0.
+- IGT: `06-igt.txt` and `19-igt-0.6.0.txt`; `core_getversion` passes and now
+  reports `v0.6`, `kms_addfb_basic` gives an identical 26/14/1 tally in both
+  halves.
+
+What remains genuinely blocked is the last two tiers only:
+
+```sh
+# framebuffer readback / scanout CRC: needs root or a vkms-style sink
+sudo cat /sys/kernel/debug/dri/0/crtc-0/crc/data
+# external capture of the HDMI signal: needs hardware not present on this host
+```
+
+Neither has a non-root substitute on this host, and no task in the plan asks for
+external capture.
+
+Status: `PARTIAL` - modeset and conformance evidence now exists; readback and
+CRC remain `GAP` with the commands above.
+
 ## GAP-B4: MMIO register dumps
 
 No unprivileged path to the SM750 register file exists on this host:
@@ -370,6 +397,62 @@ Status: `GAP` for the read (debugfs is `0700`, so the values still need root);
 the closing mechanism is in place - T5 added the `regs` debugfs file at
 `src/sm750_drm.c:3337`, and `docs/evidence/builds/09-register-dump.log` records
 the denied read as well as the exact command that closes it.
+
+Update (T11, 2026-11-18T12:33Z): this gap is **CLOSED**. The read was executed
+through the allowlisted helper against the installed 0.6.0 module, before and
+after a modeset, and the three states are comparable in one file -
+`docs/evidence/runtime/08-register-dump.txt` (238 lines, 12.5 KB):
+
+```
+$ sudo -n /usr/local/sbin/sm750-regs
+# card node: /dev/dri/card0 (debugfs dri/0)
+# date: 2026-11-18T11:52:04Z
+# sm750hdmidrm register dump, 49 registers, read-only
+0x000000 SYSTEM_CTRL                  0x20a00000
+...
+0x000004 MISC_CTRL                    0x01020060
+```
+
+The same command had failed one module version earlier, which is the denial
+recorded above side by side with the success:
+`sm750-regs: /sys/kernel/debug/dri/0/regs not readable` / `is debugfs mounted
+and the module loaded?`, exit 1, under the stale 0.5.9 build that has no `regs`
+file at all. Both attempts are in the file. So the earlier failure was the
+missing facility, not the privilege.
+
+Method result, recorded because the naive command in the closing block above
+does not produce a valid comparison: `modetest -s` exits as soon as it has
+committed, and the last close runs `drm_fbdev_client_restore`, which re-asserts
+the preferred mode. A dump taken right after `modetest -s` returns therefore
+shows the RESTORED timing set - the first attempt differed in only 1 of 49
+registers (`PANEL_CURRENT_LINE`, a live scanline counter) and looked like a
+no-op modeset. Holding the client open (`modetest -s 35@38:1024x768-60 &`,
+dump, then kill) gives the real set: **12 of 49 registers change** -
+`PANEL_PLL_CTRL`, `PANEL_DISPLAY_CTRL`, `PANEL_FB_ADDRESS`, `PANEL_FB_WIDTH`,
+`PANEL_WINDOW_WIDTH`, `PANEL_WINDOW_HEIGHT`, `PANEL_PLANE_BR`,
+`PANEL_HORIZONTAL_TOTAL`, `PANEL_HORIZONTAL_SYNC`, `PANEL_VERTICAL_TOTAL`,
+`PANEL_VERTICAL_SYNC`, `PANEL_CURRENT_LINE`. A 633-sample race control
+(8 modesets x repeated dumps) observed both timing sets in roughly equal
+proportions (314 vs 319), which proves the modeset really programs the panel and
+that the 1-of-49 reading was a sampling artefact.
+
+Restored-vs-baseline is 3 of 49: `PANEL_CURRENT_LINE` (expected), plus
+`PANEL_FB_ADDRESS` (the fbdev client re-allocates its buffer on restore) and
+`MISC_CTRL` bit 17 (`0x01020060` -> `0x01000060`). The last one has no name in
+`src/ddk750_reg.h` and is absent from `docs/REGISTERS.md:52`; it is recorded as
+an observation, not a defect, and no closing command is owed for it.
+
+Closing command (executed, keep for re-runs after any change to the snapshot):
+
+```sh
+sudo -n /usr/local/sbin/sm750-regs > /mega/tmp/sm750/t11/regs-A.txt
+modetest -s 35@38:1024x768-60 & sleep 2
+sudo -n /usr/local/sbin/sm750-regs > /mega/tmp/sm750/t11/regs-held.txt
+kill %1; wait; sleep 2
+sudo -n /usr/local/sbin/sm750-regs > /mega/tmp/sm750/t11/regs-C.txt
+```
+
+Status: `CLOSED` by `docs/evidence/runtime/08-register-dump.txt`.
 
 ## GAP-B5: PCI configuration space beyond 0x40
 
@@ -469,6 +552,121 @@ running kernel; `modetest -c` then reports
 
 Status: `GAP`.
 
+Update (T11, 2026-11-18T12:33Z): this gap is **CLOSED**. The transaction ran as
+root three times, and the last two of those prove both directions. Evidence:
+`docs/evidence/runtime/11-preconditions.txt` (allowlist and pre-state),
+`12-rpmbuild-0.6.0.txt` (the rebuilt artifact), `/mega/tmp/sm750/t11/install.log`
+(install), `20-rollback.txt` (erase), `21-final-state.txt` (end state),
+with the raw scriptlet transcripts in `/mega/tmp/sm750/t11/{install,remove,
+reinstall}.log`.
+
+1. `dnf install` exit 0. The scriptlets ran against the real root:
+   `%post` did `dkms add` (`$1 == 1`), `%posttrans` built and signed with the
+   machine MOK and installed for **three** kernels - 7.2.15-100, 7.3.3-100 and
+   7.3.4-100 (6.18.13-200 was skipped with `matching kernel headers are
+   absent`, which the spec treats as a warning, not a failure). `depmod` ran.
+   `dkms status` afterwards: `sm750hdmifb/0.6.0` `installed` for all three.
+2. `%preun` erased cleanly on `dnf remove` (exit 0): three
+   `Before uninstall, this module version was ACTIVE on this kernel` lines, then
+   `Deleting module sm750hdmifb/0.6.0 completely from the DKMS tree.`
+   `rpm -q` -> not installed; `/usr/src/sm750hdmifb-0.6.0` gone;
+   `/lib/modules/$(uname -r)/extra/sm750hdmidrm.ko.xz` deleted; the 0.6.0 dkms
+   rows gone. No `%postun` and no initramfs rebuild, as designed.
+
+Three corrections to the expected post-conditions stated above, all measured:
+
+- The installed object path is `/lib/modules/<kver>/extra/sm750hdmidrm.ko.xz`,
+  not `.../updates/dkms/sm750hdmidrm.ko`. `dkms.conf` sets
+  `DEST_MODULE_LOCATION[0]="/extra"` and dkms compresses with `.xz`.
+- `dnf remove` does **not** leave `dkms status` empty: the orphaned
+  `sm750hdmifb/0.5.9 ... built` rows for 7.3.3-100 and 7.3.4-100 survive, along
+  with `/usr/src/sm750hdmifb-0.5.9`. They are residue of the pre-fix install
+  that 0.6.0 displaced, not of this transaction. Harmless here, but a later
+  `dkms install -m sm750hdmifb -v 0.5.9` could resurrect the stale build;
+  cleanup is not T11's (0.5.9 is outside its package version).
+- Erasing the package does not unload the module, so it leaves a
+  live-but-unloadable driver: the resident `sm750hdmidrm 167936 0 - Live` keeps
+  running while `modinfo` reports `Module sm750hdmidrm not found` and no file
+  exists for the running kernel. The SM750 console therefore survives the erase
+  only until the next reboot or `modprobe -r`. This is inherent (dnf cannot
+  unload, and the package has no `%postun` by design), so the rollback is a
+  proof, not a safe resting state: 0.6.0 was reinstalled immediately afterwards
+  and the final machine state is verified in `21-final-state.txt`.
+
+Also corrected: `sudo dkms status -m sm750hdmifb -v 0.6.0` in the closing block
+does not work on this host - only bare `dkms status` is in the sudoers
+allowlist, and the argument form returns `sudo: a password is required`. Use
+`sudo -n dkms status` and read the lines.
+
+Closing command (executed, keep for re-runs):
+
+```sh
+sudo -n dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+sudo -n dkms status
+modinfo -F version sm750hdmidrm
+modetest -c | head -1
+sudo -n dnf remove -y sm750hdmifb
+sudo -n dkms status; rpm -q sm750hdmifb
+```
+
+Status: `CLOSED` by the five evidence files named above.
+
+---
+
+## GAP-B8: which `sm750_program_mode` call returns `-110`
+
+T16 reproduced the `failed to enable HDMI mode: -110` episode from
+`docs/evidence/runtime/07-kernel-log.txt:50-110` (1 hit in 205 attempts, see
+`docs/evidence/runtime/09-hdmi-minus-110.txt`) but could not identify which of the
+five fallible calls in `sm750_program_mode` returned the error, because that
+function contains no logging statement at all:
+
+```
+$ grep -c 'dev_dbg\|drm_dbg' src/ddk750_display.c src/ddk750_mode.c src/ddk750_swi2c.c src/ddk750_hwi2c.c
+src/ddk750_display.c:0
+src/ddk750_mode.c:0
+src/ddk750_swi2c.c:0
+src/ddk750_hwi2c.c:0
+$ grep -rn 'dev_dbg\|drm_dbg' src/*.c | grep -c sm750_drm.c
+3            # :818, :998, :1007 - none on the program_mode path
+```
+
+Dynamic debug is root-only on this host, so even the existing three sites could
+not be enabled from `coder`, and the running 0.5.9 module has no `regs` debugfs
+file (B4). The 330.003 ms gap between the last successful program and the `-110`
+narrows the producer to a single 100 ms `wait_display_value()` timeout after the
+fixed ~155 ms of `sii902x` quiesce, but it does not name the call.
+
+Closing command (needs a debug rebuild of 0.6.0 with one `drm_dbg_kms` per stage,
+then the T16 trigger):
+
+```
+for i in 1 2 3 4 5; do
+  tail -f /dev/null | kmscube -c 600 > /dev/null 2>&1 &
+  sleep 0.3; pkill -INT kmscube
+  timeout -k 5 90 modetest -s 35@38:1024x768-60 > /dev/null
+  modetest -s 35@38:1920x1080 > /dev/null
+done
+sudo -n dmesg | grep -E 'stage=|failed to enable HDMI mode'
+```
+
+Complementary, and sufficient without a rebuild: on 0.6.0 sample
+`/sys/kernel/debug/dri/0/regs` (`src/sm750_drm.c:3343`) before the failing
+restore and immediately after the `-110`; `PANEL_DISPLAY_CTRL` bit 8 (`TIMING`)
+and bit 2 (`PLANE`) name the stage, and two `PANEL_CURRENT_LINE` samples 20 ms
+apart say whether the raster was still scanning.
+
+Update (T11, 2026-11-18T12:33Z): the complementary path is now executable. 0.6.0
+is installed and loaded, and `sudo -n /usr/local/sbin/sm750-regs` succeeds, so
+the `regs` half of this closing plan no longer needs anything that is missing
+(GAP-B4 is `CLOSED`; see `docs/evidence/runtime/08-register-dump.txt`). T11 also
+reproduced the `-110` on 0.6.0 during a plain `kmscube -c 300` exit, so the
+trigger does not need the SIGINT shaping to fire - `18-kernel-log-0.6.0.txt`
+holds the window, `/mega/tmp/sm750/t11/minus110-full.txt` the raw lines. The
+stage instrumentation still requires a debug rebuild, so this row stays `GAP`.
+
+Status: `GAP`.
+
 ---
 
 ## Summary
@@ -477,11 +675,12 @@ Status: `GAP`.
 | --- | --- | --- | --- |
 | B1 | VBIOS ROM (48 KiB) | rom node `0600 root`; captured via allowlisted `sm750-vbios-dump` (T12) | `CLOSED` |
 | B2 | kernel log excerpt | `dmesg` EPERM unprivileged; allowlisted `sudo -n /usr/bin/dmesg` works (T13) | `CLOSED` |
-| B3 | modeset / IGT / kmscube | `/dev/dri/card0` `0660 root:video` + ACL | `GAP` |
-| B4 | MMIO register dumps | strict devmem, BAR1 `0600`, debugfs `0700`; facility now present (T5, `regs` at `src/sm750_drm.c:3337`), read still needs root | `GAP` |
+| B3 | modeset / IGT / kmscube | `/dev/dri/card0` `0660 root:video` + ACL; modeset, kmscube and IGT now captured on both builds (T10, T11); readback/CRC still need root | `PARTIAL` |
+| B4 | MMIO register dumps | strict devmem, BAR1 `0600`, debugfs `0700`; `regs` facility (T5) read via allowlisted `sm750-regs` before/during/after a modeset (T11) | `CLOSED` |
 | B5 | config space > 0x40 | `Capabilities: <access denied>` | `GAP-PARTIAL` |
 | B6 | EDID checksum detail | none | `CLOSED` |
-| B7 | RPM install/erase, DKMS hooks | `dkms install` needs root; `rpm -i --root=` cannot chroot | `GAP` |
+| B7 | RPM install/erase, DKMS hooks | `dkms install` needs root; `rpm -i --root=` cannot chroot; install, `%preun` erase and reinstall all executed as root (T11) | `CLOSED` |
+| B8 | which `sm750_program_mode` call returns `-110` | that path has zero `dev_dbg`/`drm_dbg`, dynamic debug is root-only; the `regs` half is now executable on 0.6.0 (T11) but the stage instrumentation still needs a debug rebuild; trigger itself reproduced 1/206 | `GAP` |
 
 One further fact, recorded rather than resolved: the handoff anticipated a
 `journalctl -k -b` substitute for `dmesg`. It exits 0 on this host but yields

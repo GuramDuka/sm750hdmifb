@@ -29,10 +29,24 @@ grep -F 'Maintainer: kodemunkie <kodemunkie@users.noreply.github.com>' \
 	"$builder" >/dev/null
 # A14: the payload needs a dpkg manifest.
 grep -F 'DEBIAN/md5sums' "$builder" >/dev/null
-# A02/A22: the archive is the tracked tree without the screenshots.
-grep -F "git -C \"\${project_dir}\" ls-files -z -- . ':(exclude)docs/images/*'" \
-	"$builder" >/dev/null
-grep -F "exclude='docs/images/*'" "$builder" >/dev/null
+# A02/A22/A29: the archive is the tracked tree without the development-only
+# directories, and that list is declared once, in packaging/source-excludes.sh,
+# which both the packager and the release audit read.
+excludes=$project_dir/packaging/source-excludes.sh
+bash -n "$excludes"
+grep -F 'docs/plan' "$excludes" >/dev/null
+grep -F 'docs/evidence' "$excludes" >/dev/null
+grep -F 'docs/images' "$excludes" >/dev/null
+grep -F 'sm750_dev_only_pathspecs' "$builder" >/dev/null
+grep -F 'sm750_dev_only_pathspecs' "$project_dir/tests/audit-release.sh" >/dev/null
+grep -F 'packaging/source-excludes.sh' "$builder" >/dev/null
+grep -F 'packaging/source-excludes.sh' "$project_dir/tests/audit-release.sh" >/dev/null
+# No consumer may hard-code its own copy of the list again.
+if grep -F ":(exclude)docs/" "$builder" >/dev/null ||
+	grep -F ":(exclude)docs/" "$project_dir/tests/audit-release.sh" >/dev/null; then
+	echo "A development-only path is hard-coded outside source-excludes.sh" >&2
+	exit 1
+fi
 # A08: initramfs refresh must not depend on a Debian-only tool.
 grep -F 'command -v update-initramfs' "$project_dir/packaging/drm-postinst" \
 	>/dev/null

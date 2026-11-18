@@ -2,8 +2,8 @@
 # RPM packaging (`packaging/sm750hdmifb.spec`)
 
 How to build, install, verify and roll back the `sm750hdmifb` RPM. The Debian
-path remains `build-package.sh`; both ship the same file set, with one
-deliberate scriptlet divergence (section 7).
+path remains `build-package.sh`; both ship the same file set, with the
+scriptlet divergences recorded in section 7.
 
 ## 1. Purpose
 
@@ -49,17 +49,21 @@ topdir=$work/rpmbuild
 rm -rf -- "$topdir"
 mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS}
 
-# Source0 is the tracked tree minus the screenshots, exactly as
-# build-package.sh:95-102; never tar the working tree.
+# Source0 is the tracked tree minus the development-only directories, exactly
+# as build-package.sh; never tar the working tree. The list is declared once,
+# in packaging/source-excludes.sh, which the packager and the release audit
+# both read (defect A29).
+. ./packaging/source-excludes.sh
+mapfile -t skip < <(sm750_dev_only_pathspecs)
 tracked=$(mktemp)
-git ls-files -z -- . ':(exclude)docs/images/*' >"$tracked"
+git ls-files -z -- . "${skip[@]}" >"$tracked"
 tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.0-source.tar.gz" \
     --transform='s|^|sm750hdmifb-0.6.0/|' --null -T "$tracked"
 
 rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb.spec
 ```
 
-Artifacts (73 tracked files in the tarball, 36 files in the RPM):
+Artifacts (90 tracked files in the tarball, 36 files in the RPM):
 
 ```
 /mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-0.6.0-1.fc43.src.rpm
@@ -69,6 +73,12 @@ Artifacts (73 tracked files in the tarball, 36 files in the RPM):
 `rpmbuild -ba` exits `0`; the transcript is
 `docs/evidence/packaging/01-rpmbuild.log`. The `rm -rf "$topdir"` makes the
 result independent of earlier runs.
+
+Archive-content rule: the source tarball is exactly the tracked tree minus the
+development-only directories declared once in `packaging/source-excludes.sh`
+(`docs/plan`, `docs/evidence`, `docs/images`), which is the same list
+`build-package.sh` and `tests/audit-release.sh` read, so the packager and the
+gate cannot drift apart.
 
 ## 4. Install, upgrade, erase
 
@@ -92,7 +102,7 @@ They are `GAP-B7` in `docs/evidence/EVIDENCE-GAPS.md`.
 | --- | --- | --- | --- |
 | first install | `%post` | `[ "$1" -eq 1 ]` | `dkms add` |
 | upgrade | `%post` | `$1 == 2`, skipped | tree already registered |
-| install / upgrade | `%posttrans` | - | `dkms build`, `dkms install --force`, `depmod -a` per supported kernel |
+| install / upgrade | `%posttrans` | - | `dkms build`, `dkms install --force`, `depmod -a` per supported kernel, then the stale-registration purge |
 | erase | `%preun` | `[ "$1" -eq 0 ]` | `dkms remove --all` |
 | upgrade | `%preun` | `$1 == 1`, skipped | the new version needs the registration |
 | - | `%postun` | not defined | no initramfs to regenerate |
@@ -101,6 +111,56 @@ They are `GAP-B7` in `docs/evidence/EVIDENCE-GAPS.md`.
 `/usr/src/sm750hdmifb-0.6.0` is an error and an exiting scriptlet aborts the
 transaction. `%preun` (not `%postun`) removes the registration because DKMS
 needs the source tree while unregistering.
+
+### Stale-registration purge (`%posttrans`)
+
+Releases before 0.6.0 registered the same module name at other versions and
+never unregistered them, so a machine that ever carried 0.5.9 still reports it
+after the upgrade:
+
+```
+sm750hdmifb/0.5.9, 7.3.3-100.fc43.x86_64, x86_64: built
+sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: built
+sm750hdmifb/0.6.0, 7.2.15-100.fc43.x86_64, x86_64: installed
+```
+
+That is not cosmetic. Both `dkms.conf` files declare
+`DEST_MODULE_LOCATION[0]="/updates/dkms"`, and `override_dest_module_location()`
+in `/usr/sbin/dkms` (`dkms:509-521`, `case ... in fedora*|centos*|rhel*`)
+rewrites it to `/extra`, so every registered version of this module name
+installs to the single path `/lib/modules/<kernel>/extra/sm750hdmidrm.ko.xz`.
+`dkms autoinstall`, which is what `dkms.service` runs on boot and what the DKMS
+kernel hook runs after a kernel update, installs only the newest registered
+version per module name and skips kernels where the module already looks
+installed. A stale version that stays registered therefore takes the shared
+destination path back on the next kernel install and silently replaces the
+current driver with the pre-0.6.0 one.
+
+`%posttrans` closes that hole after the build loop (the version being installed
+must own the destination path first). For every `dkms status` line it parses
+the module name and version, keeps only lines whose name is exactly
+`%{dkms_name}` (`sm750hdmifb/` is matched, so a module named
+`sm750hdmifb-something` is never touched), skips `%{dkms_version}`, removes each
+remaining version at most once with
+`dkms remove -m %{dkms_name} -v <version> --all`, and downgrades a failed
+removal to a warning so the transaction is never aborted. The version always
+comes from the status line; a hardcoded version would rot at the next release
+and `tests/check-rpm-dkms.sh` fails if one appears.
+
+Deliberately left alone: `/usr/src/sm750hdmifb-0.5.9`. It predates packaging,
+no RPM owns it (`rpm -ql sm750hdmifb | grep -c 0.5.9` prints `0`), so `%files`
+cannot remove it and a scriptlet must not delete an unowned 21 MB tree. The
+host owner removes it by hand once, after confirming the purge ran:
+
+```sh
+sudo rm -rf /usr/src/sm750hdmifb-0.5.9
+```
+
+Verify the purge with `sudo dkms status`: exactly one version of `sm750hdmifb`
+must remain, `0.6.0`, `installed` for every installed kernel, with no `0.5.9`
+row and no `: added` line. The purge is idempotent - a second install finds
+nothing to remove.
+
 
 ### Kernel-update rebuild
 
@@ -128,11 +188,13 @@ OK: dependencies: BuildRequires 4, runtime dkms, post dkms+kmod, preun dkms
 OK: scriptlets: add in %post, build+install+depmod in %posttrans, remove in %preun, no %postun
 OK: %files: 36 files, 4 owned directories, 2 %config(noreplace) entries
 OK: missing headers: warning on stderr, exit 0; build/install/depmod sequence verified
+OK: stale purge: only sm750hdmifb/0.5.9 removed, 0.6.0 and other module names untouched
 OK: dkms sandbox: sm750hdmifb/0.6.0, 7.3.4-100.fc43.x86_64, x86_64: built
 OK: built object: /mega/tmp/sm750/t6/dkms/sm750hdmifb/0.6.0/7.3.4-100.fc43.x86_64/x86_64/module/sm750hdmidrm.ko (320960 bytes, host tree untouched)
 SKIP: dnf install sm750hdmifb-0.6.0-1.fc43.noarch.rpm: needs root (writes /usr/src, /etc, /var/lib/dkms)
 SKIP: dkms status showing 'installed' in the host tree: needs root, follows the skipped dnf install
 SKIP: dkms install (even with --installtree): 'Error! You must be root to use this command.'
+SKIP: dkms remove -m sm750hdmifb -v 0.5.9 --all in the host tree: not in the sudoers allowlist (only -v 0.6.0 is); the purge runs inside the RPM %posttrans instead, and the rootless run above proves the call sequence
 SKIP: modinfo of the installed module: needs root, follows the skipped dnf install
 SKIP: dnf remove sm750hdmifb: needs root and the skipped dnf install
 SKIP: dkms status after erase (registration gone): needs root, follows the skipped dnf remove
@@ -147,12 +209,13 @@ unexpected `$HOME/rpmbuild`). `SKIP` lines are printed, never silent.
 Rootless checks: payload equality with `git ls-files`, full `rpmbuild -ba`
 from a fresh `_topdir`, `rpm -qpR` / `rpm -qp --scripts` / `rpm -qp --qf` /
 `rpm -qlp` metadata assertions, an offline `%posttrans` run with
-`dkms`/`depmod` shims over two fake module roots, and a real DKMS `add` +
-`build` producing `sm750hdmidrm.ko` with a matching vermagic. `dkms install`
-is the one step that cannot be sandboxed: it refuses a non-root caller even
-with `--dkmstree`, `--sourcetree` and `--installtree` all on scratch, so the
-refusal is captured in `05-dkms-sandbox.log` and reported as `SKIP`, while the
-host module tree is asserted absent.
+`dkms`/`depmod` shims over two fake module roots (including a canned
+`dkms status` listing that proves the stale purge removes `0.5.9` only), and a
+real DKMS `add` + `build` producing `sm750hdmidrm.ko` with a matching
+vermagic. `dkms install` is the one step that cannot be sandboxed: it refuses
+a non-root caller even with `--dkmstree`, `--sourcetree` and `--installtree`
+all on scratch, so the refusal is captured in `05-dkms-sandbox.log` and
+reported as `SKIP`, while the host module tree is asserted absent.
 
 Companion files: `packaging/sm750hdmifb.spec`, `tests/check-rpm-dkms.sh`,
 `docs/evidence/packaging/01`-`07`, `docs/evidence/EVIDENCE-GAPS.md` `GAP-B7`,
@@ -198,6 +261,14 @@ path is `dkms install` plus `depmod -a` and neither `update-initramfs` nor
 the transaction, `%post`, `%posttrans` and `%preun` end in `exit 0`
 unconditionally with every failure reported as a warning on stderr. `modprobe`
 is not run: the module loads at the next boot or on demand.
+
+The stale-registration purge is the one place where the RPM is *wider* than
+the Debian script: `packaging/drm-postinst` removes a fixed predecessor list
+and `rm -rf`s stale `/var/lib/dkms` trees whose `dkms.conf` is unreadable, while
+`%posttrans` enumerates `dkms status` and removes every other registered
+version of this module name. It removes registrations only; it never deletes an
+unowned source tree, so `/usr/src/sm750hdmifb-0.5.9` survives and stays a
+manual step (section 4).
 
 ## 8. Troubleshooting
 

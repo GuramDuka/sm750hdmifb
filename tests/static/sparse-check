@@ -1,0 +1,20 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# Checker wrapper for `make C=2 CHECK=tests/static/sparse-check`.
+#
+# sparse 0.6.4 cannot compile two constructs the 7.3.x headers use, which makes
+# kbuild disable checking entirely ("C=2 specified, but /usr/bin/sparse is not
+# available or not up to date", kbuild scripts/checker-valid.sh):
+#
+#   - __typeof_unqual__ (include/linux/compiler_types.h) -> "Expected ;"
+#   - __builtin_strlen() inside the static_assert of MODULE_INFO()
+#     (include/linux/moduleparam.h) -> "bad constant expression"
+#
+# Both are header tautologies: the real gcc build still evaluates them. The
+# driver sources use neither spelling (verified with rg), so these two defines
+# cannot hide a driver finding. Applied only to this checker invocation.
+exec /usr/bin/sparse \
+	-D'__typeof_unqual__(x)=__typeof__(x)' \
+	-D'__builtin_strlen(s)=(sizeof(s)-1)' \
+	"$@"

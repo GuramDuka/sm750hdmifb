@@ -1,0 +1,106 @@
+# utc: 2026-11-18T15:22:21Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# compiler: gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+# command: ./build-package.sh && ./tests/audit-release.sh
+# env: PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm LD_LIBRARY_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64 CC=/usr/bin/gcc
+# workdir: /mega/tmp/sm750/t18/tree
+# scope: defect A29, the release archive gate. The tree is an isolated copy of
+# the checkout, so no run here can disturb the concurrent T17/T19 tasks. The
+# before run is the HEAD form of build-package.sh and tests/audit-release.sh;
+# the after run is the form changed in T18. The gate itself is not relaxed:
+# section 3 shows a tarball built without the exclusion list still fails it.
+
+## 1. before the change (HEAD d33cfe3): the gate fails a fresh tarball
+
+$ ./build-package.sh
+/mega/tmp/sm750/t18/tree/dist/sm750hdmifb_0.6.0_all.deb
+/mega/tmp/sm750/t18/tree/dist/sm750hdmifb-0.6.0-source.tar.gz
+/mega/tmp/sm750/t18/tree/dist/SHA256SUMS
+# exit: 0
+
+$ ./tests/audit-release.sh
+Source archive contains development-only content: docs/plan
+# exit: 1
+
+Cause: build-package.sh:98-100 shipped exactly `git ls-files` minus
+docs/images, so docs/plan (1 file) and docs/evidence (69 files) travelled in
+the archive while tests/audit-release.sh:54-58 forbade both.
+
+## 2. after the change: the same commands pass
+
+$ ./build-package.sh
+/mega/tmp/sm750/t18/tree/dist/sm750hdmifb_0.6.0_all.deb
+/mega/tmp/sm750/t18/tree/dist/sm750hdmifb-0.6.0-source.tar.gz
+/mega/tmp/sm750/t18/tree/dist/SHA256SUMS
+# exit: 0
+
+$ ./tests/audit-release.sh
+Release audit passed: /mega/tmp/sm750/t18/tree/dist/RELEASE-AUDIT.txt
+# exit: 0
+
+## 3. the gate still bites on a tarball built without the exclusion list
+
+The good tarball was saved, then the archive was rebuilt from an unfiltered
+`git ls-files` list and the audit was run against it:
+
+$ tar -tzf dist/sm750hdmifb-0.6.0-source.tar.gz | wc -l
+90
+$ mkdir -p /mega/tmp/sm750/t18/neg2
+$ cp dist/sm750hdmifb-0.6.0-source.tar.gz /mega/tmp/sm750/t18/neg2/good.tar.gz
+$ git ls-files -z > /mega/tmp/sm750/t18/neg2/all.z
+$ tar -C . -czf dist/sm750hdmifb-0.6.0-source.tar.gz \
+      --transform='s|^|sm750hdmifb-0.6.0/|' --null -T /mega/tmp/sm750/t18/neg2/all.z
+$ ./tests/audit-release.sh
+Source archive contains development-only content: docs/plan
+# exit: 1
+$ cp /mega/tmp/sm750/t18/neg2/good.tar.gz dist/sm750hdmifb-0.6.0-source.tar.gz
+$ ./tests/audit-release.sh
+Release audit passed: /mega/tmp/sm750/t18/tree/dist/RELEASE-AUDIT.txt
+# exit: 0
+
+## 4. one edit at the shared list moves both the packager and the gate
+
+`docs/specs` was appended to `sm750_dev_only` in packaging/source-excludes.sh,
+the archive was rebuilt and the audit was run:
+
+$ ./build-package.sh >/dev/null && ./tests/audit-release.sh
+Release audit passed: /mega/tmp/sm750/t18/tree/dist/RELEASE-AUDIT.txt
+# exit: 0
+$ tar -tzf dist/sm750hdmifb-0.6.0-source.tar.gz | grep -c 'docs/specs/'
+0
+
+The entry was then removed and the file restored. The reverse direction is
+asserted by the suite, in both directions:
+
+$ # docs/plan deleted from sm750_dev_only
+$ ./tests/check-drm-packaging.sh
+# exit: 1   (the `grep -F 'docs/plan' "$excludes"` assertion at
+#            tests/check-drm-packaging.sh:37 fails)
+$ # docs/plan restored
+$ ./tests/check-drm-packaging.sh
+Unified DRM package checks passed
+# exit: 0
+
+So a development-only path cannot be dropped from the shared list, and it
+cannot be hard-coded back into a consumer either: tests/check-drm-packaging.sh:45-49
+fails if `:(exclude)docs/` appears in build-package.sh or tests/audit-release.sh.
+
+## 5. the non-git fallback branch excludes the same list
+
+A copy of the tree without .git was packaged from the fallback branch:
+
+$ ./build-package.sh
+/mega/tmp/sm750/t18/nogit/dist/sm750hdmifb_0.6.0_all.deb
+/mega/tmp/sm750/t18/nogit/dist/sm750hdmifb-0.6.0-source.tar.gz
+/mega/tmp/sm750/t18/nogit/dist/SHA256SUMS
+# exit: 0
+$ tar -tzf dist/sm750hdmifb-0.6.0-source.tar.gz | wc -l
+104
+$ tar -tzf dist/sm750hdmifb-0.6.0-source.tar.gz |
+      grep -c '^sm750hdmifb-0.6.0/docs/\(plan\|evidence\|images\)/'
+0
+
+104 rather than 90 because the copy carries the untracked working-tree files,
+which the fallback branch cannot distinguish from tracked ones by design.
+
+# exit: 0

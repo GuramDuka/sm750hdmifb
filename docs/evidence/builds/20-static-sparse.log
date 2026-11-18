@@ -1,0 +1,100 @@
+# utc: 2026-11-18T13:19:55Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# compiler: gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+# command: make KDIR=<tree> CC=/usr/bin/gcc C=2 CHECK=tests/static/sparse-check all (issued by tests/check-static.sh; CC and one tree per run below)
+# env: CC=/usr/bin/gcc; KDIR=/usr/src/kernels/7.3.4-100.fc43.x86_64 STATIC_KERNELS=/mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64 ./tests/check-static.sh --logs /mega/tmp/sm750/t19/evlogs
+# workdir: /home/coder/sm750hdmifb
+# scope: sparse 0.6.4 over src/, 7.3.4-100 = exit 0 / 4 warnings before the fix in this task, 0 after; 6.17.1-300 = exit 0 / 0 warnings after the fix. The four pre-fix warnings and the fix are in docs/STATIC-ANALYSIS.md ST-01..ST-04.
+
+## sparse 0.6.4, tree 7.3.4-100.fc43.x86_64
+## make KDIR=/usr/src/kernels/7.3.4-100.fc43.x86_64 CC=/usr/bin/gcc C=2 CHECK=tests/static/sparse-check all
+
+make: Entering directory '/home/coder/sm750hdmifb'
+make -C /usr/src/kernels/7.3.4-100.fc43.x86_64 M=/home/coder/sm750hdmifb/src modules
+make[1]: Entering directory '/usr/src/kernels/7.3.4-100.fc43.x86_64'
+make[2]: Entering directory '/home/coder/sm750hdmifb/src'
+  CC [M]  sm750_drm.o
+  CHECK   sm750_drm.c
+  CC [M]  sm750_drm_mode.o
+  CHECK   sm750_drm_mode.c
+  CC [M]  sm750_dither.o
+  CHECK   sm750_dither.c
+  CC [M]  ddk750_chip.o
+  CHECK   ddk750_chip.c
+  CC [M]  ddk750_mode.o
+  CHECK   ddk750_mode.c
+  CC [M]  ddk750_power.o
+  CHECK   ddk750_power.c
+  CC [M]  ddk750_display.o
+  CHECK   ddk750_display.c
+  CC [M]  ddk750_swi2c.o
+  CHECK   ddk750_swi2c.c
+  CC [M]  ddk750_hwi2c.o
+  CHECK   ddk750_hwi2c.c
+  CC [M]  sii902x.o
+  CHECK   sii902x.c
+  LD [M]  sm750hdmidrm.o
+  MODPOST Module.symvers
+  CC [M]  sm750hdmidrm.mod.o
+  CC [M]  .module-common.o
+  LD [M]  sm750hdmidrm.ko
+  BTF [M] sm750hdmidrm.ko
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+make[2]: Leaving directory '/home/coder/sm750hdmifb/src'
+make[1]: Leaving directory '/usr/src/kernels/7.3.4-100.fc43.x86_64'
+make: Leaving directory '/home/coder/sm750hdmifb'
+
+## sparse 0.6.4, tree 6.17.1-300.fc43.x86_64
+## make KDIR=/mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64 CC=/usr/bin/gcc C=2 CHECK=tests/static/sparse-check all
+
+make: Entering directory '/home/coder/sm750hdmifb'
+make -C /mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64 M=/home/coder/sm750hdmifb/src modules
+make[1]: Entering directory '/mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64'
+make[2]: Entering directory '/home/coder/sm750hdmifb/src'
+warning: the compiler differs from the one used to build the kernel
+  The kernel was built by: gcc (GCC) 15.2.1 20250924 (Red Hat 15.2.1-2)
+  You are using:           gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+  CC [M]  sm750_drm.o
+  CHECK   sm750_drm.c
+  CC [M]  sm750_drm_mode.o
+  CHECK   sm750_drm_mode.c
+  CC [M]  sm750_dither.o
+  CHECK   sm750_dither.c
+  CC [M]  ddk750_chip.o
+  CHECK   ddk750_chip.c
+  CC [M]  ddk750_mode.o
+  CHECK   ddk750_mode.c
+  CC [M]  ddk750_power.o
+  CHECK   ddk750_power.c
+  CC [M]  ddk750_display.o
+  CHECK   ddk750_display.c
+  CC [M]  ddk750_swi2c.o
+  CHECK   ddk750_swi2c.c
+  CC [M]  ddk750_hwi2c.o
+  CHECK   ddk750_hwi2c.c
+  CC [M]  sii902x.o
+  CHECK   sii902x.c
+  LD [M]  sm750hdmidrm.o
+  MODPOST Module.symvers
+  CC [M]  sm750hdmidrm.mod.o
+  CC [M]  .module-common.o
+  LD [M]  sm750hdmidrm.ko
+  BTF [M] sm750hdmidrm.ko
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+make[2]: Leaving directory '/home/coder/sm750hdmifb/src'
+make[1]: Leaving directory '/mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64'
+make: Leaving directory '/home/coder/sm750hdmifb'
+## Before the fix: the four findings this task closed
+## Same invocation, run before src/ddk750_chip.h:15-24 existed.
+## make[1]/make[2] entering-directory lines are omitted: that run was
+## captured under the host locale and is not ASCII. The finding lines are
+## verbatim:
+
+sm750_drm.c:135:6: warning: symbol 'sm750_test_reduced_pll_ratio' was not declared. Should it be static?
+sm750_drm.c:136:6: warning: symbol 'sm750_test_low_vco_pll' was not declared. Should it be static?
+sm750_drm.c:137:5: warning: symbol 'sm750_test_panel_fifo' was not declared. Should it be static?
+sm750_drm.c:138:5: warning: symbol 'sm750_test_refresh_centihz' was not declared. Should it be static?
+
+## 6.17.1-300 pre-fix run reported the same four lines and nothing else.
+## Exit status 0 in both runs; sparse warnings do not fail the build.
+

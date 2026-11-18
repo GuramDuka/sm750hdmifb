@@ -138,6 +138,33 @@ for requirement in \
 		exit 1
 	}
 done
+# A27: drm_atomic_helper_commit_hw_done() trips WARN_ON(new_crtc_state->event)
+# and wedges the commit when the driver abandons a modeset without consuming
+# the event the commit carries. The shared fail label of the pipe enable hook
+# therefore has to finish the commit the way the success path does, and must
+# not return before it has done so.
+fail_block=$(awk '
+	/^static void sm750_pipe_enable\(/ { in_function = 1 }
+	in_function && /^fail:/ { in_fail = 1 }
+	in_function && in_fail { print }
+	in_function && in_fail && /^}/ { exit }
+' "$source_file")
+if [[ -z $fail_block ]]; then
+	echo "sm750_pipe_enable has no fail label to inspect." >&2
+	exit 1
+fi
+for requirement in \
+	'drm_crtc_vblank_on(&pipe->crtc);' \
+	'sm750_arm_vblank_event(pipe);'; do
+	grep -F "$requirement" <<<"$fail_block" >/dev/null || {
+		echo "A27: abandoned modeset path lacks: $requirement" >&2
+		exit 1
+	}
+done
+if grep -E '^[[:space:]]*return;' <<<"$fail_block" >/dev/null; then
+	echo "A27: abandoned modeset path returns with the commit event unconsumed." >&2
+	exit 1
+fi
 if ! grep -F '#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)' \
 	"$source_file" >/dev/null ||
 	! grep -F '#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 0, 0)' \

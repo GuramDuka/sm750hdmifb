@@ -3114,7 +3114,22 @@ fail:
 	sdev->backbuffer_ready = false;
 	sdev->backbuffer_mirror = false;
 	sdev->shadow_upload_offset = 0;
-	drm_err(&sdev->drm, "failed to enable HDMI mode: %d\n", ret);
+	drm_err(&sdev->drm,
+		"failed to enable HDMI mode: %d (commit finished, event consumed)\n",
+		ret);
+	/*
+	 * The commit that reached this label has already swapped its state in,
+	 * so crtc_state->event is the event this commit has to deliver.
+	 * Returning with it still armed trips WARN_ON(new_crtc_state->event) in
+	 * drm_atomic_helper_commit_hw_done(), the commit never completes and
+	 * every later commit stalls for 10 s per atomic object (A27). Finish the
+	 * abandoned commit the same way the success path does: re-enable vblank
+	 * accounting, then consume the event. sm750_arm_vblank_event() arms it
+	 * on the driver's vblank timer, or sends it at once when no vblank can
+	 * be started, so either branch is terminal.
+	 */
+	drm_crtc_vblank_on(&pipe->crtc);
+	sm750_arm_vblank_event(pipe);
 }
 
 static void sm750_pipe_update(struct drm_simple_display_pipe *pipe,

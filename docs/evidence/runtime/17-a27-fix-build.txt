@@ -1,0 +1,217 @@
+# utc: 2026-11-18T13:31:14Z
+T20 - A27 FIX: STATIC GATE, BUILD, CHECK COUNT AND RPM REBUILD
+==============================================================
+
+Subject: `sm750_pipe_enable`'s `fail:` label in `src/sm750_drm.c` abandoned an
+atomic commit with `new_crtc_state->event` still armed, which made
+`drm_atomic_helper_commit_hw_done` trip `WARN_ON(new_crtc_state->event)`
+(A27). The fix makes the label finish the commit: `drm_crtc_vblank_on()` then
+`sm750_arm_vblank_event()`, the same two calls the success path makes.
+
+Host: kernel 7.3.4-100.fc43.x86_64, user coder (uid 1005), unprivileged.
+Build tree: /mega/tmp/sm750/t20/tree, a copy of the checkout (including .git),
+because the checkout is shared with T11 (runtime) and T19 (static analysis).
+Compiler: gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1) via CC=/usr/bin/gcc;
+the bare `gcc` on this host is the CUDA 14.4.1 wrapper.
+`make check` needs libdrm headers that are not installed system-wide, so the
+rootless recipe of docs/ENVIRONMENT.md section 3 supplies
+PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig,
+C_INCLUDE_PATH and LD_LIBRARY_PATH. Raw logs, including the localized
+(Russian) dnf/make/rpmbuild progress lines that this ASCII file omits:
+/mega/tmp/sm750/t20/logs/.
+
+1. THE CHANGE
+--------------
+
+$ git diff -- src/sm750_drm.c
+@@ -3114,7 +3114,22 @@ fail:
+ 	sdev->backbuffer_ready = false;
+ 	sdev->backbuffer_mirror = false;
+ 	sdev->shadow_upload_offset = 0;
+-	drm_err(&sdev->drm, "failed to enable HDMI mode: %d\n", ret);
++	drm_err(&sdev->drm,
++		"failed to enable HDMI mode: %d (commit finished, event consumed)\n",
++		ret);
++	/*
++	 * The commit that reached this label has already swapped its state in,
++	 * so crtc_state->event is the event this commit has to deliver.
++	 * Returning with it still armed trips WARN_ON(new_crtc_state->event) in
++	 * drm_atomic_helper_commit_hw_done(), the commit never completes and
++	 * every later commit stalls for 10 s per atomic object (A27). Finish the
++	 * abandoned commit the same way the success path does: re-enable vblank
++	 * accounting, then consume the event. sm750_arm_vblank_event() arms it
++	 * on the driver's vblank timer, or sends it at once when no vblank can
++	 * be started, so either branch is terminal.
++	 */
++	drm_crtc_vblank_on(&pipe->crtc);
++	sm750_arm_vblank_event(pipe);
+ }
+
+ static void sm750_pipe_update(struct drm_simple_display_pipe *pipe,
+
+The message string is the run-time marker the reproduction evidence uses to
+prove the fixed build is the one loaded: the pre-fix module cannot print it.
+
+Return paths of sm750_pipe_enable after the fix (line numbers in the fixed
+src/sm750_drm.c): :3059 `goto fail` (dither scale map init), :3087 `goto fail`
+(sm750_scanout_offset), :3094 fallthrough after a failed sm750_program_mode -
+all three land on `fail:` at :3105 and end at :3131/:3132; the success path at
+:3101/:3102/:3103 is unchanged. No path returns with the event armed.
+
+2. STATIC GATE, RED BEFORE THE FIX AND GREEN AFTER
+---------------------------------------------------
+
+$ bash tests/check-drm-policy.sh /mega/tmp/sm750/t20/prefix-sm750_drm.c
+# static gate RED/GREEN: tests/check-drm-policy.sh A27 block against pre-fix and fixed sm750_pipe_enable
+# pre-fix source: git show HEAD:src/sm750_drm.c (HEAD d33cfe3)
+--- RED: bash tests/check-drm-policy.sh $T/prefix-sm750_drm.c
+A27: abandoned modeset path lacks: drm_crtc_vblank_on(&pipe->crtc);
+exit=1
+
+--- GREEN: bash tests/check-drm-policy.sh src/sm750_drm.c (fixed)
+DRM mode policy checks passed
+exit=0
+
+3. CHECK-TARGET RECIPE COUNT: STILL 17
+---------------------------------------
+
+The gate had to be added without adding a recipe command: tests/check-drm-module.sh
+asserts the count and docs/AUDIT.md A23 records it. It was inserted inside
+tests/check-drm-policy.sh instead.
+# check target: line 30, prerequisites span 30-31, recipe lines: 17
+ 1 ./tests/check-drm-module.sh src/sm750hdmidrm.ko
+ 2 ./tests/check-drm-policy.sh
+ 3 ./tests/check-drm-xorg-config.sh
+ 4 ./tests/check-drm-packaging.sh
+ 5 ./tests/check-release-version.sh
+ 6 ./tests/check-softscale-map.sh
+ 7 ./tests/check-softscale-sharpen.sh
+ 8 ./tests/check-softscale-codegen.sh src/sm750_dither.o
+ 9 ./tests/check-hardware-cursor.sh
+10 ./tests/check-shadow-dma.sh
+11 ./tests/check-backbuffer-staging.sh
+12 ./tests/check-shadow-async.sh
+13 ./tests/check-shadow-source-damage.sh
+14 python3 tests/test-vblank-timer.py
+15 ./tests/test-bbdither-rgb565
+16 ./tests/test-scale-optimizations
+17 python3 tests/test-staging-results.py
+
+4. BUILD ON 7.3.4-100 AND FULL CHECK RUN
+-----------------------------------------
+# utc: 2026-11-18T12:32:39Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# build KDIR: /lib/modules/7.3.4-100.fc43.x86_64/build
+# compiler: gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+# command: env PKG_CONFIG_PATH=... C_INCLUDE_PATH=... make check CC=/usr/bin/gcc
+# workdir: /mega/tmp/sm750/t20/tree (isolated copy; the main checkout is shared with T11/T19)
+
+--- output ---
+make -C /lib/modules/7.3.4-100.fc43.x86_64/build M=/mega/tmp/sm750/t20/tree/src modules
+  CC [M]  sm750_drm.o
+  CC [M]  sm750_drm_mode.o
+  CC [M]  sm750_dither.o
+  CC [M]  ddk750_chip.o
+  CC [M]  ddk750_mode.o
+  CC [M]  ddk750_power.o
+  CC [M]  ddk750_display.o
+  CC [M]  ddk750_swi2c.o
+  CC [M]  ddk750_hwi2c.o
+  CC [M]  sii902x.o
+  LD [M]  sm750hdmidrm.o
+  MODPOST Module.symvers
+  CC [M]  sm750hdmidrm.mod.o
+  CC [M]  .module-common.o
+  LD [M]  sm750hdmidrm.ko
+  BTF [M] sm750hdmidrm.ko
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+/usr/bin/gcc -O2 -Wall -Wextra -Werror $(pkg-config --cflags libdrm) \
+	-o tests/check-vblank tests/check-vblank.c $(pkg-config --libs libdrm) -lm
+/usr/bin/gcc -O3 -Wall -Wextra -Werror -Itools -o tests/test-bbdither-rgb565 tests/test-bbdither-rgb565.c tools/bbdither-rgb565.c
+/usr/bin/gcc -O3 -Wall -Wextra -Werror -o tests/test-scale-optimizations tests/test-scale-optimizations.c
+./tests/check-drm-module.sh src/sm750hdmidrm.ko
+Measured 60.42 DRM vblanks/s over 120 events (expected 60.00)
+DRM vblank ioctl checks passed: /dev/dri/card0
+DRM module metadata checks passed: src/sm750hdmidrm.ko
+./tests/check-drm-policy.sh
+DRM mode policy checks passed
+./tests/check-drm-xorg-config.sh
+DRM Xorg isolation checks passed
+./tests/check-drm-packaging.sh
+Unified DRM package checks passed
+./tests/check-release-version.sh
+Release version consistency checks passed: 0.6.0
+./tests/check-softscale-map.sh
+Softscale 2560/2464-to-2048 mapping checks passed
+./tests/check-softscale-sharpen.sh
+Softscale 8% contrast sharpening checks passed
+./tests/check-softscale-codegen.sh src/sm750_dither.o
+Softscale generated-code checks passed
+./tests/check-hardware-cursor.sh
+Hardware cursor plane checks passed
+./tests/check-shadow-dma.sh
+Shadow DMA safety checks passed
+./tests/check-backbuffer-staging.sh
+Full-frame backbuffer staging checks passed
+./tests/check-shadow-async.sh
+Asynchronous shadow mailbox checks passed
+./tests/check-shadow-source-damage.sh
+Shadow source-difference damage checks passed
+python3 tests/test-vblank-timer.py
+Vblank timer schedule passed: normal
+Vblank timer schedule passed: time-lock
+Vblank timer schedule passed: event-lock
+Vblank timer schedule passed: superseded
+Vblank timer schedule passed: cancel-enable
+Vblank timer schedule passed: sync-stop
+./tests/test-bbdither-rgb565
+bbdither RGB565 checks passed
+./tests/test-scale-optimizations
+Packed scaler, unrolled span and fixed-sharpen checks passed
+python3 tests/test-staging-results.py
+....
+----------------------------------------------------------------------
+Ran 4 tests in 0.213s
+
+OK
+
+Zero `warning:` and zero `error:` lines in the whole build; exit code 0.
+All 17 checks print their pass line and the vblank-timer unit test reports
+"Ran 4 tests ... OK".
+
+5. NINE KERNEL/FORMAT COMBINATIONS
+-----------------------------------
+
+$ JOBS=12 CC=/usr/bin/gcc ./tests/build-all-kernels.sh
+# utc: 2026-11-18T12:34:18Z
+# command: JOBS=12 CC=/usr/bin/gcc ./tests/build-all-kernels.sh
+# workdir: /mega/tmp/sm750/t20/tree
+...
+SKIP: tests/check-vblank is not built; run make check first. This is not a pass.
+DRM module metadata checks passed: /mega/tmp/sm750/t20/tree/src/sm750hdmidrm.ko
+Built 9 sm750hdmidrm kernel/format combinations
+
+Each of the nine builds compiles and passes tests/check-drm-module.sh's metadata
+checks; the live-vblank step prints "SKIP: tests/check-vblank is not built; run
+make check first. This is not a pass." because the script cleans between
+formats - pre-existing behaviour, unchanged by this task. The build matrix is
+complete for the three installed kernels (7.2.15-100, 7.3.3-100, 7.3.4-100);
+/lib/modules/6.18.13-200.fc43.x86_64 belongs to no package (stale NVIDIA
+directory, docs/ENVIRONMENT.md:79-84), so the dkms "skipping 6.18.13-200"
+line in the install log is not an unbuilt kernel.
+
+6. RPM REBUILT AT THE SAME NEVRA
+---------------------------------
+$ sha256sum /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+265449aa59446feb580d3d0d68a7a7597e08c30c73331455d7a5cd4a864563c5  (before this build, 90281 bytes, mtime 2026-11-18 14:18)
+2026-11-18T14:12:14Z  building with: rm -rf /mega/tmp/sm750/t6/rpmbuild ... rpmbuild -ba --define '_topdir /mega/tmp/sm750/t6/rpmbuild' packaging/sm750hdmifb.spec
++ RPM_EC=0
++ exit 0
+76a430ffbdf90ac7176ffd49517484f3717f8e1cb34d2eea2d25884e42850721  (after this build, 91064 bytes, mtime 2026-11-18 15:36)
+rpm -qp --qf '%{NEVRA}\n' -> sm750hdmifb-0.6.0-1.fc43.noarch
+rpm -qpl | wc -l -> 40 paths
+The tarball inside the RPM carries the fix:
+  tar -xzOf /mega/tmp/sm750/t6/rpmbuild/SOURCES/sm750hdmifb-0.6.0-source.tar.gz \
+      sm750hdmifb-0.6.0/src/sm750_drm.c | grep -c 'commit finished, event consumed' -> 1
+and the new gate:
+  ... | grep -c A27 .../tests/check-drm-policy.sh -> 3

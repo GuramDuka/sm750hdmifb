@@ -87,20 +87,31 @@ printf '/etc/modprobe.d/%s.conf\n/etc/modules-load.d/%s.conf\n' \
 ) >"${build_root}/DEBIAN/md5sums"
 dpkg-deb --root-owner-group --build "${build_root}" "${deb}"
 
-# Ship exactly the tracked tree. Packing the working tree leaked untracked
-# planning notes into the release and made the audit scan them (defect A02).
-# Screenshots stay in git: the source archive only has to build the module
-# (defect A22). Building from an unpacked tarball has no .git, so fall back to
-# the explicit path list with the same excludes.
+# Ship exactly the tracked tree minus the development-only material. Packing
+# the working tree leaked untracked planning notes into the release and made
+# the audit scan them (defect A02); the screenshots, the session plans and the
+# captured transcripts stay in git because the source archive only has to
+# build the module (defects A22, A29). The list is declared once, in
+# packaging/source-excludes.sh, and tests/audit-release.sh reads the same file,
+# so adding a development-only directory is a one-line change that both the
+# packager and the gate follow. Building from an unpacked tarball has no .git,
+# so fall back to the explicit path list with the same excludes.
+# shellcheck source=packaging/source-excludes.sh
+. "${project_dir}/packaging/source-excludes.sh"
+mapfile -t exclude_pathspecs < <(sm750_dev_only_pathspecs)
 if git -C "${project_dir}" rev-parse --git-dir >/dev/null 2>&1; then
 	tracked_list=$(mktemp "${TMPDIR:-/tmp}/sm750-tracked.XXXXXX")
 	trap 'rm -f -- "$tracked_list"' EXIT
-	git -C "${project_dir}" ls-files -z -- . ':(exclude)docs/images/*' \
+	git -C "${project_dir}" ls-files -z -- . "${exclude_pathspecs[@]}" \
 		>"$tracked_list"
 	tar -C "${project_dir}" -czf "${source_archive}" \
 		--transform="s|^|${package}-${version}/|" --null \
 		-T "$tracked_list"
 else
+	tar_excludes=()
+	for dev_only in "${sm750_dev_only[@]}"; do
+		tar_excludes+=("--exclude=${dev_only}/*")
+	done
 	tar -C "${project_dir}" -czf "${source_archive}" \
 		--transform="s|^|${package}-${version}/|" \
 		--exclude-vcs --exclude='./build' --exclude='./dist' \
@@ -111,7 +122,7 @@ else
 		--exclude='tests/check-vblank' \
 		--exclude='tests/test-bbdither-rgb565' \
 		--exclude='tests/test-scale-optimizations' \
-		--exclude='docs/images/*' \
+		"${tar_excludes[@]}" \
 		.gitignore LICENSE Makefile README.md build-package.sh dkms.conf \
 		src docs tests tools packaging .github
 fi

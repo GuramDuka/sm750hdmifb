@@ -1,0 +1,66 @@
+# utc: 2026-11-18T11:48:41Z
+# T11 AFTER HALF - MODULE REPLACEMENT: unload stale in-memory module, load 0.6.0
+# host: deneb, kernel 7.3.4-100.fc43.x86_64
+# display: the driver's own fbdev client mode (1920x1080, fb 43, CRTC 38), no userspace DRM master
+
+=== STATE BEFORE RELOAD ===
+  /proc/modules: sm750hdmidrm 167936 0 - Live 0xffffffffc25d7000 (OE)
+drm_vram_helper 28672 1 sm750hdmidrm, Live 0xffffffffc0a5b000
+drm_ttm_helper 20480 3 sm750hdmidrm,drm_vram_helper,nvidia_drm, Live 0xffffffffc0a2a000
+  sysfs card0-HDMI-A-1: status=connected enabled=enabled dpms=On
+  modetest -p CRTC: 38	44	(0,0)	(1920x1080)
+
+=== MODULE IDENTITY BEFORE RELOAD (in-memory vs on-disk) ===
+  /sys/module/sm750hdmidrm/ entries: coresize drivers holders initsize initstate notes parameters refcnt sections srcversion taint uevent version 
+  on-disk object: -rw-r--r-- 1 root root 61620 Nov 18 14:22 /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+  modinfo version (on-disk): 0.6.0
+  modinfo srcversion: F4E135E09C9898462FE24C5
+
+=== UNLOAD: sudo -n modprobe -r sm750hdmidrm ===
+  exit=0
+  /proc/modules after unload: 0 match(es)
+
+=== LOAD: sudo -n modprobe sm750hdmidrm ===
+  exit=0
+  /proc/modules after load: sm750hdmidrm 167936 0 - Live 0xffffffffc25d7000 (OE)
+drm_vram_helper 28672 1 sm750hdmidrm, Live 0xffffffffc0a5b000
+drm_ttm_helper 20480 3 sm750hdmidrm,drm_vram_helper,nvidia_drm, Live 0xffffffffc0a2a000
+
+=== MODULE IDENTITY AFTER RELOAD ===
+  /sys/module/sm750hdmidrm/ entries: coresize drivers holders initsize initstate notes parameters refcnt sections srcversion taint uevent version 
+  debugfs dri/0 entries: sm750-regs readable
+  modinfo: version=0.6.0 srcversion=F4E135E09C9898462FE24C5
+
+=== VERSION REPORTED TO USERSPACE ===
+trying to open device '/dev/dri/card0'... done
+
+=== STATE AFTER RELOAD ===
+  sysfs card0-HDMI-A-1: status=connected enabled=enabled dpms=On
+  modetest -p CRTC: 38	44	(0,0)	(1920x1080)
+
+=== KERNEL LOG FOR THE RELOAD (last 25 sm750 lines) ===
+  [ 1497.462800] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+  [ 1500.137150] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+  [ 1500.140798] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+  [ 1502.946078] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+  [ 1502.949764] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+  [ 1506.826966] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+  [ 1506.830906] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+  [ 1999.038174] sm750hdmidrm 0000:01:00.0: [drm] DMA1 IRQ was not delivered; reverting to completion polling
+  [ 1999.038423] sm750hdmidrm 0000:01:00.0: [drm] DMA1 shadow uploads enabled after off-screen transfer verification (minimum 4096 bytes)
+  [ 1999.206388] [drm] Initialized sm750hdmidrm 0.6.0 for 0000:01:00.0 on minor 0
+  [ 1999.301666] sm750hdmidrm 0000:01:00.0: [drm] fb0: sm750hdmidrmdrm frame buffer device
+  [ 1999.301670] sm750hdmidrm 0000:01:00.0: [drm] registered SM750 HDMI DRM device with 16 MiB VRAM (RGB565 bbdither, primary controller)
+  [ 1999.301672] sm750hdmidrm 0000:01:00.0: [drm] 64x64 hardware cursor plane enabled with ARGB palette conversion
+  [ 1999.301674] sm750hdmidrm 0000:01:00.0: [drm] coalesced asynchronous shadow updates enabled
+  [ 2011.461044] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+  [ 2011.464725] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+  [ 2095.625716] sm750hdmidrm 0000:01:00.0: [drm] DMA1 IRQ was not delivered; reverting to completion polling
+  [ 2095.625994] sm750hdmidrm 0000:01:00.0: [drm] DMA1 shadow uploads enabled after off-screen transfer verification (minimum 4096 bytes)
+  [ 2095.796958] [drm] Initialized sm750hdmidrm 0.6.0 for 0000:01:00.0 on minor 0
+  [ 2095.899544] sm750hdmidrm 0000:01:00.0: [drm] fb0: sm750hdmidrmdrm frame buffer device
+  [ 2095.899547] sm750hdmidrm 0000:01:00.0: [drm] registered SM750 HDMI DRM device with 16 MiB VRAM (RGB565 bbdither, primary controller)
+  [ 2095.899549] sm750hdmidrm 0000:01:00.0: [drm] 64x64 hardware cursor plane enabled with ARGB palette conversion
+  [ 2095.899551] sm750hdmidrm 0000:01:00.0: [drm] coalesced asynchronous shadow updates enabled
+  [ 2102.593720] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+  [ 2102.597695] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)

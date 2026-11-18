@@ -5,10 +5,6 @@
 
 #include "ddk750_reg.h"
 #include "ddk750_mode.h"
-
-extern bool sm750_test_reduced_pll_ratio;
-extern bool sm750_test_low_vco_pll;
-extern int sm750_test_panel_fifo;
 #include "ddk750_chip.h"
 
 /*

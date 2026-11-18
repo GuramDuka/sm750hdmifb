@@ -1,0 +1,111 @@
+# utc: 2026-11-18T12:11:00Z
+# T11 AFTER HALF - TIER 7: KERNEL LOG under sm750hdmidrm 0.6.0 (T10 counterpart: 07-kernel-log.txt)
+# host: deneb, kernel 7.3.4-100.fc43.x86_64, uptime 3432.48 s at capture
+# module in memory: 0.6.0 (srcversion F4E135E09C9898462FE24C5)
+# source: sudo -n dmesg (2479 lines, exit 0), cross-checked against
+#         sudo -n journalctl -k -b -q --no-pager (2479 lines, exit 0)
+# raw: /mega/tmp/sm750/t11/kl-final.txt and kl-final.journal
+# NOTE: the two sources now DIFFER byte-wise (T10 recorded them identical).
+#   dmesg lacks the journalctl priority prefix column and journalctl re-sorts
+#   equal timestamps; line counts and all quoted content match. Recorded as an
+#   observation about the tools, not a driver finding.
+
+======================================================================
+1. THREE SM750 PROBES IN THIS BOOT - the version transition is visible in-log
+======================================================================
+  [    3.686047] [drm] Initialized sm750hdmidrm 0.1.0 for 0000:01:00.0 on minor 0
+      ^ boot probe, STALE 0.5.9 build. Note: reports 0.1.0, not 0.5.9 - the
+        pre-fix module had no MODULE_VERSION and DRM falls back to 0.1.0.
+  [ 1999.206388] [drm] Initialized sm750hdmidrm 0.6.0 for 0000:01:00.0 on minor 0
+      ^ first T11 reload (evidence 13-module-reload.txt)
+  [ 2095.796958] [drm] Initialized sm750hdmidrm 0.6.0 for 0000:01:00.0 on minor 0
+      ^ second T11 reload (repeat cycle for idempotency proof)
+
+  Both 0.6.0 probes emit the identical normal set, in this order:
+    DMA1 IRQ was not delivered; reverting to completion polling
+    DMA1 shadow uploads enabled after off-screen transfer verification (minimum 4096 bytes)
+    fb0: sm750hdmidrmdrm frame buffer device
+    registered SM750 HDMI DRM device with 16 MiB VRAM (RGB565 bbdither, primary controller)
+    64x64 hardware cursor plane enabled with ARGB palette conversion
+    coalesced asynchronous shadow updates enabled
+  Console switches: 'Console: switching to colour VGA+ 80x25' immediately before
+  each probe, then 'Console: switching to colour frame buffer device 240x67' after
+  fb0 registration - i.e. the fbdev client takes the console over on every reload.
+
+======================================================================
+2. THE CURSOR-PLANE WARNING IS ABSENT FROM BOTH 0.6.0 PROBES (AC-4)
+======================================================================
+  Whole-boot grep for the warning text: 1 occurrence, at
+    [    3.681998] sm750hdmidrm 0000:01:00.0: [drm] [PLANE:40:sm750-cursor] pixel
+                 format with alpha exposed but blend mode not setup. Please fix.
+  Timestamp 3.68 s = the ORIGINAL 0.5.9 boot probe, 4 ms BEFORE the 0.1.0
+  'Initialized' line. It does NOT appear at 1999 or 2095.
+  Conclusion: the T13 fix (src/sm750_drm.c:3491 drm_plane_create_blend_mode_property
+  on the cursor plane) removes the warning. Closed.
+
+======================================================================
+3. THE -110 / REFCOUNT-UNDERFLOW EPISODE (T16 owns it; T11 only captures)
+======================================================================
+  Window [2889.882009 .. 2920.432986] s, dmesg lines 2308..2420 of this capture.
+  Trigger: the 3rd kmscube run of the AFTER suite (kmscube -c 300), specifically
+  its EXIT path. Full raw window: /mega/tmp/sm750/t11/minus110-full.txt.
+
+  [ 2889.882009] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI mode: -110
+  [ 2889.882044] ------------[ cut here ]------------
+  [ 2889.882047] WARNING: drivers/gpu/drm/drm_atomic_helper.c:2758 at
+                 drm_atomic_helper_commit_hw_done+0x102/0x130, CPU#21: kmscube/322140
+    call trace: drm_atomic_helper_commit_tail -> commit_tail ->
+      drm_atomic_helper_commit -> drm_atomic_commit ->
+      drm_client_modeset_commit_atomic -> drm_client_modeset_commit_locked ->
+      drm_client_modeset_commit -> __drm_fb_helper_restore_fbdev_mode_unlocked.part.0 ->
+      drm_fbdev_client_restore -> drm_client_dev_restore -> drm_release ->
+      __fput -> task_work_run -> do_exit
+  [ 2899.954215] *ERROR* flip_done timed out
+  [ 2899.954223] *ERROR* [CRTC:38:crtc-0] commit wait timed out
+  [ 2910.194059] *ERROR* flip_done timed out
+  [ 2910.194067] *ERROR* [PLANE:36:plane-0] commit wait timed out
+  [ 2910.194126] refcount_t: underflow; use-after-free.
+  [ 2910.194133] WARNING: lib/refcount.c:28 at refcount_warn_saturate+0x59/0x90,
+                 CPU#0: kworker/0:1/316731
+    Workqueue: events drm_fb_helper_damage_work
+    call trace: __drm_atomic_helper_plane_destroy_state ->
+      drm_gem_simple_kms_destroy_plane_state -> drm_atomic_commit_default_clear ->
+      __drm_atomic_commit_free -> drm_atomic_helper_dirtyfb ->
+      drm_fbdev_shmem_helper_fb_dirty -> drm_fb_helper_fb_dirty
+  [ 2920.432972] *ERROR* flip_done timed out
+  [ 2920.432986] *ERROR* [CONNECTOR:35:HDMI-A-1] commit wait timed out
+
+  Counts in this boot: 'failed to enable HDMI mode' 1, 'flip_done timed out' 3,
+  'refcount_t: underflow' 1. All inside that one window.
+
+  AFTERMATH - the display survived the whole episode:
+    /sys/class/drm/card0-HDMI-A-1/status=enabled dpms=On enabled=enabled
+    CRTC 38 at (0,0) 1920x1080, /sys/module/sm750hdmidrm/refcnt=0
+    kmscube still reported 299 rendered frames before exiting 0.
+
+  ATTRIBUTION: this is the same episode T10 hypothesised and T16 is tasked with
+  (plan.yaml:617-635, 'Isolate the HDMI enable -110 / refcount underflow episode').
+  T11 does NOT diagnose it. What T11 adds is a second, independent reproduction on
+  a DIFFERENT module version (0.6.0 vs the 0.5.9 T10 saw), which narrows it to the
+  drm_release -> fbdev-client-restore path rather than to any T5/T9/T13 change.
+
+======================================================================
+4. FRAMEBUFFER REGISTRATION vs /dev/fb* (unchanged behaviour, not a defect)
+======================================================================
+  'fb0: sm750hdmidrmdrm frame buffer device' is logged at every probe, yet
+  /dev/fb* does not exist and /sys/class/graphics/ contains only 'fbcon'.
+  Kernel config: CONFIG_FB=y but CONFIG_FB_DEVICE is not set, so no fb device
+  node is created. Identical under 0.5.9 and 0.6.0. Recorded as unchanged.
+
+======================================================================
+5. UNRELATED NOISE IN THE SAME LOG (explicitly not attributed to SM750)
+======================================================================
+  The log is dominated by an ata5/libata failure storm that begins before any T11
+  command and continues after it:
+    ata5: hardreset failed / reset failed, giving up /
+    limiting SATA link speed to 3.0 Gbps|1.5 Gbps /
+    sd 4:0:0:0: [sdc] Synchronize Cache(10) failed: Result: hostbyte=DID_BAD_TARGET
+  plus 'sd 4:0:0:0: [sdc] Stopping disk'. This is a SATA link/disk problem on
+  ata5, unrelated to the display path, and it predates T11. Noted so that the
+  line counts above are not mistaken for SM750 activity: of 2479 lines, 558
+  mention sm750hdmidrm and the rest are mostly ata5.

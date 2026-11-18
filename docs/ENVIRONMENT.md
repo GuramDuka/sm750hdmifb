@@ -39,14 +39,17 @@ the expected form. Repository deliverables (`docs/ENVIRONMENT.md`,
 `docs/evidence/`) are committed artifacts, not scratch.
 
 Two pre-existing `$HOME` entries are not T3 scratch but are noted so packaging
-tasks do not add to them: `/home/coder/.rpmmacros` and the empty
-`/home/coder/rpmbuild/` skeleton were created by `rpmdev-setuptree` at 18:59,
+tasks do not add to them: `~/.rpmmacros` and the empty
+`~/rpmbuild/` skeleton were created by `rpmdev-setuptree` at 18:59,
 before this task; a packaging task should redirect `%_topdir` under
 `/mega/tmp/sm750/` instead of filling that skeleton. The `check-vblank`
 compile runs through `/usr/lib64/ccache/cc`, so it deposits objects in the
-user ccache (`/home/coder/.cache/ccache`); that is a tool cache, not a
+user ccache (`~/.cache/ccache`); that is a tool cache, not a
 scratch file, and `CCACHE_DIR` can be pointed at `/mega/tmp/sm750/t3/ccache`
-to keep it out of `$HOME` entirely.
+to keep it out of `$HOME` entirely. This paragraph names those paths with `~/`
+on purpose: the file ships in the source archive, and
+`tests/audit-release.sh:89-95` rejects a local absolute home path there
+(defect A29).
 
 ## 1. Host
 

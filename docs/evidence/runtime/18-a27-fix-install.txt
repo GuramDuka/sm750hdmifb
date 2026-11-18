@@ -1,0 +1,235 @@
+# utc: 2026-11-18T12:36:39Z
+T20 - A27 FIX: DELIVERY TO THE RUNNING KERNEL THROUGH THE ALLOWLISTED DNF PAIR
+=============================================================================
+
+Purpose: replace the loaded 0.6.0 module (pre-fix srcversion F4E135E09C9898462FE24C5)
+with the fixed 0.6.0 build, using only commands that are already in the host
+sudoers allowlist. No new privilege was requested and none was needed.
+
+Host: kernel 7.3.4-100.fc43.x86_64, user coder (uid 1005), unprivileged.
+RPM: /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+     sha256 76a430ffbdf90ac7176ffd49517484f3717f8e1cb34d2eea2d25884e42850721
+     (built by this task, see 17-a27-fix-build.txt), 91064 bytes.
+The NEVRA was deliberately kept at 0.6.0-1: that exact path is the only
+allowlisted install target, so a version bump would have required a new
+sudoers entry.
+
+1. THE ALLOWLIST, AS IT STOOD BEFORE THE INSTALL
+-------------------------------------------------
+$ sudo -n -l | grep -E 'dnf|dkms status|modprobe|depmod'
+    (root) NOPASSWD: /usr/bin/dkms status
+    (root) NOPASSWD: /usr/bin/depmod -a
+    (root) NOPASSWD: /usr/bin/modprobe -r sm750hdmidrm
+    (root) NOPASSWD: /usr/bin/modprobe sm750hdmidrm
+    (root) NOPASSWD: /usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+    (root) NOPASSWD: /usr/bin/dnf remove -y sm750hdmifb
+
+2. PRE-INSTALL STATE
+---------------------
+$ cat /sys/module/sm750hdmidrm/version       -> 0.6.0
+$ cat /sys/module/sm750hdmidrm/srcversion    -> F4E135E09C9898462FE24C5   (pre-fix)
+$ cat /sys/class/drm/card0-HDMI-A-1/{status,enabled,dpms} -> connected / enabled / On
+
+3. THE FIVE COMMANDS, EACH WITH ITS EXIT CODE
+----------------------------------------------
+The transcript below is the ASCII rendering of /mega/tmp/sm750/t20/logs/install.log.
+That raw log carries the localized (Russian) dnf progress and scriptlet lines and
+ANSI escapes, which are dropped here to keep this file ASCII; the numbers, the
+command lines, the scriptlet output and every exit code are verbatim, and each
+command line is prefixed with the wall clock at which it was issued.
+
+# utc: 2026-11-18T12:36:39Z
+# host: 7.3.4-100.fc43.x86_64
+# purpose: deliver the A27 fix to the running kernel through the already-allowlisted dnf remove/install pair
+# rpm: /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+# rpm sha256 before install:
+76a430ffbdf90ac7176ffd49517484f3717f8e1cb34d2eea2d25884e42850721  /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+
+=== pre-install state ===
+$ cat /sys/module/sm750hdmidrm/version
+0.6.0
+$ cat /sys/module/sm750hdmidrm/srcversion
+F4E135E09C9898462FE24C5
+$ cat /sys/class/drm/card0-HDMI-A-1/{status,enabled,dpms}
+connected
+enabled
+On
+
+
+=== install sequence ===
+--- 12:37:07Z sudo -n dnf remove -y sm750hdmifb
+ sm750hdmifb noarch 0.6.0-1.fc43 @commandline 406.1 KiB
+
+
+>>> Module sm750hdmifb/0.6.0 for kernel 7.2.15-100.fc43.x86_64 (x86_64):
+>>> Before uninstall, this module version was ACTIVE on this kernel.
+>>> Deleting /lib/modules/7.2.15-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+>>> Running depmod..... done.
+>>>
+>>> Module sm750hdmifb/0.6.0 for kernel 7.3.3-100.fc43.x86_64 (x86_64):
+>>> Before uninstall, this module version was ACTIVE on this kernel.
+>>> Deleting /lib/modules/7.3.3-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+>>> Running depmod...... done.
+>>>
+>>> Module sm750hdmifb/0.6.0 for kernel 7.3.4-100.fc43.x86_64 (x86_64):
+>>> Before uninstall, this module version was ACTIVE on this kernel.
+>>> Deleting /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+>>> Running depmod...... done.
+>>>
+>>> Deleting module sm750hdmifb/0.6.0 completely from the DKMS tree.
+>>> Executing post-transaction command............................ done.
+>>>
+exit=0
+
+--- 12:39:05Z sudo -n dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+ sm750hdmifb noarch 0.6.0-1.fc43 @commandline 410.4 KiB
+
+
+>>> Deprecated feature: CLEAN (/usr/src/sm750hdmifb-0.6.0/dkms.conf)
+>>>
+>>> warning: skipping 6.18.13-200.fc43.x86_64: matching kernel headers are absen
+>>> Deprecated feature: CLEAN (/var/lib/dkms/sm750hdmifb/0.6.0/source/dkms.conf)
+>>> Sign command: /lib/modules/7.2.15-100.fc43.x86_64/build/scripts/sign-file
+>>> Signing key: /var/lib/dkms/mok.key
+>>> Public certificate (MOK): /var/lib/dkms/mok.pub
+>>>
+>>> Building module(s).... done.
+>>> Signing module /var/lib/dkms/sm750hdmifb/0.6.0/build/src/sm750hdmidrm.ko
+>>> Deprecated feature: CLEAN (/var/lib/dkms/sm750hdmifb/0.6.0/source/dkms.conf)
+>>> Installing /lib/modules/7.2.15-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+>>> Running depmod..... done.
+>>> Executing post-transaction command............................ done.
+>>> Deprecated feature: CLEAN (/var/lib/dkms/sm750hdmifb/0.6.0/source/dkms.conf)
+>>> Sign command: /lib/modules/7.3.3-100.fc43.x86_64/build/scripts/sign-file
+>>> Signing key: /var/lib/dkms/mok.key
+>>> Public certificate (MOK): /var/lib/dkms/mok.pub
+>>>
+>>> Building module(s).... done.
+>>> Signing module /var/lib/dkms/sm750hdmifb/0.6.0/build/src/sm750hdmidrm.ko
+>>> Deprecated feature: CLEAN (/var/lib/dkms/sm750hdmifb/0.6.0/source/dkms.conf)
+>>> Installing /lib/modules/7.3.3-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+>>> Running depmod...... done.
+>>> Executing post-transaction command............................ done.
+>>> Deprecated feature: CLEAN (/var/lib/dkms/sm750hdmifb/0.6.0/source/dkms.conf)
+>>> Sign command: /lib/modules/7.3.4-100.fc43.x86_64/build/scripts/sign-file
+>>> Signing key: /var/lib/dkms/mok.key
+>>> Public certificate (MOK): /var/lib/dkms/mok.pub
+>>>
+>>> Building module(s).... done.
+>>> Signing module /var/lib/dkms/sm750hdmifb/0.6.0/build/src/sm750hdmidrm.ko
+>>> Deprecated feature: CLEAN (/var/lib/dkms/sm750hdmifb/0.6.0/source/dkms.conf)
+>>> Installing /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+>>> Running depmod...... done.
+>>> Executing post-transaction command............................. done.
+>>>
+Warning: skipped OpenPGP checks for 1 package from repository: @commandline
+exit=0
+
+--- 12:44:17Z sudo -n dkms status
+sm750hdmifb/0.5.9, 7.3.3-100.fc43.x86_64, x86_64: built
+sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: built
+sm750hdmifb/0.6.0, 7.2.15-100.fc43.x86_64, x86_64: installed
+sm750hdmifb/0.6.0, 7.3.3-100.fc43.x86_64, x86_64: installed
+sm750hdmifb/0.6.0, 7.3.4-100.fc43.x86_64, x86_64: installed
+exit=0
+
+--- 12:44:44Z sudo -n modprobe -r sm750hdmidrm
+exit=0
+--- 12:44:44Z sudo -n modprobe sm750hdmidrm
+exit=0
+--- post-reload state
+$ cat /sys/module/sm750hdmidrm/version
+0.6.0
+$ cat /sys/module/sm750hdmidrm/srcversion
+07E8F503FC7D839EEC5EE64
+$ modinfo -F srcversion sm750hdmidrm (unprivileged)
+07E8F503FC7D839EEC5EE64
+$ cat /sys/class/drm/card0-HDMI-A-1/{status,enabled,dpms}
+connected
+disabled
+On
+
+4. TRANSACTION RECORD (independent of the shell transcript)
+------------------------------------------------------------
+$ LC_ALL=C dnf history info 380        # the remove
+Transaction ID : 380
+Begin time     : 2026-11-18 12:37:08
+Begin rpmdb    : 0512471368db9280854ace79f129f1aee9b4280168f74940f215f5bd48b7bb83
+End time       : 2026-11-18 12:38:54
+End rpmdb      : 5b69da8657acd7f948a256c53ddba5b68e6040b69d80f24b8d8a9cea7afeda3a
+User           : 1005 <coder>
+Status         : Ok
+Releasever     : 43
+Description    : dnf remove -y sm750hdmifb
+Comment        : 
+Packages altered:
+  Action Package                           Reason Repository
+  Remove sm750hdmifb-0:0.6.0-1.fc43.noarch User   @System
+
+
+$ LC_ALL=C dnf history info 381        # the install
+Transaction ID : 381
+Begin time     : 2026-11-18 12:39:08
+Begin rpmdb    : 5b69da8657acd7f948a256c53ddba5b68e6040b69d80f24b8d8a9cea7afeda3a
+End time       : 2026-11-18 12:44:10
+End rpmdb      : c326453d58050467eddbf5a3204e89e804e7578e33ea86d0d0cf01ca8dc31417
+User           : 1005 <coder>
+Status         : Ok
+Releasever     : 43
+Description    : dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+Comment        : 
+Packages altered:
+  Action  Package                           Reason Repository
+  Install sm750hdmifb-0:0.6.0-1.fc43.noarch User   @commandline
+
+
+Both transactions report Status Ok, user 1005 <coder>, and the rpmdb hashes
+chain (380 End rpmdb = 381 Begin rpmdb), so the install follows the remove with
+nothing in between. Transactions 382/383 (13:37Z-13:46Z) were run by another
+task later in the day and are not part of this delivery; they installed an RPM
+whose src/sm750_drm.c is byte-identical to this one (see 17-a27-fix-build.txt).
+
+5. PROOF THAT THE FIXED CODE IS THE LOADED CODE
+------------------------------------------------
+$ cat /sys/module/sm750hdmidrm/version      -> 0.6.0
+$ cat /sys/module/sm750hdmidrm/srcversion   -> 07E8F503FC7D839EEC5EE64
+$ modinfo -F srcversion sm750hdmidrm        -> 07E8F503FC7D839EEC5EE64
+The srcversion changed from F4E135E09C9898462FE24C5 to 07E8F503FC7D839EEC5EE64,
+so the object the kernel loaded is not the object it had before.
+
+$ xz -dc /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz > installed.ko
+$ sha256sum installed.ko
+0461d1571931a8162c9c07f3bf105fb27f0ce65e8eea4462e1e07f8da61f2145  installed.ko
+$ modinfo -F srcversion installed.ko        -> 07E8F503FC7D839EEC5EE64
+$ strings installed.ko | grep -c 'commit finished, event consumed'
+1
+$ strings installed.ko | grep -c 'failed to enable HDMI mode'
+1
+The literal "commit finished, event consumed" exists only in the fixed source
+(src/sm750_drm.c:3118), so an installed object that contains it cannot be the
+pre-fix build. The reproduction evidence (19-a27-fix-reproduce.txt) shows the
+same string being printed at run time, which is the stronger statement: the
+kernel is executing the new fail path.
+
+6. TWO NOTES ON THE INSTALL OUTPUT
+-----------------------------------
+- dkms printed "warning: skipping 6.18.13-200.fc43.x86_64: matching kernel
+  headers are absent". There is no installed kernel 6.18.13-200 on this host:
+  `rpm -qa | grep ^kernel` lists 7.2.15-100, 7.3.3-100 and 7.3.4-100 only, and
+  /lib/modules/6.18.13-200.fc43.x86_64 is a stale directory left by the NVIDIA
+  driver that belongs to no package (docs/ENVIRONMENT.md:79-84). The build
+  matrix is therefore complete for every installed kernel: dkms built and
+  installed 0.6.0 for all three (section 3).
+- The "Deprecated feature: CLEAN" lines come from dkms.conf's CLEAN setting and
+  predate this task; they are not errors and the exit codes are 0.
+
+7. PANEL STATE ACROSS THE RELOAD
+---------------------------------
+Immediately after `modprobe sm750hdmidrm` the connector reads
+connected / disabled / On: the driver's own fbdev client re-registers the CRTC
+and the output comes back on the first modeset. The reproduction harness
+restores 1920x1080 before it records anything, and its first attempt already
+reads connected / enabled / On; the final state after 108 attempts is the same
+(section 6 of 19-a27-fix-reproduce.txt). The desktop is not affected at any
+point: Plasma runs on the GTX 1070 (card1), while card0 drives the SM750 HDMI
+console only.

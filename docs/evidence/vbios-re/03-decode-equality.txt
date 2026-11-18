@@ -1,0 +1,14 @@
+Decode equality: objdump -D -b binary -m i8086 -M intel --adjust-vma=0xc0000
+objdump prints the input path in a banner line; the first two lines of
+each listing are dropped so the two runs are compared on content alone.
+
+$ objdump ... <rebuilt> | tail -n +3 > a.txt
+$ objdump ... <original> | tail -n +3 > b.txt
+
+$ LC_ALL=C wc -l a.txt b.txt
+  30283 /mega/tmp/sm750/t17/a.txt
+  30283 /mega/tmp/sm750/t17/b.txt
+  60566 total
+
+$ LC_ALL=C diff -u a.txt b.txt
+diff exit=0

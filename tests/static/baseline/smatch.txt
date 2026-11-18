@@ -1,0 +1,4 @@
+1 6.17.1-300.fc43.x86_64 smatch sii902x.c sii902x_begin_control() warn: shift has higher precedence than mask
+1 7.3.4-100.fc43.x86_64 smatch sii902x.c sii902x_begin_control() warn: shift has higher precedence than mask
+2 6.17.1-300.fc43.x86_64 smatch sm750_drm.c sm750_dma_init() warn: shift has higher precedence than mask
+4 7.3.4-100.fc43.x86_64 smatch sm750_drm.c sm750_dma_init() warn: shift has higher precedence than mask

@@ -171,6 +171,62 @@ if [ "$built_count" -eq 0 ]; then
 	echo "warning: no supported installed kernel has usable headers; the module was not built" >&2
 	echo "warning: install kernel-devel for a supported kernel, then run: dkms install -m %{dkms_name} -v %{dkms_version} -k <kernel>" >&2
 fi
+# Stale-registration purge. Releases before 0.6.0 registered other versions of
+# %{dkms_name} and left them registered. Both dkms.conf files declare
+# DEST_MODULE_LOCATION="/updates/dkms", which override_dest_module_location()
+# in /usr/sbin/dkms rewrites to /extra on Fedora, so every registered version
+# of this module name shares the one destination path
+# /lib/modules/<kernel>/extra/%{module_name}.ko.xz. "dkms autoinstall" (what
+# dkms.service runs on boot) installs only the newest registered version and
+# skips kernels where the module already looks installed, so a stale version
+# that stays registered takes the destination path back on the next kernel
+# update. Rationale and host evidence: docs/PACKAGING-RPM.md section 4.
+#
+# Bounded by construction: only a status line whose module name is exactly
+# %{dkms_name} is considered ("<name>/" is matched, so a module named
+# "%{dkms_name}-something" is never touched), %{dkms_version} itself is never
+# removed, and each distinct version is removed at most once. A failed removal
+# is a warning, never a non-zero exit: an exiting scriptlet aborts the
+# transaction.
+#
+# This runs after the build loop on purpose: %{dkms_version} must own the
+# shared destination path before any other version is unregistered. A stale
+# version whose kernel symlinks still point at itself is uninstalled by
+# "dkms remove --all", which is intended - the pre-0.6.0 driver must not be the
+# object that loads.
+#
+# Deliberately left alone: /usr/src/sm750hdmifb-0.5.9 predates packaging and no
+# RPM owns it, so %files cannot remove it. It is a documented manual step.
+seen_versions=' '
+dkms status 2>/dev/null | while IFS= read -r status_line; do
+	# "<name>/<version>, <kernel>, <arch>: <state>" or "<name>/<version>: <state>".
+	# Parsed with cut, not with parameter expansion: rpm collapses a doubled
+	# percent sign in a scriptlet, so a shell expansion written with the
+	# longest-suffix form would reach the host as the shortest-suffix form and
+	# silently mis-parse the version.
+	stale_entry=$(printf '%s\n' "$status_line" | cut -d, -f1)
+	stale_name=$(printf '%s\n' "$stale_entry" | cut -d/ -f1)
+	stale_version=$(printf '%s\n' "$stale_entry" | cut -d/ -f2 | cut -d: -f1)
+	# Not this package's module name: leave it alone.
+	[ "$stale_name" = "%{dkms_name}" ] || continue
+	[ -n "$stale_version" ] || continue
+	# This is the version being installed: never remove it.
+	if [ "$stale_version" = "%{dkms_version}" ]; then
+		continue
+	fi
+	# "name/version" without a registered source tree parses as "name/";
+	# anything with a path separator is not a version.
+	case "$stale_version" in
+		*/*) continue ;;
+	esac
+	case "$seen_versions" in
+		*" $stale_version "*) continue ;;
+	esac
+	seen_versions="$seen_versions$stale_version "
+	echo "removing stale DKMS registration: %{dkms_name}/$stale_version" >&2
+	dkms remove -m %{dkms_name} -v "$stale_version" --all || \
+		echo "warning: dkms remove %{dkms_name}/$stale_version failed; remove it by hand" >&2
+done
 exit 0
 
 # No %postun scriptlet is defined on purpose. dkms remove must run while

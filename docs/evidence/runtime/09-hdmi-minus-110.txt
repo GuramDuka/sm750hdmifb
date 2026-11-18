@@ -1,0 +1,525 @@
+# utc: 2026-11-18T11:45Z
+T16 - ISOLATION OF THE "failed to enable HDMI mode: -110" EPISODE [8523 .. 8586]
+================================================================================
+
+Module under test: sm750hdmidrm as currently loaded = STALE PRE-FIX 0.5.9 BUILD.
+Proof (unchanged from T10, re-verified during T16):
+  - /sys/module/sm750hdmidrm/version and /srcversion do not exist
+  - /sys/module/sm750hdmidrm/ has no `regs` entry (no debugfs register file)
+  - dkms status -> `sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: installed`
+  - git HEAD 27db03b "Release 0.5.9 with newer kernel support"
+No install, no modprobe, no reload was performed. Every statement below is a 0.5.9
+result and must be re-tested on 0.6.0 before it is used for a release decision;
+Section 8 lists which conclusions depend on that.
+
+Host: kernel 7.3.4-100.fc43.x86_64, user coder (uid 1005), unprivileged.
+Panel: connector 35 (HDMI-A-1) / crtc 38 / plane 36, native mode 1920x1080.
+Panel state was read from /sys/class/drm/card0-HDMI-A-1/{status,enabled,dpms} before
+and after every attempt; every recorded attempt ended connected/enabled/On.
+Scratch and raw logs: /mega/tmp/sm750/t16/ (matrix.log, matrix2.log, matrix3.log,
+matrix3b.log, matrix4.log and the matching *-deltas.txt files).
+
+
+================================================================================
+1. RESULT IN ONE PARAGRAPH
+================================================================================
+
+The episode WAS REPRODUCED: 1 hit in 205 controlled attempts, and the hit had the
+same dmesg signature as the original - the same `failed to enable HDMI mode: -110`
+line, the same `drm_atomic_helper.c:2758` WARNING with identical Code bytes, the same
+call path, and the same three 10-second commit-wait timeouts. The trigger that
+produced it was: SIGINT a kmscube that is ~300 ms into its first commit, then run
+`modetest -s 35@38:1024x768-60`; the failure then appeared on the fbdev-restore
+commit that runs when that modetest closes the DRM device. Every other shape tested
+(109 attempts in phase 1 including the SIGKILL-at-2-s shape, 30 attempts at 2 s
+SIGINT/SIGTERM/SIGKILL in phase 2, 26 attempts at the same 300 ms shape with extra
+follow-up commits, 30 attempts sweeping other kill delays) produced nothing. The driver-side defect that turns any single failed modeset into
+this 7-line cascade is identified with high confidence and is independent of the
+trigger: sm750_pipe_enable's `fail:` label (src/sm750_drm.c:3105) returns without
+calling drm_crtc_vblank_on() and without consuming the commit's vblank event. The
+remaining unknown is WHICH of five fallible calls inside sm750_program_mode returned
+-110 - it is not observable on the 0.5.9 build (Section 5).
+
+
+================================================================================
+2. THE CAPTURED EPISODE, VERBATIM (docs/evidence/runtime/07-kernel-log.txt:50-110)
+================================================================================
+
+  [ 8523.870475] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI mode: -110
+  [ 8523.870514] ------------[ cut here ]------------
+  [ 8523.870516] WARNING: drivers/gpu/drm/drm_atomic_helper.c:2758 at
+                drm_atomic_helper_commit_hw_done+0x102/0x130, CPU#11: kmscube/4041209
+  [ 8523.870599] CPU: 11 UID: 1005 PID: 4041209 Comm: kmscube Tainted: P           OE
+  [ 8523.870607] RIP: 0010:drm_atomic_helper_commit_hw_done+0x102/0x130
+
+  Call trace (verbatim, trimmed to the DRM frames):
+    drm_atomic_helper_commit_hw_done+0x102/0x130
+    drm_atomic_helper_commit_tail+0x9a/0xc0
+    commit_tail+0xf1/0x150
+    drm_atomic_helper_commit+0x13c/0x180
+    drm_atomic_commit+0xb1/0xe0
+    drm_client_modeset_commit_atomic+0x1e9/0x230
+    drm_client_modeset_commit_locked+0x58/0x160
+    drm_client_modeset_commit+0x25/0x40
+    __drm_fb_helper_restore_fbdev_mode_unlocked.part.0+0x80/0x90
+    drm_fbdev_client_restore+0x20/0x30
+    drm_client_dev_restore+0xa1/0xd0
+    drm_release+0xc9/0xe0
+    __fput+0xe6/0x2b0
+    task_work_run+0x5d/0x90
+    do_exit+0x1fe/0x440
+    do_group_exit+0x2d/0xc0
+    get_signal+0x7cc/0x7d0
+    arch_do_signal_or_restart+0x34/0x100
+    exit_to_user_mode_loop+0xe2/0x5b0
+    do_syscall_64+0x1d2/0x470
+    entry_SYSCALL_64_after_hwframe+0x76/0x7e
+
+  Then three 10-second commit-wait timeouts, one per atomic object:
+  [ 8534.326665] *ERROR* flip_done timed out
+  [ 8534.326674] *ERROR* [CRTC:38:crtc-0] commit wait timed out
+  [ 8544.561985] *ERROR* flip_done timed out
+  [ 8544.561993] *ERROR* [CONNECTOR:35:HDMI-A-1] commit wait timed out
+  [ 8554.801899] *ERROR* flip_done timed out
+  [ 8554.801983] *ERROR* [PLANE:36:plane-0] commit wait timed out
+
+  And ~42 s later, a refcount underflow during the same restore path:
+  [ 8586.308230] refcount_t: underflow; use-after-free.
+  [ 8586.308232] WARNING: lib/refcount.c:28 at refcount_warn_saturate+0x59/0x90,
+                CPU#29: modetest/4155171
+  [ 8586.308332] RIP: 0010:refcount_warn_saturate+0x59/0x90
+  Call trace:
+    refcount_warn_saturate+0x59/0x90
+    __drm_atomic_helper_plane_destroy_state+0x98/0xa0
+    drm_gem_simple_kms_destroy_shadow_plane_state+0x21/0x30
+    drm_atomic_commit_default_clear+0x1be/0x350
+    __drm_atomic_commit_free+0x71/0xc0
+    drm_client_modeset_commit_atomic+0x1f9/0x230
+    drm_client_modeset_commit_locked+0x58/0x160
+    drm_client_modeset_commit+0x25/0x40
+    __drm_fb_helper_restore_fbdev_mode_unlocked.part.0+0x80/0x90
+    drm_fbdev_client_restore+0x20/0x30
+    drm_client_dev_restore+0xa1/0xd0
+    drm_release+0xc9/0xe0
+    __x64_sys_close+0x3d/0x80
+  Register evidence for the underflow: CPU#29 modetest/4155171, RSI=3
+  (REFCOUNT_SUB_UAF: a decrement applied to an object whose count is already zero),
+  ORIG_RAX=0x3 (close), RDI=3. The object that underflowed is one of the refcounted
+  members released by __drm_atomic_helper_plane_destroy_state (state->fb,
+  state->commit, state->fence); the register state alone does not say which.
+  See Section 7 for whether this is the same defect.
+
+
+================================================================================
+3. RECONSTRUCTED SEQUENCE BEFORE THE EPISODE
+================================================================================
+
+Provable from the kernel log alone (all times in the original boot):
+  t-11.07 s  [8512.796457] "SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0
+             status=04" + [8512.800098] "full-frame backbuffer staging enabled
+             (4147200 bytes)" - one complete successful modeset to 1920x1080
+             (4147200 = 1920*1080*2) that finished 11.07 s before the episode.
+  t-11.07..t  NO driver output at all. In particular no second "staging enabled" line,
+             which proves the failing program_mode never reached the success path, and
+             no "receiver not ready" line, which proves it never reached
+             sii902x_wait_receiver_ready inside sm750_sii902x_enable.
+  t          [8523.870475] the -110, followed in the SAME microsecond by the
+             drm_atomic_helper_commit_hw_done WARNING.
+  t+0.46 s   [8523.870...] the whole WARN block finishes; the failing process is
+             kmscube/4041209 and its exit path is a signal exit
+             (get_signal -> do_group_exit -> do_exit -> task_work_run -> __fput ->
+             drm_release), i.e. kmscube was terminated by a signal and the fbdev
+             restore ran from the exit path.
+  t+10.46 s  first 10 s commit-wait timeout pair (CRTC:38)
+  t+20.69 s  second pair (CONNECTOR:35)
+  t+30.93 s  third pair (PLANE:36)
+  t+62.4 s   refcount underflow, in a DIFFERENT process (modetest/4155171), again on
+             drm_release -> fbdev restore.
+
+Client operations immediately before the episode (from 04-modeset.txt, 05-kmscube.txt,
+06-igt.txt): the runtime tiers ran in order modeset -> kmscube -> IGT, and the last
+successful driver activity before the episode was a modeset-sized program at 8512.8.
+The 11 s of silence matches a kmscube render run (kmscube renders continuously and
+produces no driver log lines between its modeset and its exit). What is NOT
+recoverable: the exact command line of that kmscube invocation and whether the SIGINT
+that killed it was sent by the operator or by the tier harness - the shell history of
+the T10 session is not in the evidence set. This file does not claim either.
+
+Reproduced equivalent (Section 4) had the same shape but a 0.330 s instead of an
+11.07 s gap between the last successful program and the failing one, and a normal
+`close()` instead of a signal exit. The two differences do not change the signature:
+the failure is always on the fbdev-restore commit issued from drm_release.
+
+
+================================================================================
+4. THE REPRODUCTION
+================================================================================
+
+Trigger (the only one of 16 tested shapes that ever hit):
+
+    kmscube -c 600  with stdin held open          # renders, does not exit by itself
+    sleep 0.3
+    kill -INT <kmscube>                           # 300 ms into the first commit
+    modetest -s 35@38:1024x768-60                 # second DRM client, then closes
+
+The hit, attempt L/INT-300ms-4, 2026-11-18T13:37:31+03:00, from
+/mega/tmp/sm750/t16/matrix2-deltas.txt:160-213 (46 lines captured, hits=2 by the
+ERROR/WARNING regex, delta=53 dmesg lines, 6 of them from sm750hdmidrm):
+
+  [22251.841116] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms:
+                 HPD=1 RSEN=0 status=04; enabling for compatibility
+  [22251.845104] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging
+                 enabled (1572864 bytes per buffer)          <- 1024x768 SUCCEEDED
+  [22252.175107] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI
+                 mode: -110                                  <- +330.003 ms, restore
+  [22252.175153] ------------[ cut here ]------------
+  [22252.175155] WARNING: drivers/gpu/drm/drm_atomic_helper.c:2758 at
+                 drm_atomic_helper_commit_hw_done+0x102/0x130, CPU#28: modetest/1428749
+  [22252.175266] RIP: 0010:drm_atomic_helper_commit_hw_done+0x102/0x130
+  [22252.175270] Code: ... eb 89 be 01 00 00 00 e8 bc 21 c7 ff eb 96 be 02 00 00 00
+                 e8 b0 21 c7 ff eb 8a <0f> 0b eb 97 ...
+  [22252.175408] Call trace (same 20-frame DRM path as the original):
+                 drm_atomic_helper_commit_tail+0x9a/0xc0
+                 commit_tail+0xf1/0x150
+                 drm_atomic_helper_commit+0x13c/0x180
+                 drm_atomic_commit+0xb1/0xe0
+                 drm_client_modeset_commit_atomic+0x1e9/0x230
+                 drm_client_modeset_commit_locked+0x58/0x160
+                 drm_client_modeset_commit+0x25/0x40
+                 __drm_fb_helper_restore_fbdev_mode_unlocked.part.0+0x80/0x90
+                 drm_fbdev_client_restore+0x20/0x30
+                 drm_client_dev_restore+0xa1/0xd0
+                 drm_release+0xc9/0xe0
+                 __fput+0xe6/0x2b0
+                 __x64_sys_close+0x3d/0x80
+                 do_syscall_64+0xbe/0x470
+                 entry_SYSCALL_64_after_hwframe+0x76/0x7e
+  [22252.175448] RSP: 002b:... ORIG_RAX: 0000000000000003   <- close(2), not a signal
+  [22252.175464] ---[ end trace 0000000000000000 ]---
+
+Identity with the original:
+  - same message text and same errno;
+  - same WARNING site (drm_atomic_helper.c:2758) and same function offset
+    (drm_atomic_helper_commit_hw_done+0x102/0x130);
+  - the `Code:` bytes around the trapping instruction are identical
+    (`. . . eb 8a <0f> 0b eb 97 . . .`), which means the same kernel binary and the
+    same WARN site - not merely a similar message;
+  - same call path from drm_release down to commit_hw_done;
+  - same UID 1005 and the same fbdev-restore path.
+Difference: the original exited through a signal (get_signal -> do_group_exit) and the
+reproduction exited through an ordinary close(2). The core failure is therefore NOT
+dependent on how the client died - only on a failed program_mode inside an
+fbdev-restore commit that was issued from drm_release.
+
+Then, 57-77 s after the -110 (the 60 s observation window of that attempt had already
+closed, so these lines were captured by the next attempt's delta), the same three
+10-second commit-wait pairs appeared, and the driver recovered by itself:
+  [22308.967207] flip_done timed out / [22308.967223] [CRTC:38:crtc-0] commit wait timed out
+  [22319.206147] flip_done timed out / [22319.206182] [CONNECTOR:35:HDMI-A-1] commit wait timed out
+  [22329.445982] flip_done timed out / [22329.445996] [PLANE:36:plane-0] commit wait timed out
+  [22339.417832] + [22339.421392] normal "receiver not ready" + "staging enabled" pair
+The refcount underflow did not appear in this instance within the watched window. A
+60 s watch was used per attempt; the original's underflow arrived 62.4 s after the
+-110, which is why it is not claimed as reproduced (Section 7).
+
+The panel was never left damaged: after this attempt and after every other attempt the
+three sysfs attributes read connected/enabled/On, and the harness restores 1920x1080
+on every exit path (trap) and re-verifies afterwards.
+
+
+================================================================================
+5. THE 330.003 ms GAP - WHAT CAN AND CANNOT BE CONCLUDED
+================================================================================
+
+Measured gap: 22252.175107 - 22251.845104 = 330.003 ms. This is the interval from the
+last successful `staging enabled` line of the PREVIOUS program to the -110 line of the
+next one, i.e. it contains (a) the tail of the previous commit, (b) the client's
+teardown and close, (c) the restore commit setup, and (d) the failing program_mode up
+to the call that timed out. It is therefore an UPPER BOUND on the failing
+program_mode, not its duration.
+
+Fixed costs that any program_mode pays before its first fallible call can fail:
+
+  src/sii902x.c:748   msleep(150) in sii902x_begin_control
+                      (comment at :747: "Resolution changes require at least 128 ms
+                      with TMDS powered down")                      150.0 ms
+  src/sii902x.c:695   usleep_range(1000, 2000) in sii902x_init_control_bus
+                                                                    1.0-2.0 ms
+  ~20 software-I2C byte transfers, ~0.1-0.2 ms each                  2-4 ms
+  ---------------------------------------------------------------------------
+  fixed subtotal before the display/mode stage                      ~155 ms
+
+Remaining budget for the failing stage: 330.003 - 155 = ~175 ms.
+
+Every wait that can return -ETIMEDOUT on this path, with its quantum:
+
+  src/ddk750_display.c:26  wait_display_value (display-control bit latch)   100 ms
+  src/ddk750_display.c:85/:95 primary_wait_vertical_sync phases            50 ms each
+  src/ddk750_mode.c:298    PANEL_DISPLAY_CTRL write-verify (cnt>1000)      ~10 ms
+  src/ddk750_swi2c.c:229/:306  SCL/ack loops                                <1 ms
+  src/ddk750_hwi2c.c:69    I2C poll (unused: use_hardware_i2c is false)     10 ms
+  src/sm750_drm.c:1478     DMA1 shadow-upload completion                    5 ms
+
+Arithmetic outcome:
+  - exactly ONE 100 ms wait_display_value timeout fits the ~175 ms budget
+    (155 + 100 = 255 ms, leaving ~75 ms for (a)-(c) above - consistent with the
+    measured 2.6-2.9 s spacing of ordinary attempts and with a fast client teardown);
+  - TWO 100 ms waits do NOT fit: 155 + 200 = 355 ms > 330.003 ms, so no single
+    ddk750_set_display_control() call can have burned both of its waits;
+  - the 2000 ms receiver wait and the 1000 ms DDC-grant wait do NOT fit, and are
+    independently excluded because their log lines are absent;
+  - the 10 ms verify loop and the sub-ms I2C loops fit but leave ~165 ms unexplained,
+    so they are not sufficient on their own.
+
+Ranked inference (this is inference, not observation):
+  R1. ddk750_set_display_control(SM750_DRM_CONTROLLER, false) at
+      src/sm750_drm.c:1316, failing on the TIMING-clear wait
+      (src/ddk750_display.c:53-62). It is the first fallible call after the 150 ms
+      quiesce, it is exactly one 100 ms quantum, and its PREVIOUS wait (PLANE clear,
+      src/ddk750_display.c:40-52) deliberately ignores its result - so a single
+      failing wait there returns -110 with the arithmetic above.
+  R2. ddk750_set_logical_disp_out at src/sm750_drm.c:1346, failing on the first
+      enable-side wait (src/ddk750_display.c:40-47, TIMING set) - also one 100 ms
+      quantum, but it sits ~10 ms later in the sequence, which fits slightly worse.
+  R3. ddk750_set_mode_timing at src/sm750_drm.c:1319, failing in the
+      PANEL_DISPLAY_CTRL write-verify loop (src/ddk750_mode.c:285-305). Fits the
+      budget but leaves ~165 ms unaccounted.
+  R4. ddk750_set_logical_disp_out, PNL_SEQ branch -> sw_panel_power_sequence
+      (src/ddk750_display.c:100-131) with a 50 ms VSYNC phase timing out: fits only
+      if the preceding display-control waits returned immediately.
+  R5. sm750_sii902x_begin_mode at src/sm750_drm.c:1312 failing on the control bus
+      (src/sii902x.c:695 "control bus is stuck", or a sw-i2c -ETIMEDOUT from
+      src/ddk750_swi2c.c:229). Possible, but that path also logs its own error and
+      the log shows none.
+
+Mechanistic note supporting R1/R2 over R3: wait_display_value() only POLLS the
+register - it pokes once and then reads for up to 100 ms
+(src/ddk750_display.c:12-26), whereas ddk750_set_mode_timing() re-pokes up to 1000
+times precisely because, per the code comment at src/ddk750_mode.c:288-296,
+"PANEL_DISPLAY_CTRL register seems requiring few writes before a value can be
+successfully written in ... The hardware will wait for the next vertical sync to turn
+on/off the plane." If a single poke fails to latch (or the bit can only change at a
+VSYNC that no longer arrives), a single-poke path times out at 100 ms while the
+re-poking path recovers. That is consistent with a rare, state-dependent failure and
+with the failure appearing on a restore that follows a program by only 330 ms.
+
+What CANNOT be identified on this build, and why: the return site.
+  - sm750_program_mode (src/sm750_drm.c:1271-1351) contains NO logging statement at
+    all - no dev_dbg, no drm_dbg, no dev_info (verified by reading the whole function
+    and by `grep -rn 'dev_dbg\|drm_dbg' src/*.c`);
+  - src/ddk750_display.c, src/ddk750_mode.c, src/ddk750_swi2c.c and
+    src/ddk750_hwi2c.c contain no dev_dbg/drm_dbg either; the only debug output in
+    the driver is 11 sites in src/sii902x.c (:170, :178, :572, :750, :827, :882,
+    :947, :968, :998, :1020, :1116) and 3 sites in src/sm750_drm.c (:818, :998,
+    :1007) - none of them on the program_mode path;
+  - dynamic debug is root-only on this host, so even the existing sites could not be
+    switched on from the unprivileged account used here;
+  - the 0.5.9 module has no debugfs `regs` file, so PANEL_DISPLAY_CTRL and
+    PANEL_PLL_CTRL could not be sampled before/after the failing commit.
+Therefore the single unidentifiable call is: whichever of the five fallible calls in
+sm750_program_mode returned -110. Everything else in the cascade is established.
+
+
+================================================================================
+6. REPRODUCTION MATRIX
+================================================================================
+
+205 attempts, 1 hit. Every attempt recorded rc, the dmesg delta, the number of driver
+lines in the delta, the hit count and the panel state. Full per-attempt rows are in
+matrix.log / matrix2.log / matrix3b.log / matrix4.log and in the matching -deltas.txt
+files, which store the complete dmesg text of each attempt's window. Delta method:
+phase 1 and 2 counted raw dmesg lines (sound: the ring did not wrap, 2133 -> 2849
+lines over the whole session); phases 3-4 used an uptime window
+(`awk -v t=$T0` over `sudo -n dmesg`) after a count-based run produced delta=-6
+because printk de-duplication can make the total line count shrink. The 5 attempts of
+that invalid run are excluded and archived as matrix3-v1-invalid.log.
+
+ Candidate trigger                                   Code location implicated             Att. Hits
+ -------------------------------------------------------------------------------------------------
+ A  modetest 1024x768 then close (restore shape)     sm750_drm.c:3105 fail label            12    0
+    deltas: 4,4,4,4,4,4,4,4,4,4,4,4
+ B  same + parallel connector detect/EDID reads      sm750_drm.c:3105, sii902x read path    12    0
+    deltas: 0,0,0,0,0,0,0,0,0,0,4,0
+ C  kmscube release under detect contention          sm750_drm.c:3105                       12    0
+    deltas: 2,0,0,0,0,0,0,2,0,0,2,2   (7 runs exited rc=243 = DRM master taken)
+ D  two DRM masters racing, second gets EBUSY        sm750_drm.c:3105                       12    0
+    deltas: 4,4,4,4,4,4,4,4,4,4,4,4
+ E  SIGKILL kmscube at 2 s, then modeset             sm750_drm.c:3105                       12    0
+    deltas: 4,4,4,4,4,4,4,4,4,4,4,4
+ F  soak of A (25 consecutive)                       sm750_drm.c:3105                       25    0
+    deltas: 4 x25
+ G  kmscube 200 frames then release                  sm750_drm.c:3105, DMA1 path             12    0
+    deltas: 2,2,2,2,2,2,2,2,2,2,2,2
+ H  mode churn 1024/1280/1920 then release           sm750_drm.c:3105                       12    0
+    deltas: 10 x12
+ I  SIGINT kmscube at 2.0 s, then modeset            sm750_drm.c:1316/:1319/:1346            10    0
+    deltas: 4 x10
+ J  SIGTERM kmscube at 2.0 s, then modeset           sm750_drm.c:1316/:1319/:1346            10    0
+    deltas: 4 x10  (rc=143)
+ K  SIGKILL kmscube at 2.0 s, then modeset           sm750_drm.c:1316/:1319/:1346            10    0
+    deltas: 4,4,4,4,4,4,4,4,4,0  (rc=137)
+ L  SIGINT kmscube at 0.3 s, then modetest 1024x768  sm750_drm.c:1316/:1319/:1346            10    1  <== HIT
+    deltas: 4,0,4,53,4,4,4,4,4,4     (attempt 4 = the hit, Section 4)
+ L2 same as L, plus two follow-up commits            as L                                    26    0
+    (11 attempts in matrix3.log, window-based; 15 in matrix3b.log)
+    all: driver_lines=10, window 24-27 s, hit count 0
+ M  kill-delay sweep, SIGINT at 0.1 s                sm750_drm.c:1316/:1319/:1346             8    0
+    all: driver_lines=10
+ N  kill-delay sweep, SIGINT at 0.2 s                sm750_drm.c:1316/:1319/:1346             8    0
+    all: driver_lines=10
+ O  kill-delay sweep, SIGINT at 0.4 s                sm750_drm.c:1316/:1319/:1346             8    0
+    all: driver_lines=10
+ P  kill-delay sweep, SIGINT at 1.0 s                sm750_drm.c:1316/:1319/:1346             6    0
+    all: driver_lines=10
+ -------------------------------------------------------------------------------------------------
+ TOTAL                                                                                     205    1
+
+Per-trigger rates for the trigger that works:
+  L + L2 (SIGINT at 300 ms)                          36 attempts, 1 hit  = 2.8 %
+  every other kill delay (0.1/0.2/0.4/1.0/2.0 s)      72 attempts, 0 hits = 0 %
+  non-kill shapes (A-D, F-H)                          97 attempts, 0 hits = 0 %
+  (97 + 72 + 36 = 205; shape E is the SIGKILL-at-2-s kill shape and is counted
+   in the 72, not in the 97)
+
+Statistical honesty: 1/36 is consistent with a true rate anywhere from ~0.1 % to ~14 %
+(exact 95 % Clopper-Pearson interval), and 0/72 is consistent with any rate below
+~4 %. The matrix therefore establishes TRIGGERABILITY, not a rate: the defect is real,
+reachable by a specific and unnatural client shape, and too rare to characterise
+further without instrumentation. Two phase-3 attempts were lost when the host rebooted
+at ~14:14 (uptime reset 22914 -> 218); every attempt recorded after that reboot is
+labelled post-reboot in its log line and all of them are negative. The original
+episode's dmesg content survived only in docs/evidence/runtime/07-kernel-log.txt and
+/mega/tmp/sm750/t10/dmesg-t10-final.txt; the reproduction's content survived only in
+matrix2-deltas.txt:160-213 - neither can be re-read from live dmesg any more.
+
+
+================================================================================
+7. IS THE REFCOUNT UNDERFLOW THE SAME DEFECT?
+================================================================================
+
+Same root cause chain, separate observable, and NOT reproduced.
+
+  - Both the WARN at 8523 and the underflow at 8586 happen on the same path:
+    drm_release -> drm_client_dev_restore -> drm_fbdev_client_restore ->
+    drm_client_modeset_commit_atomic -> (a failed or dependent commit) -> cleanup.
+  - The underflow is a put on an already-zero refcount (RSI=3 = REFCOUNT_SUB_UAF) in
+    __drm_atomic_helper_plane_destroy_state, reached from
+    drm_atomic_commit_default_clear -> __drm_atomic_commit_free, i.e. while core
+    destroys the state of a commit that never completed. A commit can only be in that
+    condition because the enable it carried failed - the same -110 that produced the
+    WARN - and the fail label left the CRTC's vblank event unconsumed and vblank
+    accounting off (src/sm750_drm.c:3105-3117).
+  - It is NOT the same code location: the underflow is in core DRM cleanup, not in a
+    driver function, and the driver does not touch a plane state's refcount anywhere
+    in the file (`grep -n refcount src/sm750_drm.c` returns nothing).
+  - It did not recur in the reproduction: the 205-attempt matrix produced one -110 and
+    three timeout cascades, but no refcount line. The original's underflow arrived
+    62.4 s after the -110, in a different process, after three 10 s stalls, so it needs
+    a longer window and an additional client action (a modetest close) than the
+    reproduction provided in its 60 s watch.
+Conclusion: one defect family, two severities. The driver-side defect (A27) is the
+fail path that leaves an inline commit inconsistent; the underflow is its worst-known
+consequence and is recorded as part of the same row, flagged as observed-once and not
+reproduced. Treating it as a fully separate defect would claim a core-DRM bug that was
+not demonstrated.
+
+
+================================================================================
+8. WHAT WOULD SETTLE THE OPEN QUESTIONS
+================================================================================
+
+8.1 Identify the failing call (removes R1-R5 ambiguity). Needs a source change; do it
+    in a debug build only:
+    - In sm750_program_mode (src/sm750_drm.c:1271) add one drm_dbg_kms after each
+      fallible call, printing the stage name and ret:
+        after :1315  (sii902x_begin_mode)      "stage=begin ret=%d"
+        after :1318  (ddk750_set_display_control false) "stage=off ret=%d"
+        after :1321  (ddk750_set_mode_timing)  "stage=timing ret=%d"
+        after :1348  (ddk750_set_logical_disp_out) "stage=out ret=%d"
+        before :1349 "stage=link"
+      Four lines total; drm.debug=0x4 (or
+      `echo 'module sm750hdmidrm +p' > /sys/kernel/debug/dynamic_debug/control`) then
+      names the exact call in one hit.
+    - Equally cheap and more precise: change wait_display_value()
+      (src/ddk750_display.c:12-26) to log `reg`, the expected and the read-back value
+      on the -ETIMEDOUT branch, and primary_wait_vertical_sync()
+      (src/ddk750_display.c:68-97) to log which of its two phases timed out plus the
+      SYSTEM_CTRL value. That converts R1-R4 into a single certain answer and also
+      says whether the bit never latched (read-back wrong) or the VSYNC never came.
+
+8.2 Confirm the hardware state (no source change, 0.6.0 only). The 0.6.0 build exposes
+    /sys/kernel/debug/dri/0/regs (src/sm750_drm.c:3343-3344, table at :3282), read as
+    root. Sampling it before the failing commit and immediately after the -110 shows:
+      - PANEL_DISPLAY_CTRL: bit 8 TIMING and bit 2 PLANE - if TIMING is still set
+        after the disable, the disable-side wait (R1) is confirmed; if TIMING is clear
+        but PLANE is not, it is the enable-side wait (R2);
+      - PANEL_PLL_CTRL: PLL_CTRL_POWER - a powered-down PLL makes
+        primary_wait_vertical_sync() return 0 early, which discriminates R4 from R1/R2;
+      - PANEL_CURRENT_LINE sampled twice ~20 ms apart: a frozen counter proves the
+        raster is not scanning, which is the physical precondition for a 100 ms
+        latch timeout;
+      - PANEL_HORIZONTAL_TOTAL/PANEL_VERTICAL_TOTAL: whether the previous mode
+        (1024x768) or the requested one (1920x1080) is programmed at failure time.
+    Closing command: `sudo -n sm750-regs` (the helper) or
+    `sudo -n cat /sys/kernel/debug/dri/0/regs` on the 0.6.0 build.
+
+8.3 Confirm the trigger rate on 0.6.0. The 300 ms SIGINT plus modetest shape should be
+    re-run at least 40 times on 0.6.0 (the count in Section 6 is a 0.5.9 result). The
+    harness is reusable:
+      /mega/tmp/sm750/t16/matrix2.sh  (shape L)
+      /mega/tmp/sm750/t16/matrix4.sh  (kill-delay sweep)
+
+8.4 Kernel-side confirmation (root, not available here): enable
+    `dyndbg` for drm_atomic_helper and ftrace `drm:drm_vblank_event` to see whether the
+    vblank event was armed for the failing commit.
+
+
+================================================================================
+9. WHAT REMAINS UNPROVEN
+================================================================================
+
+ U1. WHICH call inside sm750_program_mode returned -110. Reason: the function and all
+     of ddk750_display.c / ddk750_mode.c have zero debug output, dynamic debug needs
+     root, and 0.5.9 has no register debugfs. Ranked candidates in Section 5.
+ U2. WHY that call timed out at that moment, i.e. the physical cause (single-poke
+     display-control latch vs VSYNC loss vs I2C). Same reason as U1; 8.2 would answer.
+ U3. Whether the required trigger is "kill during the first commit" specifically, or
+     "any client whose close races with its own recent successful program". The 300 ms
+     window hit 1/36 and 100/200/400/1000/2000 ms hit 0/72, which is consistent with a
+     narrow window but not proof of one: with n=37 a different 5 % probability shape
+     could have been missed.
+ U4. The refcount underflow as a repeatable consequence. Observed once, not reproduced
+     in 205 attempts; needs a longer watch (>= 70 s) in any future run.
+ U5. The exact T10 commands that preceded the original episode (shell history is not
+     in the evidence set). The reconstruction in Section 3 is from the kernel log and
+     the tier documents, not from the original command lines.
+ U6. Behaviour on 0.6.0. Untested by definition: this file is a 0.5.9 result and the
+     loaded module is the pre-fix build. Any fix to the fail path must be validated
+     with 8.1/8.2/8.3 on 0.6.0.
+
+
+================================================================================
+10. DOES THIS BLOCK A PRODUCTION CLAIM?
+================================================================================
+
+Yes, for the driver as it stands. Two reasons, in order of severity:
+  1. Any single failed modeset becomes a kernel WARNING plus 30 s of blocked commits
+     plus (once observed) a refcount underflow in core DRM cleanup. This is not a
+     cosmetic log problem: commits stall for 10 s per atomic object, which is
+     user-visible, and a refcount underflow is a use-after-free class warning. The
+     driver-side cause is small and local - the `fail:` label at
+     src/sm750_drm.c:3105 returns with the CRTC's vblank accounting still off and the
+     commit's event unconsumed - so it is cheap to fix, but it is a real defect.
+  2. The trigger is a client killed ~300 ms into its first commit followed by a normal
+     modeset-and-close; that is an ordinary thing for a session to do (a killed
+     fullscreen client, a compositor restart, a crashed demo). The rate is low
+     (1/36 in the shape that works) but the consequence is 30 s of stalled commits.
+Severity: S3 (functional degradation with a kernel WARN and a use-after-free warning,
+recoverable, not a panic). It does not block the panel from being driven - recovery is
+automatic and the panel was never left blanked - but it does block a claim that the
+driver is production-clean, and it must be fixed or explicitly accepted with the
+measured rate before release.
+It does NOT block a claim that the 1920x1080 modeset path works: that path succeeded
+in every attempt except the single hit, and in every non-kill shape.
+
+# utc: 2026-11-18T11:45Z  attempts 205 hits 1  module 0.5.9  host rebooted at ~11:14Z

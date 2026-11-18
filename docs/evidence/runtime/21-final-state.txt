@@ -1,0 +1,66 @@
+# utc: 2026-11-18T12:23:00Z
+# T11 - FINAL MACHINE STATE after rollback proof + reinstall
+# host: deneb, kernel 7.3.4-100.fc43.x86_64, uptime 4152.16 s
+# raw: /mega/tmp/sm750/t11/reinstall.log, post-reinstall probes inline below
+
+======================================================================
+REINSTALL (same allowlisted path, same artifact)
+======================================================================
+  command: sudo -n dnf install -y \
+    /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+  exit=0. dnf reported 'Installing: 1 package', then %post (dkms add) and
+  %posttrans (dkms build+install per kernel) ran:
+    >>> Signing key: /var/lib/dkms/mok.key
+    >>> Public certificate (MOK): /var/lib/dkms/mok.pub
+    >>> Building module(s).... done.
+    >>> Installing /lib/modules/7.2.15-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+    >>> Installing /lib/modules/7.3.3-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+    >>> Installing /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+    >>> Running depmod...... done.
+    Complete!
+  Note: the transaction took approximately 5 minutes because it re-signs with
+  the machine MOK and rebuilds for three kernels. Not a hang.
+
+  Because 0.6.0 happened to be the resident version already, the reinstall did
+  NOT by itself replace the in-memory module. A deliberate unload/load cycle
+  was therefore run afterwards so that live state provably comes from the
+  file that dnf just wrote:
+    sudo -n modprobe -r sm750hdmidrm   -> exit 0
+    sudo -n modprobe sm750hdmidrm      -> exit 0
+    dmesg delta 9 lines, 0 of them the cursor blend-mode warning
+
+======================================================================
+FINAL STATE - every assertion the task asks to report
+======================================================================
+  rpm -q sm750hdmifb                 : sm750hdmifb-0.6.0-1.fc43.noarch
+  /proc/modules                      : sm750hdmidrm 167936 0 - Live (OE)
+  /sys/module/sm750hdmidrm/version   : 0.6.0
+  /sys/module/sm750hdmidrm/srcversion: F4E135E09C9898462FE24C5
+  on-disk object                     : /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+                                       61620 bytes, mtime 2026-11-18 15:18:22.947559705 +0300
+  modinfo -F version (live)          : 0.6.0
+  modinfo -F version (file)          : 0.6.0
+  srcversion live == file            : YES (F4E135E09C9898462FE24C5)
+  modetest -c first line             : 'opened device ... on driver sm750hdmidrm (version 0.6.0 at 0)'
+  cursor blend-mode warning in log   : ABSENT from every 0.6.0 probe (still exactly
+                                       1 occurrence in the whole boot, at t=3.68 s,
+                                       from the original 0.5.9 probe)
+  card0-HDMI-A-1                     : connected / enabled / On
+  CRTC 38                            : 38 44 (0,0) (1920x1080)
+  /dev/dri/card0                     : present, symlinked from by-path/pci-0000:01:00.0-card
+  fbdev client                       : fb0 logged at every probe; /dev/fb* still absent
+                                       (CONFIG_FB_DEVICE unset) - unchanged
+  dkms status:
+    sm750hdmifb/0.5.9, 7.3.3-100.fc43.x86_64, x86_64: built
+    sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: built
+    sm750hdmifb/0.6.0, 7.2.15-100.fc43.x86_64, x86_64: installed
+    sm750hdmifb/0.6.0, 7.3.3-100.fc43.x86_64, x86_64: installed
+    sm750hdmifb/0.6.0, 7.3.4-100.fc43.x86_64, x86_64: installed
+
+======================================================================
+ONE-LINE SUMMARY OF THE END STATE
+======================================================================
+  0.6.0 is installed as an RPM, registered in DKMS for three kernels, present
+  on disk for the running kernel, loaded in memory with a srcversion matching
+  that file, reporting 0.6.0 through modinfo, modetest and IGT, with the
+  cursor-plane warning gone and the SM750 console output restored at 1920x1080.

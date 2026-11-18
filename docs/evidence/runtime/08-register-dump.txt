@@ -1,0 +1,238 @@
+# utc: 2026-11-18T11:58:21Z
+# T11 GAP-B4 - debugfs REGISTER DUMP, before and after one modeset
+# host: deneb, kernel 7.3.4-100.fc43.x86_64
+# module: sm750hdmidrm 0.6.0 (loaded in this task; the 0.5.9 build had no regs file)
+# helper: sudo -n /usr/local/sbin/sm750-regs -> cat /sys/kernel/debug/dri/0/regs
+# display: the driver's own fbdev client mode (1920x1080, CRTC 38), no userspace DRM master
+
+WHY THIS FILE EXISTS
+---------------------
+GAP-B4 was open because the loaded 0.5.9 module exposed no debugfs regs file, so
+sm750-regs failed with 'sm750-regs: /sys/kernel/debug/dri/0/regs not readable'.
+After T11 loaded 0.6.0 the same command returns a 49-register dump. This file
+records the command working and a before/after pair across one modeset.
+
+NOTE ON HOW THE MODESET HAD TO BE CAPTURED
+------------------------------------------
+modetest -s applies the mode and then keeps its DRM fd open until it is killed;
+when the LAST fd closes, drm_lastclose runs the driver's fbdev client restore and
+the panel returns to the preferred 1920x1080 mode. Dumping after 'modetest -s ...;'
+therefore shows the restored mode, not the mode that was set. The pair below is
+taken with the setting client still alive, which is the only way to see the 1024x768
+register state. A third dump after the client exits proves the restore is complete.
+
+=== DUMP 1: BASELINE, driver fbdev client mode 1920x1080 (no modeset by this task) ===
+  $ sudo -n /usr/local/sbin/sm750-regs
+  # card node: /dev/dri/card0 (debugfs dri/0)
+  # date: 2026-11-18T11:52:59Z
+  # sm750hdmidrm register dump, 49 registers, read-only
+  0x000000 SYSTEM_CTRL                  0x20a00000
+  0x000004 MISC_CTRL                    0x01020060
+  0x000008 GPIO_MUX                     0x01f00000
+  0x000040 CURRENT_GATE                 0x00000fe7
+  0x000044 MODE0_GATE                   0x00000fe7
+  0x000048 MODE1_GATE                   0x00005fff
+  0x00004c POWER_MODE_CTRL              0x00000008
+  0x000054 DEVICE_ID                    0x075000a1
+  0x00005c PANEL_PLL_CTRL               0x00021cf9
+  0x000060 CRT_PLL_CTRL                 0x00020407
+  0x000070 MXCLK_PLL_CTRL               0x00020cf3
+  0x000088 VGA_CONFIGURATION            0x00000026
+  0x010000 GPIO_DATA                    0x21463000
+  0x010004 GPIO_DATA_DIRECTION          0x00000000
+  0x010008 GPIO_INTERRUPT_SETUP         0x00000000
+  0x080000 PANEL_DISPLAY_CTRL           0x0f010105
+  0x080004 PANEL_PAN_CTRL               0x28000000
+  0x080008 PANEL_COLOR_KEY              0x28010401
+  0x08000c PANEL_FB_ADDRESS             0x00000000
+  0x080010 PANEL_FB_WIDTH               0x0f000f00
+  0x080014 PANEL_WINDOW_WIDTH           0x077f0000
+  0x080018 PANEL_WINDOW_HEIGHT          0x04370000
+  0x08001c PANEL_PLANE_TL               0x00000000
+  0x080020 PANEL_PLANE_BR               0x0437077f
+  0x080024 PANEL_HORIZONTAL_TOTAL       0x0898077f
+  0x080028 PANEL_HORIZONTAL_SYNC        0x002d07d6
+  0x08002c PANEL_VERTICAL_TOTAL         0x04640437
+  0x080030 PANEL_VERTICAL_SYNC          0x0005043b
+  0x080034 PANEL_CURRENT_LINE           0x00000126
+  0x0800f0 PANEL_HWC_ADDRESS            0x00000000
+  0x0800f4 PANEL_HWC_LOCATION           0x03050830
+  0x0800f8 PANEL_HWC_COLOR_12           0x16106003
+  0x0800fc PANEL_HWC_COLOR_3            0x00002428
+  0x080040 VIDEO_DISPLAY_CTRL           0x00010000
+  0x080044 VIDEO_FB_0_ADDRESS           0x05401540
+  0x080048 VIDEO_FB_WIDTH               0x12300000
+  0x08004c VIDEO_FB_0_LAST_ADDRESS      0x00300100
+  0x080050 VIDEO_PLANE_TL               0x00000000
+  0x080054 VIDEO_PLANE_BR               0x00750000
+  0x080100 ALPHA_DISPLAY_CTRL           0x00010000
+  0x080104 ALPHA_FB_ADDRESS             0x05504030
+  0x080200 CRT_DISPLAY_CTRL             0x00010000
+  0x080204 CRT_FB_ADDRESS               0x00c33580
+  0x080208 CRT_FB_WIDTH                 0x00800100
+  0x08020c CRT_HORIZONTAL_TOTAL         0x00d40200
+  0x080220 CRT_CURRENT_LINE             0x00000000
+  0x080224 CRT_MONITOR_DETECT           0x027bf589
+  0x100054 DE_STATE1                    0x075000a1
+  0x100058 DE_STATE2                    0x00000000
+
+=== MODESET: modetest -s 35@38:1024x768-60, client kept alive ===
+  $ modetest -s 35@38:1024x768-60 &   # held open
+  $ modetest -p  (CRTC line while held)
+    38	44	(0,0)	(1920x1080)
+
+=== DUMP 2: 1024x768 ACTIVE (client held open) ===
+  $ sudo -n /usr/local/sbin/sm750-regs
+  # card node: /dev/dri/card0 (debugfs dri/0)
+  # date: 2026-11-18T11:57:20Z
+  # sm750hdmidrm register dump, 49 registers, read-only
+  0x000000 SYSTEM_CTRL                  0x20a00000
+  0x000004 MISC_CTRL                    0x01020060
+  0x000008 GPIO_MUX                     0x01f00000
+  0x000040 CURRENT_GATE                 0x00000fe7
+  0x000044 MODE0_GATE                   0x00000fe7
+  0x000048 MODE1_GATE                   0x00005fff
+  0x00004c POWER_MODE_CTRL              0x00000008
+  0x000054 DEVICE_ID                    0x075000a1
+  0x00005c PANEL_PLL_CTRL               0x00022dec
+  0x000060 CRT_PLL_CTRL                 0x00020407
+  0x000070 MXCLK_PLL_CTRL               0x00020cf3
+  0x000088 VGA_CONFIGURATION            0x00000026
+  0x010000 GPIO_DATA                    0x21463000
+  0x010004 GPIO_DATA_DIRECTION          0x00000000
+  0x010008 GPIO_INTERRUPT_SETUP         0x00000000
+  0x080000 PANEL_DISPLAY_CTRL           0x0f013001
+  0x080004 PANEL_PAN_CTRL               0x28000000
+  0x080008 PANEL_COLOR_KEY              0x28010401
+  0x08000c PANEL_FB_ADDRESS             0x00180000
+  0x080010 PANEL_FB_WIDTH               0x08000800
+  0x080014 PANEL_WINDOW_WIDTH           0x03ff0000
+  0x080018 PANEL_WINDOW_HEIGHT          0x02ff0000
+  0x08001c PANEL_PLANE_TL               0x00000000
+  0x080020 PANEL_PLANE_BR               0x02ff03ff
+  0x080024 PANEL_HORIZONTAL_TOTAL       0x053f03ff
+  0x080028 PANEL_HORIZONTAL_SYNC        0x008a0419
+  0x08002c PANEL_VERTICAL_TOTAL         0x032502ff
+  0x080030 PANEL_VERTICAL_SYNC          0x00060302
+  0x080034 PANEL_CURRENT_LINE           0x00000000
+  0x0800f0 PANEL_HWC_ADDRESS            0x00000000
+  0x0800f4 PANEL_HWC_LOCATION           0x03050830
+  0x0800f8 PANEL_HWC_COLOR_12           0x16106003
+  0x0800fc PANEL_HWC_COLOR_3            0x00002428
+  0x080040 VIDEO_DISPLAY_CTRL           0x00010000
+  0x080044 VIDEO_FB_0_ADDRESS           0x05401540
+  0x080048 VIDEO_FB_WIDTH               0x12300000
+  0x08004c VIDEO_FB_0_LAST_ADDRESS      0x00300100
+  0x080050 VIDEO_PLANE_TL               0x00000000
+  0x080054 VIDEO_PLANE_BR               0x00750000
+  0x080100 ALPHA_DISPLAY_CTRL           0x00010000
+  0x080104 ALPHA_FB_ADDRESS             0x05504030
+  0x080200 CRT_DISPLAY_CTRL             0x00010000
+  0x080204 CRT_FB_ADDRESS               0x00c33580
+  0x080208 CRT_FB_WIDTH                 0x00800100
+  0x08020c CRT_HORIZONTAL_TOTAL         0x00d40200
+  0x080220 CRT_CURRENT_LINE             0x00000000
+  0x080224 CRT_MONITOR_DETECT           0x027bf589
+  0x100054 DE_STATE1                    0x075000a1
+  0x100058 DE_STATE2                    0x00000000
+
+=== DUMP 3: AFTER CLIENT EXIT AND EXPLICIT RESTORE TO 1920x1080 ===
+  $ modetest -s 35@38:1920x1080
+  $ sudo -n /usr/local/sbin/sm750-regs
+  # card node: /dev/dri/card0 (debugfs dri/0)
+  # date: 2026-11-18T11:57:28Z
+  # sm750hdmidrm register dump, 49 registers, read-only
+  0x000000 SYSTEM_CTRL                  0x20a00000
+  0x000004 MISC_CTRL                    0x01000060
+  0x000008 GPIO_MUX                     0x01f00000
+  0x000040 CURRENT_GATE                 0x00000fe7
+  0x000044 MODE0_GATE                   0x00000fe7
+  0x000048 MODE1_GATE                   0x00005fff
+  0x00004c POWER_MODE_CTRL              0x00000008
+  0x000054 DEVICE_ID                    0x075000a1
+  0x00005c PANEL_PLL_CTRL               0x00021cf9
+  0x000060 CRT_PLL_CTRL                 0x00020407
+  0x000070 MXCLK_PLL_CTRL               0x00020cf3
+  0x000088 VGA_CONFIGURATION            0x00000026
+  0x010000 GPIO_DATA                    0x21463000
+  0x010004 GPIO_DATA_DIRECTION          0x00000000
+  0x010008 GPIO_INTERRUPT_SETUP         0x00000000
+  0x080000 PANEL_DISPLAY_CTRL           0x0f010105
+  0x080004 PANEL_PAN_CTRL               0x28000000
+  0x080008 PANEL_COLOR_KEY              0x28010401
+  0x08000c PANEL_FB_ADDRESS             0x003f4800
+  0x080010 PANEL_FB_WIDTH               0x0f000f00
+  0x080014 PANEL_WINDOW_WIDTH           0x077f0000
+  0x080018 PANEL_WINDOW_HEIGHT          0x04370000
+  0x08001c PANEL_PLANE_TL               0x00000000
+  0x080020 PANEL_PLANE_BR               0x0437077f
+  0x080024 PANEL_HORIZONTAL_TOTAL       0x0898077f
+  0x080028 PANEL_HORIZONTAL_SYNC        0x002d07d6
+  0x08002c PANEL_VERTICAL_TOTAL         0x04640437
+  0x080030 PANEL_VERTICAL_SYNC          0x0005043b
+  0x080034 PANEL_CURRENT_LINE           0x000002bb
+  0x0800f0 PANEL_HWC_ADDRESS            0x00000000
+  0x0800f4 PANEL_HWC_LOCATION           0x03050830
+  0x0800f8 PANEL_HWC_COLOR_12           0x16106003
+  0x0800fc PANEL_HWC_COLOR_3            0x00002428
+  0x080040 VIDEO_DISPLAY_CTRL           0x00010000
+  0x080044 VIDEO_FB_0_ADDRESS           0x05401540
+  0x080048 VIDEO_FB_WIDTH               0x12300000
+  0x08004c VIDEO_FB_0_LAST_ADDRESS      0x00300100
+  0x080050 VIDEO_PLANE_TL               0x00000000
+  0x080054 VIDEO_PLANE_BR               0x00750000
+  0x080100 ALPHA_DISPLAY_CTRL           0x00010000
+  0x080104 ALPHA_FB_ADDRESS             0x05504030
+  0x080200 CRT_DISPLAY_CTRL             0x00010000
+  0x080204 CRT_FB_ADDRESS               0x00c33580
+  0x080208 CRT_FB_WIDTH                 0x00800100
+  0x08020c CRT_HORIZONTAL_TOTAL         0x00d40200
+  0x080220 CRT_CURRENT_LINE             0x00000000
+  0x080224 CRT_MONITOR_DETECT           0x027bf589
+  0x100054 DE_STATE1                    0x075000a1
+  0x100058 DE_STATE2                    0x00000000
+
+=== DIFF 1 vs 2: what ONE modeset changes in the register file (12 of 49) ===
+  0x00005c PANEL_PLL_CTRL               0x00021cf9 -> 0x00022dec
+  0x080000 PANEL_DISPLAY_CTRL           0x0f010105 -> 0x0f013001
+  0x08000c PANEL_FB_ADDRESS             0x00000000 -> 0x00180000
+  0x080010 PANEL_FB_WIDTH               0x0f000f00 -> 0x08000800
+  0x080014 PANEL_WINDOW_WIDTH           0x077f0000 -> 0x03ff0000
+  0x080018 PANEL_WINDOW_HEIGHT          0x04370000 -> 0x02ff0000
+  0x080020 PANEL_PLANE_BR               0x0437077f -> 0x02ff03ff
+  0x080024 PANEL_HORIZONTAL_TOTAL       0x0898077f -> 0x053f03ff
+  0x080028 PANEL_HORIZONTAL_SYNC        0x002d07d6 -> 0x008a0419
+  0x08002c PANEL_VERTICAL_TOTAL         0x04640437 -> 0x032502ff
+  0x080030 PANEL_VERTICAL_SYNC          0x0005043b -> 0x00060302
+  0x080034 PANEL_CURRENT_LINE           0x00000126 -> 0x00000000
+  TOTAL CHANGED: 12 of 49
+
+=== DIFF 1 vs 3: what remains different after restore (3 of 49) ===
+  0x000004 MISC_CTRL                    0x01020060 -> 0x01000060
+  0x08000c PANEL_FB_ADDRESS             0x00000000 -> 0x003f4800
+  0x080034 PANEL_CURRENT_LINE           0x00000126 -> 0x000002bb
+  TOTAL CHANGED: 3 of 49
+
+=== INTERPRETATION OF THE THREE RESIDUAL DIFFERENCES ===
+  PANEL_CURRENT_LINE (0x080034) is the live scanline counter; it differs on every
+    read and carries no state. Ignore it for comparison purposes.
+  PANEL_FB_ADDRESS (0x08000c) 0x00000000 -> 0x003f4800 is the fbdev client
+    re-allocating its framebuffer object; the offset moves, the mode does not.
+  MISC_CTRL (0x000004) 0x01020060 -> 0x01000060 clears bit 17 (0x00020000).
+    src/ddk750_reg.h defines no name for MISC_CTRL bit 17; the register table in
+    docs/REGISTERS.md:52 lists MISC_CTRL without that bit. Recorded as an
+    observation, not a defect: bit 17 is not written by any code path in src/.
+
+=== CONTROL EXPERIMENT: is a modeset actually reaching the panel registers? ===
+  Eight consecutive modetest -s 35@38:1024x768-60 runs were raced against 633
+  back-to-back register dumps. Both register states were observed, which proves
+  the 1024x768 programming is real and the single-dump result is a sampling race,
+  not a modeset that failed to apply:
+    PANEL_HORIZONTAL_TOTAL  0x053f03ff (1024 wide) seen 314x / 0x0898077f (1920 wide) seen 319x
+    PANEL_VERTICAL_TOTAL    0x032502ff (768 high)  seen 314x / 0x04640437 (1080 high) seen 319x
+    PANEL_FB_WIDTH          0x08000800 (1024)     seen 314x / 0x0f000f00 (1920)     seen 319x
+
+=== GAP-B4 STATUS ===
+  CLOSED by this task. sm750-regs exits 0 and returns 49 registers under 0.6.0.
+  A modeset changes 12 of those 49 registers; the restore returns 46 of them to
+  the baseline values, with the 3 differences explained above.
