@@ -451,3 +451,19 @@ additionally consolidated, with their exact commands and hashes, in
 - Outcome: T17 is defined but not dispatched; it waits for T12 so the structure map
   and the capture agree. Requested by the repo owner (m00644): reverse engineering of
   the VBIOS into C with build verification accurate to the bit and byte.
+
+### 2026-11-18T10:33Z | host owner + orchestrator | 16-bit toolchain completed and probed
+
+- Action: the host owner installed nasm, yasm and radare2 (and reported clang/clang++/
+  llvm); the orchestrator probed every candidate emitter and decoder and updated T17
+  with the verified invocations.
+- Files: `docs/plan/20261117-sm750-driver-prod/plan.yaml`, `docs/LOGBOOK.md`.
+  Scratch probes: `/mega/tmp/sm750/probe-nasm`, `/mega/tmp/sm750/pylib`.
+- Evidence: nasm 2.16.03 and yasm 1.3.0 with `-f bin` both produced the exact 13 bytes
+  `ea 09 00 00 f0 b8 c0 03 c3 c8 0a 00 00`; ndisasm, objdump `-m i8086`, r2 raw mode,
+  llvm-mc `--show-encoding` all decode/encode 16-bit code correctly; capstone 5.0.9 and
+  unicorn 2.1.4 installed rootlessly into `/mega/tmp/sm750/pylib` and verified
+  (`PYTHONPATH=/mega/tmp/sm750/pylib`); qemu-system-i386 exists but emulates no SM750.
+- Outcome: two gotchas recorded - nasm has no `ljmp` (write `jmp 0xf000:label`), and
+  `r2 -B 0xc0000` mis-seeks while raw offsets work; `gcc` on PATH is CUDA's 14.4.1, so
+  scripts must call `/usr/bin/gcc` (15.3.1). No further packages are required for T17.
