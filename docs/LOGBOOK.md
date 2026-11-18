@@ -1459,3 +1459,33 @@ we push to `origin`, and only ever pull from `github.com/KodeMunkie/sm750hdmifb`
   credential prompt blocks a push. Nothing was pushed in this entry.
 - Documented as `docs/ENVIRONMENT.md` section 1.1. No `src/`, `tests/`,
   `packaging/` or `Makefile` change.
+
+### 2026-11-18T20:05Z | orchestrator | T8 round 2 accepted: 6 PASS / 0 FAIL / 1 GAP; plan closed
+
+- `docs/ACCEPTANCE-REPORT.md` rewritten in place (536 lines, ASCII clean) and
+  committed. Verdict is now `ACCEPT WITH ONE GAP - 6 PASS, 0 FAIL, 1 GAP
+  (AC-3)`, superseding round 1's `ACCEPT WITH GAPS - 4 PASS, 0 FAIL, 3 GAP`.
+  Round 1 text is kept as history with a `Round 2:` paragraph beside each
+  changed row; AC-1, AC-4 and AC-7 moved GAP -> PASS, AC-3 stays GAP.
+- Review done inline by the orchestrator, not by a subagent, per the owner's
+  instruction of 2026-11-18T19:45Z (continue the work yourself, without
+  subagents).
+- Re-runs behind the verdict: `make CC=/usr/bin/gcc check` exit 0 with the
+  17-command recipe and `Ran 4 tests ... OK`; ten consecutive
+  `./tests/check-static.sh` runs exit 0 in the environment that used to flip
+  them; `./build-package.sh` exit 0 then `./tests/audit-release.sh` exit 0
+  (`Release audit passed`, tarball 115 entries, zero dev-only paths, 217
+  tracked); `sudo -n dkms status` exactly three `sm750hdmifb/0.6.0` installed
+  lines; `/sys/module/sm750hdmidrm/version` 0.6.0 with srcversion
+  `07E8F503FC7D839EEC5EE64` matching the installed object.
+- The only failure seen during the round was the stale `dist/` source archive,
+  a distribution artefact and not a repository defect; rebuilding it cleared
+  the gate. Recorded rather than papered over.
+- Still open and stated in the report: AC-3 tier 6 pixel proof (waits on the
+  owner's monitor check), GAP-B8 (which of the five fallible calls in
+  `sm750_program_mode` returns `-110`), and the optional host-owner cleanup of
+  `/usr/src/sm750hdmifb-0.5.9` and `/lib/modules/6.18.13-200.fc43.x86_64`.
+- `docs/plan/20261117-sm750-driver-prod/plan.yaml`: T23, T24 and T8 set to
+  `completed`, `status: in_progress` -> `completed`, and decisions 46-48
+  appended (T23/T24 acceptance, T8 round 2 acceptance, publishing topology).
+  Plan is 24 tasks / 48 decisions with no task left open.
