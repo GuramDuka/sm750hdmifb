@@ -406,3 +406,15 @@ additionally consolidated, with their exact commands and hashes, in
   2026-11-18T09:36Z (169860 bytes, 240 sm750 lines) instead of the earlier
   154236/150, and the T13 cursor capture was added to the deliverables index
   before the amend so the section 2.7 comm check stayed green.
+
+### 2026-11-18T10:12Z | host owner | VBIOS helper v2 installed
+
+- Action: reinstalled `/usr/local/sbin/sm750-vbios-dump` from the staged v2 body
+  (`sudo install -m 0755 -o root -g root /mega/tmp/sm750/sm750-vbios-dump
+  /usr/local/sbin/sm750-vbios-dump`).
+- Files: `/usr/local/sbin/sm750-vbios-dump` (host path, not in the tree).
+- Evidence: file is `-rwxr-xr-x root:root` 1092 bytes, sha256
+  `9e6c5db7853e3a58160d83c63aaee01144b20061a98a57c241188b3b6dd62a8f`, identical to
+  the staged copy; line 28 reads `dd if="$DEV/rom" of="$OUT" bs=4096`.
+- Outcome: the page-cap defect is no longer installed. T12 was dispatched to take
+  the full 64 KiB capture and close GAP-B1.
