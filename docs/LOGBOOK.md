@@ -637,3 +637,34 @@ additionally consolidated, with their exact commands and hashes, in
 - Evidence: `docs/evidence/runtime/10-addfb-size-max.txt` (476 lines);
   subagent report for T15.
 - Outcome: 14/19 completed; T11, T16, T17, T19 running; T18, T8 pending.
+
+### 2026-11-18T11:39Z | orchestrator | correct session ownership: Plasma is on the GTX 1070, not the SM750
+
+- User correction (m00899): Plasma holds DRM on the GTX 1070, not on the SM750.
+  Verified and extended rootlessly.
+- Topology: card0 = 0000:01:00.0 SM750 (driver sm750hdmidrm, boot_vga=0);
+  card1 = 0000:02:00.0 GP104 GTX 1070 (driver nvidia, card1-DVI-D-1 connected
+  and enabled); card2/card3 = 83:00.0/84:00.0 Tesla P100. kwin_wayland
+  (pid 2252, uid 1000) and plasmashell (pid 2392) are running; the ASPEED at
+  09:00.0 has no DRM card because the kernel command line carries
+  modprobe.blacklist=...,ast and rd.driver.blacklist=...,ast.
+- Why card0 still shows an enabled CRTC at 1920x1080: the driver's own in-kernel
+  fbdev client. drm_client_setup(&sdev->drm, drm_format_info(DRM_FORMAT_XRGB8888))
+  at src/sm750_drm.c:3784; dmesg shows 'full-frame backbuffer staging enabled
+  (4147200 bytes per buffer)' at [6.265979] (= 1920x1080x2) and
+  'fb0: sm750hdmidrmdrm frame buffer device' at [6.341676], both before any
+  userspace client attached. No /dev/fb* node exists despite the registration
+  because CONFIG_FB_DEVICE is unset (recorded as A24).
+- Corrections this retracts: the phrase 'Plasma session on connector 35' in
+  T10's and T15's reports, and the T15 blocker line claiming IGT cannot run
+  because Plasma holds master. The IGT VT subset is blocked only by /dev/tty0
+  being crw------- root tty.
+- Additional proof that card0 had no master: T10's 'modetest -s 35@38:1024x768-60'
+  actually programmed the CRTC, which requires drmSetMaster to succeed, so no
+  other process held master on card0 at that moment.
+- Files: docs/plan/20261117-sm750-driver-prod/plan.yaml (35 decisions),
+  docs/LOGBOOK.md.
+- Evidence: this session's dmesg/journalctl captures under /mega/tmp/sm750/;
+  /sys/class/drm/card*-*/{status,enabled}, /sys/class/drm/card*/device/boot_vga,
+  pgrep output for kwin_wayland.
+- Outcome: T11 was sent a correction; no plan scope change.
