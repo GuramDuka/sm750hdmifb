@@ -69,6 +69,35 @@ Capture: `docs/evidence/baseline/00-host-identity.txt` (uname, `/etc/os-release`
 DMI sysfs, `nproc`, `free`), `01-lspci.txt`, `02-edid.txt`,
 `03-connector.txt`, `15-edid-decode.txt`.
 
+### 1.1 Repository copies and push policy
+
+| Remote | URL | Fetch | Push |
+| --- | --- | --- | --- |
+| `origin` | `https://polaris.root.sx/code/duka/sm750hdmifb.git` | yes | yes (first push URL) |
+| `origin` second push URL | `https://github.com/GuramDuka/sm750hdmifb.git` | - | yes |
+| `github` | `https://github.com/GuramDuka/sm750hdmifb.git` | yes | yes |
+| `upstream` | `https://github.com/KodeMunkie/sm750hdmifb.git` | yes | **no** |
+
+`origin` carries two push URLs, so one `git push` publishes to the Gitea
+instance and to `github.com/GuramDuka` without a second command. The two URLs
+are pushed in sequence and not atomically: if the second fails the first is
+already updated. `upstream` is pull-only by configuration, not by convention:
+`git config remote.upstream.pushurl` is `DISABLED`, so any push attempt stops
+before reaching the network with
+`fatal: 'DISABLED' does not appear to be a git repository`.
+
+```sh
+git remote -v                        # shows the three push URLs
+git config --get-all remote.origin.pushurl
+git config --get remote.upstream.pushurl
+git fetch upstream                   # take upstream's changes, never send
+```
+
+State when this policy was set (2026-11-18): all three remotes carried
+`27db03b`; local `main` was `332b997`, 9 commits ahead and 0 behind, and
+`git push --dry-run` against both push URLs reported
+`27db03b..332b997  main -> main` with no credential prompt.
+
 ## 2. Kernel header trees
 
 `/lib/modules/<kver>/build` resolves as follows (refreshed 2026-11-18; the

@@ -1,3 +1,12 @@
+# SUPERSEDED (T23, 2026-11-18): this transcript records a 73-file payload
+# assertion from the tree as it stood when the log was written. The same
+# assertion prints 115 files in the current tree:
+#   git ls-files -- . ":(exclude)docs/plan" ":(exclude)docs/evidence" ":(exclude)docs/images" | wc -l
+# The file name says 0.6.0, but the run predates the %posttrans
+# stale-registration purge (T22) and the T13 cursor fix, so no "removing stale
+# DKMS registration" line appears here. That behaviour and its result are
+# recorded in docs/evidence/runtime/22-dkms-stale-purge.txt.
+# Nothing below this note is edited; the file is kept as the historical record.
 OK: source payload matches git ls-files (73 files)
 OK: rpmbuild -ba exit 0: sm750hdmifb-0.6.0-1.fc43.src.rpm, sm750hdmifb-0.6.0-1.fc43.noarch.rpm
 OK: dependencies: BuildRequires 4, runtime dkms, post dkms+kmod, preun dkms

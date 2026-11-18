@@ -32,28 +32,41 @@ regression suite. No command above installs or loads the resulting module.
 `./build-package.sh` creates the DKMS package and source archive. Run
 `tests/audit-release.sh` afterward to produce the final audit report.
 
-### Offline build validation (2026-10-28)
+### Offline build validation
 
-**Kernels >= 7.1 are untested.** The results below cover offline compilation
-and regression checks, not boot or runtime validation on those kernels.
+Two matrices exist and mean different things.
 
-The offline matrix includes these header trees and all three scanout defaults:
+**Distribution headers, 2026-11-17/18 (current).** The release host is Fedora 43
+with exactly three kernels that have matching `kernel-devel`:
 
-| Kernel headers | Purpose |
-|---|---|
-| Ubuntu 6.17.0-42 | Minimum supported series |
-| Mainline 6.18.0-061800 | Current upstream LTS baseline |
-| Ubuntu 7.0.0-38 and 7.0.0-42 | Existing distro kernel interfaces |
-| Mainline 7.1.0-070100 | Last atomic-state transaction interface |
-| Mainline 7.2.0-070200 | Renamed `drm_atomic_commit` transaction interface |
-| Mainline 7.3.0-070300rc3 | New CRTC/connector state-creation callbacks |
-| Daily 7.3.0-070300daily20261028 | 7.4 merge-window CRTC/plane reset removal |
+| Kernel headers | Built | Installed by DKMS | Booted with the module |
+|---|---|---|---|
+| 6.17.1-300 (koji, floor) | yes | no | no |
+| 7.2.15-100.fc43 | yes | yes | no |
+| 7.3.3-100.fc43 | yes | yes | no |
+| 7.3.4-100.fc43 | yes | yes | **yes** |
 
-The daily snapshot still reports version 7.3 because 7.4-rc1 has not been
-tagged. It exercises the merged 7.4 DRM changes, but is not a final 7.4 release.
-Repeat the matrix when 7.4-rc1 and final 7.4 headers become available. These
-checks do not establish display, DMA, suspend or hotplug behavior on hardware;
-that still needs the hardware verification below.
+The floor is enforced by `BUILD_EXCLUSIVE_KERNEL` in `dkms.conf`; 6.17.1-300 is
+the oldest tree the source compiles against. The per-kernel logs are in
+`docs/evidence/builds/`. `/lib/modules/6.18.13-200.fc43.x86_64` also exists on
+that host but is a leftover NVIDIA directory owned by no package, with no
+`build` link; it is not a kernel and DKMS skips it with
+`matching kernel headers are absent`.
+
+**Generic upstream headers, 2026-10-28 (historical).** Before packaging existed
+the matrix was run against distribution-installed and mainline header trees
+(Ubuntu 6.17.0-42 and 7.0.0-38/42, mainline 6.18.0, 7.1.0, 7.2.0,
+7.3.0-070300rc3 and the 7.3.0-070300daily20261028 snapshot that carried the
+merged 7.4 DRM changes). Those results are offline compilation and regression
+checks only and are kept as history; they are not evidence about the current
+release host.
+
+**What is runtime-validated.** Only 7.3.4-100: modeset, the IGT `kms_*` subset,
+the vblank timer test, the hardware cursor plane and the in-kernel console. The
+other two Fedora kernels were built and installed but never booted. No kernel
+above 7.3.4-100 has been built or booted; repeat this matrix when 7.4-rc1 and
+final 7.4 headers become available. None of this establishes suspend, resume or
+hotplug behaviour - that still needs the hardware verification below.
 
 ## Hardware verification
 

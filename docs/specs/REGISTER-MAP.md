@@ -9,8 +9,12 @@ the datasheet does not describe it.
 ## Method
 
 - Register set: every `#define NAME 0xADDR` in `src/ddk750_reg.h` whose name
-  appears in a `src/*.c` file outside a comment. Bit-field and mask macros are
-  derived constants and are listed separately; they are not registers.
+  appears in `src/*.c`. A register read only through the
+  `sm750_reg_dump_registers[]` table (`src/sm750_drm.c:3282-3331`) counts as
+  referenced, because that table is C code in `src/sm750_drm.c`; 16 of the rows
+  below are cited to it alone. Bit-field and mask macros are derived constants
+  and are listed separately; they are not registers. `INT_MASK` is a register
+  (0x000028) despite the name.
 - Datasheet page: DS-1 (SM750 Datasheet revision 1.4) register description
   header, located by the `MMIO_base + 0xNNNNNN` line in the page body. Printed
   page equals PDF page for this file.
@@ -25,12 +29,51 @@ grep -n 'define PANEL_DISPLAY_CTRL ' src/ddk750_reg.h
 The `awk` prints the printed page number of the page containing the register
 description header (`p` starts at 1 and increments on each form feed).
 
+- Coverage count. This parses the header with a pattern that tolerates leading
+  whitespace, because `src/ddk750_reg.h:1142,1144,1146,1149` define
+  `CRT_AUTO_CENTERING_TL`, `CRT_AUTO_CENTERING_TL_LEFT_MASK`,
+  `CRT_AUTO_CENTERING_BR` and `CRT_AUTO_CENTERING_BR_RIGHT_MASK` inside an
+  indented block; it also counts the rows of this file:
+
+```sh
+python3 - <<'EOF'
+import glob, re
+hdr = open("src/ddk750_reg.h").read()
+src = "".join(open(f).read() for f in sorted(glob.glob("src/*.c")))
+mp = open("docs/specs/REGISTER-MAP.md").read()
+defs = re.findall(r"^[ \t]*#define[ \t]+([A-Za-z0-9_]+)[ \t]+0x[0-9A-Fa-f]+", hdr, re.M)
+ref = [d for d in defs if re.search(r"\b" + d + r"\b", src)]
+# INT_MASK is a register (0x000028) whose name ends in _MASK; every other
+# _MASK macro is a bit-field constant.
+regs = [d for d in ref if d == "INT_MASK" or not d.endswith("_MASK")]
+row = r"^\| `([A-Z0-9_]+)` \| `0x([0-9A-F]+)` \| src/ddk750_reg.h:(\d+) \| (.*)$"
+rows = re.findall(row, mp, re.M)
+cited = set(r[0] for r in rows if re.match(r"p\d+ \| \d", r[3]))
+rows_reg = [r for r in rows if r[0] in regs]
+print("hex defines           ", len(defs))
+print("referenced in src/*.c ", len(ref))
+print("registers             ", len(regs))
+print("bit-field/mask macros ", len(ref) - len(regs))
+print("registers documented  ", len(set(r[0] for r in rows_reg)))
+print("  with a DS-1 citation", len(cited))
+print("  without             ", len(rows_reg) - len(cited))
+print("  missing             ", sorted(set(regs) - set(r[0] for r in rows_reg)))
+EOF
+```
+
 - Substitute SUB-REG is mainline Linux `drivers/staging/sm750fb/ddk750_reg.h`.
   A parsed comparison of the two headers found 331 common `#define` values, zero
   value differences, and zero macros present only in `src/ddk750_reg.h`. The
   driver header carries no private register encoding.
-- Result: 54 MMIO registers are referenced by `src/*.c`; 51 have a DS-1 page
-  citation and 3 do not.
+- Result, as printed by the coverage count above: 330 address-bearing
+  `#define`s in `src/ddk750_reg.h`, 90 referenced in `src/*.c`, of which 70 are
+  registers and 20 are bit-field or mask macros. All 70 registers are documented
+  here: 64 with a DS-1 page citation and 6 without.
+- Of those 70, the 16 that earlier revisions of this map omitted are the
+  registers read only through the `sm750_reg_dump_registers[]` table
+  (`src/sm750_drm.c:3282-3331`). They now have rows below: 13 carry a DS-1 page,
+  and 3 do not (`GPIO_INTERRUPT_SETUP`, `DE_STATE1`, `DE_STATE2`).
+  `docs/REGISTERS.md:49-99` lists the same offsets in dump order.
 
 ## Registers with a datasheet citation
 
@@ -46,12 +89,15 @@ description header (`p` starts at 1 and increments on each form feed).
 | `MODE1_GATE` | `0x000048` | src/ddk750_reg.h:356 | p92 | 3.2.2 | src/ddk750_power.c:79 |
 | `POWER_MODE_CTRL` | `0x00004C` | src/ddk750_reg.h:379 | p93 | 3.2.2 | src/ddk750_power.c:26, src/ddk750_power.c:37, src/ddk750_power.c:73 |
 | `PCI_MASTER_BASE` | `0x000050` | src/ddk750_reg.h:390 | p94 | 3.2.3 | src/sm750_drm.c:1434 |
+| `DEVICE_ID` | `0x000054` | src/ddk750_reg.h:393 | p95 | 3.2.3 | src/sm750_drm.c:3289 |
 | `PANEL_PLL_CTRL` | `0x00005C` | src/ddk750_reg.h:400 | p96 | 3.2.3 | src/ddk750_display.c:72, src/ddk750_mode.c:218 |
 | `CRT_PLL_CTRL` | `0x000060` | src/ddk750_reg.h:418 | p97 | 3.2.3 | src/ddk750_mode.c:161 |
 | `MXCLK_PLL_CTRL` | `0x000070` | src/ddk750_reg.h:428 | p100 | 3.2.3 | src/ddk750_chip.c:42, src/ddk750_chip.c:81 |
 | `VGA_CONFIGURATION` | `0x000088` | src/ddk750_reg.h:430 | p37 | 2.2.1 | src/ddk750_chip.c:228, src/ddk750_chip.c:230 |
 | `GPIO_DATA` | `0x010000` | src/ddk750_reg.h:437 | p197 | 7.3.1 | src/ddk750_swi2c.c:71, src/ddk750_swi2c.c:76, src/ddk750_swi2c.c:434, src/ddk750_swi2c.c:442 |
 | `PANEL_DISPLAY_CTRL` | `0x080000` | src/ddk750_reg.h:537 | p148 | 6.2.1 | src/ddk750_display.c:35, src/ddk750_display.c:73, src/ddk750_display.c:103, src/ddk750_display.c:106 (+9 more) |
+| `PANEL_PAN_CTRL` | `0x080004` | src/ddk750_reg.h:573 | p150 | 6.2.1 | src/sm750_drm.c:3298 |
+| `PANEL_COLOR_KEY` | `0x080008` | src/ddk750_reg.h:579 | p150 | 6.2.1 | src/sm750_drm.c:3299 |
 | `PANEL_FB_ADDRESS` | `0x08000C` | src/ddk750_reg.h:583 | p151 | 6.2.1 | src/sm750_drm.c:71 |
 | `PANEL_FB_WIDTH` | `0x080010` | src/ddk750_reg.h:588 | p151 | 6.2.1 | src/sm750_drm.c:74 |
 | `PANEL_WINDOW_WIDTH` | `0x080014` | src/ddk750_reg.h:593 | p152 | 6.2.1 | src/sm750_drm.c:1319 |
@@ -64,17 +110,27 @@ description header (`p` starts at 1 and increments on each form feed).
 | `PANEL_VERTICAL_SYNC` | `0x080030` | src/ddk750_reg.h:628 | p155 | 6.2.1 | src/ddk750_mode.c:241 |
 | `PANEL_CURRENT_LINE` | `0x080034` | src/ddk750_reg.h:633 | p156 | 6.2.1 | src/sm750_drm.c:82 |
 | `VIDEO_DISPLAY_CTRL` | `0x080040` | src/ddk750_reg.h:638 | p157 | 6.2.2 | src/ddk750_chip.c:267, src/ddk750_chip.c:269 |
+| `VIDEO_FB_0_ADDRESS` | `0x080044` | src/ddk750_reg.h:661 | p159 | 6.2.2 | src/sm750_drm.c:3316 |
+| `VIDEO_FB_WIDTH` | `0x080048` | src/ddk750_reg.h:666 | p160 | 6.2.2 | src/sm750_drm.c:3317 |
+| `VIDEO_FB_0_LAST_ADDRESS` | `0x08004C` | src/ddk750_reg.h:670 | p160 | 6.2.2 | src/sm750_drm.c:3318 |
+| `VIDEO_PLANE_TL` | `0x080050` | src/ddk750_reg.h:674 | p161 | 6.2.2 | src/sm750_drm.c:3319 |
+| `VIDEO_PLANE_BR` | `0x080054` | src/ddk750_reg.h:678 | p161 | 6.2.2 | src/sm750_drm.c:3320 |
 | `VIDEO_ALPHA_DISPLAY_CTRL` | `0x080080` | src/ddk750_reg.h:709 | p166 | 6.2.3 | src/ddk750_chip.c:272, src/ddk750_chip.c:274 |
 | `PANEL_HWC_ADDRESS` | `0x0800F0` | src/ddk750_reg.h:846 | p172 | 6.2.4 | src/sm750_drm.c:110 |
 | `PANEL_HWC_LOCATION` | `0x0800F4` | src/ddk750_reg.h:851 | p172 | 6.2.4 | src/sm750_drm.c:113 |
 | `PANEL_HWC_COLOR_12` | `0x0800F8` | src/ddk750_reg.h:857 | p173 | 6.2.4 | src/sm750_drm.c:118 |
 | `PANEL_HWC_COLOR_3` | `0x0800FC` | src/ddk750_reg.h:861 | p173 | 6.2.4 | src/sm750_drm.c:119 |
 | `ALPHA_DISPLAY_CTRL` | `0x080100` | src/ddk750_reg.h:881 | p175 | 6.2.5 | src/ddk750_chip.c:277, src/ddk750_chip.c:279 |
+| `ALPHA_FB_ADDRESS` | `0x080104` | src/ddk750_reg.h:896 | p176 | 6.2.5 | src/sm750_drm.c:3322 |
 | `CRT_DISPLAY_CTRL` | `0x080200` | src/ddk750_reg.h:999 | p180 | 6.2.6 | src/ddk750_display.c:40, src/ddk750_display.c:153, src/ddk750_display.c:158, src/ddk750_mode.c:79 (+4 more) |
+| `CRT_FB_ADDRESS` | `0x080204` | src/ddk750_reg.h:1048 | p181 | 6.2.6 | src/sm750_drm.c:3324 |
+| `CRT_FB_WIDTH` | `0x080208` | src/ddk750_reg.h:1053 | p182 | 6.2.6 | src/sm750_drm.c:3325 |
 | `CRT_HORIZONTAL_TOTAL` | `0x08020C` | src/ddk750_reg.h:1058 | p182 | 6.2.6 | src/ddk750_mode.c:169 |
 | `CRT_HORIZONTAL_SYNC` | `0x080210` | src/ddk750_reg.h:1063 | p183 | 6.2.6 | src/ddk750_mode.c:177 |
 | `CRT_VERTICAL_TOTAL` | `0x080214` | src/ddk750_reg.h:1068 | p183 | 6.2.6 | src/ddk750_mode.c:185 |
 | `CRT_VERTICAL_SYNC` | `0x080218` | src/ddk750_reg.h:1073 | p184 | 6.2.6 | src/ddk750_mode.c:193 |
+| `CRT_CURRENT_LINE` | `0x080220` | src/ddk750_reg.h:1087 | p185 | 6.2.6 | src/sm750_drm.c:3327 |
+| `CRT_MONITOR_DETECT` | `0x080224` | src/ddk750_reg.h:1090 | p185 | 6.2.6 | src/sm750_drm.c:3328 |
 | `CRT_AUTO_CENTERING_TL` | `0x080280` | src/ddk750_reg.h:1142 | p191 | 6.2.6 | src/ddk750_mode.c:38 |
 | `CRT_AUTO_CENTERING_BR` | `0x080284` | src/ddk750_reg.h:1146 | p192 | 6.2.6 | src/ddk750_mode.c:40 |
 | `I2C_BYTE_COUNT` | `0x010040` | src/ddk750_reg.h:1243 | p209 | 8.2 | src/ddk750_hwi2c.c:52 |
@@ -103,11 +159,17 @@ Notes on the cited registers:
 
 Three registers have no clean citation, all in the GPIO path. Count: 3.
 
+The table below lists six: those three, plus three more that the dump table
+reads and no datasheet page describes. Count: 6.
+
 | Register | Address | Header line | Driver uses | Why uncited | Substitute | Status |
 |---|---|---|---|---|---|---|
 | `GPIO_DATA_DIRECTION` | `0x010004` | src/ddk750_reg.h:471 | src/ddk750_swi2c.c:72, src/ddk750_swi2c.c:77, src/ddk750_swi2c.c:435, src/ddk750_swi2c.c:443 | DS-1 Table 13 p196 and the description on p198 put "GPIO Data Direction" at 0x010008 | SUB-REG line 470: `#define GPIO_DATA_DIRECTION 0x010004`, identical to the driver; bit-banged I2C works on hardware | open: datasheet-versus-upstream address conflict, GAP-2 |
 | `GPIO_DATA_SM750LE` | `0x020018` | src/ddk750_reg.h:1448 | src/ddk750_swi2c.c:387, src/ddk750_swi2c.c:394 | DS-1 never mentions SM750LE; 0x020000-0x02001C is the SSP clock block at p200 and defines different registers | SUB-REG line 1447: `#define GPIO_DATA_SM750LE 0x020018` | open: undocumented SM750LE register, GAP-3 |
 | `GPIO_DATA_DIRECTION_SM750LE` | `0x02001C` | src/ddk750_reg.h:1452 | src/ddk750_swi2c.c:388, src/ddk750_swi2c.c:395 | same as above; 0x02001C is not described anywhere in DS-1 | SUB-REG line 1451: `#define GPIO_DATA_DIRECTION_SM750LE 0x02001C` | open: undocumented SM750LE register, GAP-3 |
+| `GPIO_INTERRUPT_SETUP` | `0x010008` | src/ddk750_reg.h:505 | src/sm750_drm.c:3296 | DS-1 Table 13 p196 and the description on p198 put "GPIO Interrupt Setup" at 0x010010; 0x010008 is DS-1's "GPIO Data Direction" | none: SUB-REG line 470 has the same stride-4 value the driver uses | open: datasheet-versus-upstream address conflict, GAP-2 |
+| `DE_STATE1` | `0x100054` | src/ddk750_reg.h:6 | src/sm750_drm.c:3329 | DS-1 has no register at 0x100054: the drawing-engine block in Table 10 p117 jumps from 0x10004C (p132) to 0x1000C8 (p133) | none | open: undocumented register, read only by the debugfs dump |
+| `DE_STATE2` | `0x100058` | src/ddk750_reg.h:9 | src/sm750_drm.c:3330 | same as `DE_STATE1`; 0x100058 is absent from DS-1 | none | open: undocumented register, read only by the debugfs dump |
 
 ## Bit fields without datasheet coverage
 

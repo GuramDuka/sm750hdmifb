@@ -232,7 +232,8 @@ Mode `0755 root:root`, 792 bytes, sha256
 `4b4f555a5f70c369d54196e1b4fa7750d91cb1e1b7fa5938a05d93866968af10`.
 Closes GAP-B5 (PCI config space beyond 0x40). The BDF `01:00.0` and the pair
 `126f:0750` are baked in, so the sudoers line stays free of escape sequences.
-Observed output: 9465 bytes, exit 0.
+Observed output: 9465 bytes, exit 0, stored as
+`docs/evidence/baseline/19-pci-config-space-full.txt`.
 
 ```sh
 #!/bin/sh
@@ -645,7 +646,7 @@ udev as root, and the tmpfiles entry runs from `systemd-tmpfiles` as root.
 | Root action | Gap | State after the action |
 | --- | --- | --- |
 | `sudo -n /usr/bin/dmesg`, `sudo -n /usr/bin/journalctl -k -b -q --no-pager` | GAP-B2 kernel log | CLOSED: exit 0, 169860 bytes and 240 sm750 lines measured 2026-11-18T09:36Z; 154236 bytes and 150 lines at the earlier capture |
-| `sudo -n /usr/local/sbin/sm750-lspci` | GAP-B5 PCI config space | CLOSED: exit 0, 9465 bytes including the capability list above 0x40 |
+| `sudo -n /usr/local/sbin/sm750-lspci` | GAP-B5 PCI config space | CLOSED: exit 0, 9465 bytes including the capability list above 0x40, stored as `docs/evidence/baseline/19-pci-config-space-full.txt` |
 | `sudo -n /usr/local/sbin/sm750-regs` | GAP-B4 register readback | CLOSED: exit 0 against the installed 0.6.0, `# sm750hdmidrm register dump, 49 registers, read-only`. Re-verified 2026-11-18T12:26Z (15:26 local): `rpm -q sm750hdmifb` -> `sm750hdmifb-0.6.0-1.fc43.noarch`, `cat /sys/module/sm750hdmidrm/version` -> `0.6.0`, `lsmod` -> `sm750hdmidrm 167936 0`, dump exit 0 with 49 registers. Three comparable states captured around a modeset in `docs/evidence/runtime/08-register-dump.txt` (12 of 49 registers change while the client is held open) |
 | `sudo /usr/local/sbin/sm750-vbios-dump` | GAP-B1 VBIOS image | CLOSED: 49152 bytes captured, sha256 `16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551`; the installed v3 body (`EXPECT=49152`) ran with exit 0 and `signature 55aa, checksum ok`, and the re-capture hashed to the same value. Section 5.1 |
 | udev ACL rule (`99-sm750-coder-acl.rules`) | GAP-B3 device access | PARTIAL: the card node opens unprivileged; modeset, kmscube and IGT now captured on both builds (T10 on 0.5.9, T11 on 0.6.0); framebuffer readback, scanout CRC and external capture still absent |

@@ -170,7 +170,82 @@ All report zero findings on `src/`; the planted control above shows the rules
 fire, and the kernel patches need `-D report` (without it spatch reports "No
 rules apply").
 
-## 8. Changes made under this task
+## 8. Determinism of the gate, and what a PASS means
+
+The gate was observed both passing and failing over the same tree (T8 round 1):
+`static gate: PASS` with exit 0 on one run, `coccinelle: exit 255` with
+`spatch failed` and exit 1 on another. The cause is neither the driver nor the
+patches nor the tree: it is one inherited environment variable.
+
+spatch's Python bridge is loaded for every `.cocci` that carries a
+`@script:python` rule (all three local patches, and the kernel patches' report
+rules). At load time it locates libpython by running
+
+```sh
+pkg-config --libs python-3.14
+```
+
+`/usr/lib64/pkgconfig/python-3.14.pc` declares `Libs: -L${libdir}` with
+`libdir=/usr/lib64`, and pkg-config suppresses a `-L` for a system directory,
+so in a clean environment the probe prints nothing and spatch continues. With
+`PKG_CONFIG_SYSROOT_DIR` set, the same query instead prints
+`-L/mega/tmp/sm750/t3/libdrm/usr/lib64`; spatch's parser rejects that and the
+process exits **255** after printing, verbatim,
+
+```
+Compilation OK!
+Loading ML code of the SP...
+Py.find_library_path: unable to parse the output of pkg-config '-L/mega/tmp/sm750/t3/libdrm/usr/lib64'
+```
+
+Nothing is analysed in that invocation: the capture holds no `HANDLING:` line
+for it. 255 is spatch's own fatal exit, not a finding count - the run's finding
+count is 0 and `coccinelle.fingerprints` is empty. It is also not a patch
+defect: the same patch, the same files and the same spatch binary exit 0 in a
+clean shell.
+
+255 is spatch's generic fatal status and it covers two distinct situations,
+both proved here: the `Py.find_library_path` failure above, and a `.cocci`
+that does not parse (a deliberately corrupted `sizeof-pointer.cocci` gives
+`minus: parse error:` and exits 255 as well). The exit code alone therefore
+does not say which happened; the raw log does.
+
+`PKG_CONFIG_SYSROOT_DIR` is exactly what `docs/ENVIRONMENT.md` section 4 tells
+the operator to export for the rootless libdrm build. So a shell that had built
+a libdrm client and then ran `make static` failed the gate, while a fresh shell
+passed: same tree, different shell history, which is the flip T8 saw.
+
+`tests/check-static.sh:37-46` now clears `PKG_CONFIG_SYSROOT_DIR`,
+`PKG_CONFIG_PATH` and `PKG_CONFIG_LIBDIR` next to the existing locale
+sanitisation. The gate analyses C and asks pkg-config nothing; those three
+variables only decide what spatch's probe is told, so clearing them removes the
+dependency rather than the check. Only `PKG_CONFIG_SYSROOT_DIR` was proved to
+flip the result here; the other two are cleared because they move the same
+probe's answer.
+
+What a PASS means now:
+
+- every listed analyser ran to completion over `src/` and exited 0, for every
+  kernel tree in the run;
+- the normalised fingerprint multiset equals the baseline, i.e. no finding
+  beyond `tests/static/baseline/` and no second copy of a recorded finding;
+- the result does not depend on the caller's pkg-config resolver settings.
+
+It is still a hard gate: a non-zero spatch exit fails the run, and a 255 is
+labelled (`spatch fatal exit (255: internal error or patch parse error, not a
+finding)`) and attributed to the patch that produced it (`spatch exit 255 on
+<patch>`), so a future environment leak or a broken patch names itself instead
+of failing anonymously. It does not assert that spatch never crashes for a
+reason outside these three variables - only that such a crash is visible and
+fatal, never a silent PASS.
+
+Evidence: `docs/evidence/builds/28-static-determinism.log` (three failing runs
+with the section-4 variables exported, the verbatim spatch tail, the
+`pkg-config` probe outputs for both environments, ten consecutive passing runs
+with the same variables still exported, the planted-defect control, and the
+corrupted-patch control). The defect row is `A30` in `docs/DEFECTS.md`.
+
+## 9. Changes made under this task
 
 Only the four missing declarations (ST-01 to ST-04):
 
@@ -190,7 +265,7 @@ matrix still reports `Built 9 sm750hdmidrm kernel/format combinations` with
 `CC=/usr/bin/gcc` while the 6.17.1-300 floor tree reports `Built 3`, both exit
 0. `make static` itself exits 0 with `static gate: PASS`.
 
-## 9. Limits
+## 10. Limits
 
 - `-Wsparse-all` is unusable as a gate: it adds kernel-header noise from
   `rculist.h`, `cred.h`, `cgroup-defs.h`, `rtmutex.h` and `mm.h` and no driver

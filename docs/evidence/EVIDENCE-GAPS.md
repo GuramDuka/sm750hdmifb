@@ -292,13 +292,19 @@ Closing commands for the remaining tiers:
 ```sh
 # modeset + plane dump, rootless now that the ACL exists:
 modetest -M sm750hdmidrm -s 35:1920x1080 -a
-# framebuffer readback / CRC capture, still needs root or a vkms-style sink:
-sudo cat /sys/kernel/debug/dri/0/crtc-0/crc/data
+# framebuffer readback / CRC capture: still needs root or a vkms-style sink:
+# (the CRC line formerly here is withdrawn - see the correction below)
 ```
 
 Status: `PARTIAL`. Device access and connector/mode enumeration are verified;
 modeset, readback, CRC and external capture remain `GAP`. See
 `docs/ENVIRONMENT.md` section 5.1.
+
+Correction (T23, 2026-11-18): the CRC line that this block originally carried
+(`sudo cat /sys/kernel/debug/dri/0/crtc-0/crc/data`) is withdrawn. The driver
+registers no CRC source, so that debugfs file cannot exist at any privilege
+level; the CRC bullet further down states what closing that tier would
+actually require.
 
 Update (T11, 2026-11-18T12:33Z): the modeset and conformance tiers named as
 `GAP` above have since been executed, twice, without root - T10 on the stale
@@ -313,19 +319,35 @@ build and T11 on 0.6.0 - so this row is re-scoped rather than left overstated:
   reports `v0.6`, `kms_addfb_basic` gives an identical 26/14/1 tally in both
   halves.
 
-What remains genuinely blocked is the last two tiers only:
+What remains genuinely blocked is the last two tiers only, and neither has a
+test command that could succeed on this host:
 
-```sh
-# framebuffer readback / scanout CRC: needs root or a vkms-style sink
-sudo cat /sys/kernel/debug/dri/0/crtc-0/crc/data
-# external capture of the HDMI signal: needs hardware not present on this host
-```
+- Framebuffer readback: no `/dev/fb*` node exists (`CONFIG_FB_DEVICE` is unset,
+  A24 in `docs/DEFECTS.md`), the driver registers no writeback connector
+  (`grep -rn writeback src/` returns nothing), and a second DRM client cannot
+  map a framebuffer it did not allocate. There is no unprivileged reader of the
+  scanned-out pixels on this host.
+- Scanout CRC: the driver has no CRC source. `grep -rn 'crc' src/*.c src/*.h`
+  returns nothing, and the CRTC CRC debugfs file is added only for a CRTC whose
+  `drm_crtc_funcs` provides `get_crc_sources`
+  (`/usr/src/kernels/7.3.4-100.fc43.x86_64/include/drm/drm_crtc.h:843-861`), so
+  `/sys/kernel/debug/dri/0/crtc-0/crc/data` cannot exist for this driver. The
+  earlier closing command for this tier, `sudo cat
+  /sys/kernel/debug/dri/0/crtc-0/crc/data`, was wrong and is withdrawn: no
+  permission level makes that file appear. Closing the tier needs code -
+  implement `get_crc_sources` and `set_crc_source` on the CRTC and feed the
+  running CRC from the SM750 vsync interrupt - which is a driver change, not a
+  documentation task.
 
-Neither has a non-root substitute on this host, and no task in the plan asks for
-external capture.
+Reachable substitutes, both already used: an external capture of the panel
+(hardware not attached to this host, and no task in the plan asks for it), and
+the register-dump diff, which shows which registers a modeset changes:
+`docs/evidence/runtime/08-register-dump.txt` holds three states around a held
+modeset, and 12 of the 49 registers change.
 
 Status: `PARTIAL` - modeset and conformance evidence now exists; readback and
-CRC remain `GAP` with the commands above.
+CRC remain `GAP`. The CRC half is `GAP` because the driver implements no CRC
+source, not because of a permission.
 
 ## GAP-B4: MMIO register dumps
 
@@ -472,13 +494,19 @@ The readable 0x00-0x3f dump *is* captured
 (`docs/evidence/baseline/07-pci-config-space.txt`), which is enough to
 confirm vendor/device ID, command/status, BAR0, BAR1, ROM BAR and revision.
 
-Closing command:
+Closing command, executed 2026-11-18T09:35:17Z through the root helper:
 
 ```sh
-sudo lspci -vvv -xxx -d 126f:0750 -s 01:00.0 > /mega/tmp/sm750/t3/lspci-full.txt
+sudo -n /usr/local/sbin/sm750-lspci
 ```
 
-Status: `GAP-PARTIAL`.
+Status: `CLOSED` by `docs/evidence/baseline/19-pci-config-space-full.txt` - the
+helper's 9465 bytes of output, stored as a 174-line transcript with the header
+block that records the run. It carries `-vvv` descriptions for the capability
+blocks at 0x40 (PM), 0x50 (MSI), 0x70 (Express), 0xb0 (MSI-X), 0x100 (AER) and
+0x140 (VC), plus the 256-byte register dump (`40:` to `f0:`). The unprivileged
+64-byte capture stays as `docs/evidence/baseline/07-pci-config-space.txt` for
+the before/after comparison.
 
 ## GAP-B6: per-block EDID checksum verification
 
@@ -675,9 +703,9 @@ Status: `GAP`.
 | --- | --- | --- | --- |
 | B1 | VBIOS ROM (48 KiB) | rom node `0600 root`; captured via allowlisted `sm750-vbios-dump` (T12) | `CLOSED` |
 | B2 | kernel log excerpt | `dmesg` EPERM unprivileged; allowlisted `sudo -n /usr/bin/dmesg` works (T13) | `CLOSED` |
-| B3 | modeset / IGT / kmscube | `/dev/dri/card0` `0660 root:video` + ACL; modeset, kmscube and IGT now captured on both builds (T10, T11); readback/CRC still need root | `PARTIAL` |
+| B3 | modeset / IGT / kmscube | `/dev/dri/card0` `0660 root:video` + ACL; modeset, kmscube and IGT now captured on both builds (T10, T11); readback and CRC have no path on this host at any privilege level - no `/dev/fb*`, no writeback connector, and no `get_crc_sources` in the driver | `PARTIAL` |
 | B4 | MMIO register dumps | strict devmem, BAR1 `0600`, debugfs `0700`; `regs` facility (T5) read via allowlisted `sm750-regs` before/during/after a modeset (T11) | `CLOSED` |
-| B5 | config space > 0x40 | `Capabilities: <access denied>` | `GAP-PARTIAL` |
+| B5 | config space > 0x40 | `Capabilities: <access denied>` unprivileged; allowlisted `sudo -n /usr/local/sbin/sm750-lspci` returns the full space (T14) | `CLOSED` |
 | B6 | EDID checksum detail | none | `CLOSED` |
 | B7 | RPM install/erase, DKMS hooks | `dkms install` needs root; `rpm -i --root=` cannot chroot; install, `%preun` erase and reinstall all executed as root (T11) | `CLOSED` |
 | B8 | which `sm750_program_mode` call returns `-110` | that path has zero `dev_dbg`/`drm_dbg`, dynamic debug is root-only; the `regs` half is now executable on 0.6.0 (T11) but the stage instrumentation still needs a debug rebuild; trigger itself reproduced 1/206 | `GAP` |

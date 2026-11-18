@@ -81,6 +81,8 @@ decisions:
 
   - "T17 acceptance (2026-11-18): the option ROM is reconstructed from mnemonics, not copied, and the rebuild is byte-identical. Structure: tools/vbios-re/regions.txt tiles all 49152 bytes in 239 regions (120 code / 119 data, census dec 119 / tbl 112 / print 6 / straddle 1 / fill 1), no unclassified gap; docs/VBIOS-REVERSE-ENGINEERING.md (1031 lines) is the map plus image/header/PCIR/VBE/string facts, the ROM behaviour inventory (clock and PLL 0xc0220, panel and clock select 0xc02a0, MMIO table 0xc01f4, window 0xc5cec, clock bits 0xc5e16, clock copy 0xc5e79, blank 0xc340d / unblank 0xc33d9, SiI9024A 30-pair bring-up 0xc1317 with bit-banged I2C, mode table 0x40 stride at 0x7c80), the UNDETERMINED list and a 13-row divergence table against the driver. Byte-exactness: reencode.py emits nasm bits 16 / org 0 from objdump text, canonicalises 838 slots, and verifies size, sha256, cmp and decode equality; result 49152 bytes, sha256 16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551 (same as the capture), cmp -l empty, objdump -m i8086 listings 30283 identical lines over 7734 slots (exact 6879, canonicalised 838, db 17). Coverage 17973 of 18034 code bytes = 99.66 percent against the 85 percent floor; the 17 residual slots (61 bytes) are only vendor encodings nasm cannot emit (mov ebp,dr0, fstp TBYTE, addr32 fucomi, disp16 forms) and vendor redundant zero-displacement bytes, and each is listed by address in the evidence. Computed fields, never copied: size byte 0x02=0x60 from blocks=total//512, PCIR image length 0x2C=0x0060, checksum 0x34=(-sum)&0xFF=0x6b - and the checksum must be solved after canonicalisation (solving first reproduces the observed FAIL checksum byte ba captured 6b), so the build fails on any mismatch rather than trusting a stored constant. Measured toolchain: /usr/bin/gcc 15.3.1 -m16 emits 66 55 for push %ebp and clang 21.1.8 -m16 emits 67 66 8b 44 24, so neither compiler can emit ROM bytes; the emitter is nasm 2.16.03 -f bin, proven by a 13-byte probe. C semantic model under vbios-re/model/ (rom.h, rom.c with rom_reg_table_lookup 0xc3382 over 56 records at 0x639b stride 5, clock.c, panel.c, dpms.c, mode_table.c, sii9024a.c, README.md) compiles warning-free under /usr/bin/gcc -std=c99 -Wall -Wextra -Werror; two model corrections were found by measurement and folded in: 0xc340d is the reachable blank (six callers) while 0xc33d9 is an unreachable mirror, and the third word of the 12-byte MMIO table at 0x11b is a clear mask because the applier at 0xc01f4 does not/and/or. Provenance: docs/PROVENANCE.md:54-82 keeps the generated .asm/.bin out of git and out of the tarball (build-package.sh tars git ls-files, tests/audit-release.sh rejects *.bin/*.rom and grep-fails the vendor banner) and records the rejected commit-the-rebuild alternative; only map, generator, verifier, model and evidence ship. Makefile: opt-in vbios-re target runs tools/vbios-re/check.sh and maps its exit 77 to a successful skip when the ROM is absent; check: recipe untouched, still 17 commands. Evidence docs/evidence/vbios-re/01-rebuild.txt, 02-bitexact.txt, 03-decode-equality.txt, 04-toolchain.txt. Orchestrator verification: re-ran the re-encode into /mega/tmp/sm750/verify-t17 -> exit 0 with the 13 residual db lines listed and the final OK line byte-identical to /mega/tmp/sm750/vbios-01-00-0.bin; file sizes and line counts match the report (1031 lines doc, 241 lines regions.txt, 20261 B reencode.py, 681 B check.sh, 8 model files, 4 evidence files). Residual: the UNDETERMINED list is honest and stays open (PCIR checksum convention, VBE mode-list pointer, VBE total memory, font cell origin, mode-record field names, MMIO 0x98000 bit names, header words 0x0a/0x0c, sequencer inversion) - none of it is needed by the driver."
 
+  - "T8 round 1 (2026-11-18): docs/ACCEPTANCE-REPORT.md written (446 lines, 35589 bytes, ASCII clean); verdict ACCEPT WITH GAPS - 4 PASS (AC-2, AC-4, AC-5, AC-6), 0 FAIL, 3 GAP (AC-1, AC-3, AC-7), status warning. Accepted as the round-1 result, not as the final verdict: every finding is a documentation or stale-evidence defect, none is a driver defect, so T8 returns to pending with retries_used 1 and depends_on extended by T23 and T24. Findings given to T23: (a) docs/specs/REGISTER-MAP.md:32 reports 54 registers while the reviewer measured 69 referenced and the 16 read only through sm750_reg_dump_registers[] (src/sm750_drm.c:3281-3332) are absent from the map, though docs/REGISTERS.md documents them; (b) docs/TEST-STRATEGY.md:424 claims a framebuffer readback of 48 nonzero bytes of 8294400 and no evidence file or tracked script produces the number; (c) the tier-5 scanout CRC closing command at docs/evidence/EVIDENCE-GAPS.md:319 cannot work because no get_crc_sources is registered in src/ and drm_debugfs_crtc_crc_add() returns early on a NULL callback (include/drm/drm_crtc.h:842-861); (d) docs/DELIVERABLES.md:120-124 says its self-check should print nothing while it emits 21 unreferenced docs paths, section 1 says 24 and 25 defects where docs/AUDIT.md has 24 rows and docs/DEFECTS.md 29, section 2.4 says 10 PASS / 0 FAIL / 5 GAP where the source says 13/2/3, the AC-3 row cites docs/evidence/builds/09-register-dump.log instead of docs/evidence/runtime/08-register-dump.txt, and 5.4 stops at builds/01 while claiming GAP-B1..GAP-B7; (e) GAP-B5 is called CLOSED at docs/DELIVERABLES.md:167, docs/ROOT-ACTIONS.md:235 and :648 while docs/evidence/EVIDENCE-GAPS.md:481 still reads GAP-PARTIAL, docs/evidence/baseline/07-pci-config-space.txt is 452 bytes and stops at 0x3f, and the 9465-byte /mega/tmp/sm750/t14/lspci.txt (168 lines) was never tracked; (f) three packaging transcripts report 73 files and none carries the stale-purge line, so they are 0.5.9-era; (g) docs/TEST-STRATEGY.md is still the 0.5.9 record and the 0.6.0 re-runs are not folded in. Finding given to T24: tests/check-static.sh passes on one run and fails with coccinelle exit 255 / spatch failed on another over the same tree, so it cannot be a hard release gate until it is deterministic or explicitly demoted; it is opt-in and outside the 17 make check commands, so AC-5 is unaffected. Orchestrator verification of the round-1 report: 446 lines, zero non-ASCII bytes, git status shows only the untracked report; independently confirmed docs/specs/REGISTER-MAP.md:32 says 54 (my own count of #define NAME 0xADDR referenced in src/*.c is 87, of which 28 are absent from the map), grep -rln 8294400 over docs/evidence/ returns nothing, grep -rl get_crc_sources over src/ hits only build artefacts, docs/evidence/EVIDENCE-GAPS.md:457 is the GAP-B5 heading, /mega/tmp/sm750/t14/lspci.txt is 9465 bytes, docs/evidence/baseline/07-pci-config-space.txt is 452 bytes, and the three 73-files transcripts plus the single purge-line file are as reported."
+
 assumptions:
   - "Primary RPM target Fedora 43 x86_64 (current host), spec written EL9-portable where macros allow: prefer portable macro equivalents over Fedora-only macros, and record any EL9 divergence as a comment in the spec rather than treating it as a blocker. dkms, rpmbuild 6.0.2, rpmdev-setuptree and spectool are present; ~/rpmbuild now EXISTS, so clean-buildroot work uses a fresh _topdir via --define."
   - "Kernel floor remains 6.17 per dkms.conf BUILD_EXCLUSIVE_KERNEL; the EL9 portability target does not lower it, so EL9 kernels below 6.17 are documented as unsupported in the spec comment rather than accommodated."
@@ -893,6 +895,68 @@ tasks:
         architectural_boundaries: ["packaging/sm750hdmifb.spec owns dkms registration lifecycle", "src/ is out of scope for this task"]
         risk_decisions: ["The stale 0.5.9 registration is a packaging defect, not a driver defect; fix it in the scriptlets so a fresh machine can never reproduce it"]
 
+  - id: T23
+    title: Close the documentation and evidence defects found by acceptance review round 1
+    description: |
+      Round 1 of T8 returned ACCEPT WITH GAPS with documentation and stale-evidence
+      defects. Correct each at its source, leave every corrected number reproducible by
+      one command, and never restate a claim whose evidence is missing.
+    wave: 11
+    depends_on: [T17, T21, T22]
+    agent: gem-documentation-writer
+    status: pending
+    retries_used: 0
+    acceptance_criteria:
+      - "docs/specs/REGISTER-MAP.md either lists every register in sm750_reg_dump_registers[] (src/sm750_drm.c:3281-3332) with its citation, or states a named exclusion pointing at docs/REGISTERS.md; the Method section and the reported count agree with a measured number that one command reproduces."
+      - "The framebuffer-readback row at docs/TEST-STRATEGY.md:424 stops claiming 48 nonzero bytes of 8294400: it becomes a GAP row naming the reason (no CONFIG_FB_DEVICE, no /dev/fb*, no writeback connector) and a closing action that could actually work."
+      - "The tier-5 scanout CRC closing command at docs/evidence/EVIDENCE-GAPS.md:319 is replaced by a truthful row: the driver registers no get_crc_sources and drm_debugfs_crtc_crc_add() returns early on a NULL callback, so the row names the reachable substitutes instead."
+      - "docs/DELIVERABLES.md:120-124 either produces no output from its own self-check or states the measured output; the counts are re-derived from sources (docs/AUDIT.md rows, docs/DEFECTS.md rows, docs/TEST-STRATEGY.md PASS/FAIL/GAP, GAP-B1..B8); the AC-3 row cites docs/evidence/runtime/08-register-dump.txt; 5.4 covers GAP-B1..GAP-B8."
+      - "GAP-B5 is closed for real or the claim is withdrawn: either the 9465-byte /mega/tmp/sm750/t14/lspci.txt is added as a tracked file under docs/evidence/baseline/ with its header and docs/evidence/EVIDENCE-GAPS.md:457-486 flipped to CLOSED and all three citing places agree, or docs/DELIVERABLES.md:167, docs/ROOT-ACTIONS.md:235 and :648 return to GAP-PARTIAL."
+      - "The 0.5.9-era transcripts docs/evidence/packaging/07-check-rpm-dkms.log and docs/evidence/builds/17-check-rpm-dkms-0.6.0.log carry a superseded header line with date and reason (73 files, no stale-purge line); nothing is deleted."
+      - "docs/TEST-STRATEGY.md either folds the 0.6.0 re-runs (builds/13-19, runtime/16-19) into its results table or states in one line that the table is the 0.5.9 record and names the 0.6.0 record."
+      - "Each corrected number is followed by the command that reproduces it; one append-only LOGBOOK entry; ASCII only."
+    handoff:
+      constraints:
+        - "Documentation and evidence headers only: no src/, tests/, packaging/ or Makefile change."
+        - "Append-only: never delete an evidence file or a logbook entry; supersede by adding a header line."
+        - "Do not call the GAP-B5 artefact committed until git ls-files shows it."
+        - "ASCII only."
+      relevant_context:
+        - "docs/ACCEPTANCE-REPORT.md is the round-1 report (446 lines); its GAP rows are the work list."
+        - "docs/specs/REGISTER-MAP.md:32 reports 54 registers; the reviewer measured 69 referenced; the 16 read only through sm750_reg_dump_registers[] are absent from the map although docs/REGISTERS.md documents them."
+        - "grep -rln 8294400 docs/evidence/ returns nothing."
+        - "grep -rl get_crc_sources src/ hits only src/sm750_drm.o, src/sm750hdmidrm.o, src/sm750hdmidrm.ko."
+        - "/mega/tmp/sm750/t14/lspci.txt is 9465 bytes, 168 lines, header '# date: 2026-11-18T09:35:17Z'; docs/evidence/baseline/07-pci-config-space.txt is 452 bytes and stops at 0x3f; docs/evidence/EVIDENCE-GAPS.md:481 says GAP-PARTIAL."
+        - "docs/evidence/packaging/07-check-rpm-dkms.log, docs/evidence/packaging/0.5.9/07-check-rpm-dkms.log and docs/evidence/builds/17-check-rpm-dkms-0.6.0.log each contain '73 files'; only docs/evidence/runtime/22-dkms-stale-purge.txt carries the purge line."
+  - id: T24
+    title: Make the static-analysis gate deterministic or demote it explicitly
+    description: |
+      tests/check-static.sh returned 'static gate: PASS' on one run and 'coccinelle:
+      exit 255' / 'spatch failed' on another over the same tree. Reproduce, identify the
+      cause with evidence, then either fix it or declare the gate best-effort in its own
+      output and in docs/STATIC-ANALYSIS.md.
+    wave: 11
+    depends_on: [T19]
+    agent: gem-implementer
+    status: pending
+    retries_used: 0
+    acceptance_criteria:
+      - "The non-determinism is reproduced at least three times and its cause is identified from evidence (which spatch invocation, which patch, what exit 255 means here), not inferred."
+      - "Either ten consecutive runs over an unchanged tree return the same exit code, or the gate is demoted: it prints a non-fatal banner, exits 0 when only the flaky analyser disagrees, and docs/STATIC-ANALYSIS.md states what a PASS now means."
+      - "tests/static/baseline/ still holds sparse 0, cppcheck 0, coccinelle 0 and smatch 4 lines, and a planted defect is still caught by sparse and by smatch."
+      - "Makefile's check: target is untouched and still has exactly 17 recipe commands; the gate stays opt-in via 'make static'."
+      - "Evidence docs/evidence/builds/28-static-determinism.log with a '# utc:' header, plus one append-only LOGBOOK entry."
+    handoff:
+      constraints:
+        - "No src/ behaviour change; a driver-side workaround for an analyser goes to docs/DEFECTS.md instead."
+        - "Do not weaken a check to make it pass: removing a coccinelle patch or a baseline line is not a fix."
+        - "Analyse in /mega/tmp/sm750/t24/, never in /home/coder/sm750hdmifb."
+        - "ASCII only."
+      relevant_context:
+        - "T19 built the gate: tests/check-static.sh (11376 B, 313 lines), tests/static/{sparse-check,smatch-check,mk-cppdb.py,cocci,baseline}, docs/STATIC-ANALYSIS.md."
+        - "T8 observed both results on the same tree: 'static gate: PASS' exit 0, and 'coccinelle: exit 255' with 'spatch failed' exit 1."
+        - "The coccinelle set is 12 patches: 3 local under tests/static/cocci/ plus 9 from the kernel tree; LC_ALL/LANG/LC_MESSAGES are forced to C."
+        - "The check: target must keep 17 recipe commands - tests/check-drm-module.sh and docs/AUDIT.md A23 assert that count."
   - id: T8
     title: Independent acceptance review against all seven criteria
     description: |
@@ -901,10 +965,10 @@ tasks:
       confirm the AC-6 rootless/root split is stated correctly, and issue a verdict with
       remaining gaps.
     wave: 10
-    depends_on: [T1, T2, T3, T4, T5, T6, T7, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22]
+    depends_on: [T1, T2, T3, T4, T5, T6, T7, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19, T20, T21, T22, T23, T24]
     agent: gem-reviewer
     status: pending
-    retries_used: 0
+    retries_used: 1
     acceptance_criteria:
       - "docs/ACCEPTANCE-REPORT.md issues PASS/FAIL/GAP per criterion 1-7, each citing the evidence path and verification command actually used."
       - "Checksum reproduction, build matrix logs, test results table and packaging evidence are re-run or re-read and confirmed consistent; any mismatch is reported as a finding."

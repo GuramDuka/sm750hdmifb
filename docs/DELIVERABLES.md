@@ -22,8 +22,8 @@ Three labels are used throughout:
 | AC | Subject | Deliverable paths | Verification command | Root |
 | --- | --- | --- | --- | --- |
 | AC-1 | Device specifications archived with checksums | `docs/specs/INDEX.md`, `docs/specs/SHA256SUMS`, `docs/specs/GAPS.md`, `docs/specs/REGISTER-MAP.md` | `ls docs/specs` (four text files, no binary) and the checksum re-download in section 2.1 | no |
-| AC-2 | Audit and defect inventory | `docs/AUDIT.md`, `docs/DEFECTS.md`, `docs/evidence/audit/identity-and-range.txt`, `docs/evidence/audit/privilege-probe.txt`, `docs/evidence/audit/release-gate-and-environment.txt`, `docs/evidence/audit/rootless-libdrm-check.txt` | `grep -cE '^.[[:space:]]A[0-9]' docs/AUDIT.md docs/DEFECTS.md` -> 24 and 25 (A25 was found post-audit in the kernel log and is recorded only in `docs/DEFECTS.md`; `docs/AUDIT.md` keeps the 24 it audited) | no |
-| AC-3 | Runtime and hardware validation ladder | `docs/TEST-STRATEGY.md` sections 5 and 9, `docs/evidence/baseline/03-connector.txt`, `docs/evidence/builds/09-register-dump.log`, `docs/evidence/EVIDENCE-GAPS.md` GAP-B3/B4 | `grep -n 'GAP-B[34]' docs/evidence/EVIDENCE-GAPS.md` | partly; see section 3 |
+| AC-2 | Audit and defect inventory | `docs/AUDIT.md`, `docs/DEFECTS.md`, `docs/evidence/audit/identity-and-range.txt`, `docs/evidence/audit/privilege-probe.txt`, `docs/evidence/audit/release-gate-and-environment.txt`, `docs/evidence/audit/rootless-libdrm-check.txt` | `grep -cE '^.[[:space:]]A[0-9]' docs/AUDIT.md docs/DEFECTS.md` -> 24 and 29 (that grep counts one header row per defect id; `docs/AUDIT.md` keeps the 24 it audited, `docs/DEFECTS.md` carries the five later dispositions A25-A29) | no |
+| AC-3 | Runtime and hardware validation ladder | `docs/TEST-STRATEGY.md` sections 5 and 9, `docs/evidence/baseline/03-connector.txt`, `docs/evidence/runtime/08-register-dump.txt` (the successful dump; `docs/evidence/builds/09-register-dump.log` is the earlier denied attempt), `docs/evidence/EVIDENCE-GAPS.md` GAP-B3/B4 | `grep -n 'GAP-B[34]' docs/evidence/EVIDENCE-GAPS.md` | partly; see section 3 |
 | AC-4 | Test strategy and recorded results | `docs/TEST-STRATEGY.md`, `docs/evidence/builds/01-make-check.log` .. `docs/evidence/builds/19-cursor-alpha-fix.log` | evidence-existence loop in section 2.4 | no |
 | AC-5 | Build integrity | `Makefile` (`check` at `Makefile:30-48`, `check-deps` at `Makefile:17-28`, `check-all-kernels` at `Makefile:50-51`), `tests/build-all-kernels.sh`, `docs/evidence/builds/01-make-check.log`, `docs/evidence/builds/02-check-all-kernels.log`, `docs/evidence/builds/03-kernel-7.2.15-100.log`, `docs/evidence/builds/04-kernel-7.3.3-100.log`, `docs/evidence/builds/05-kernel-7.3.4-100.log`, `docs/evidence/builds/06-kernel-6.17.1.log`, `docs/evidence/builds/11-warnings-scan.log` | `make check` and `./tests/build-all-kernels.sh`; section 2.5 | no |
 | AC-6 | RPM/DKMS packaging | `packaging/sm750hdmifb.spec`, `docs/PACKAGING-RPM.md`, `tests/check-rpm-dkms.sh`, `docs/evidence/packaging/01-rpmbuild.log` .. `docs/evidence/packaging/07-check-rpm-dkms.log` | `./tests/check-rpm-dkms.sh`; section 2.6 | no (build), yes (install) |
@@ -58,10 +58,13 @@ archived hashes are the datasheet `fac31257...531889` and the product brief
 grep -cE '^.[[:space:]]A[0-9]' docs/AUDIT.md docs/DEFECTS.md
 ```
 
-Expected: `24` for each file (S1 = 2, S2 = 8, S3 = 11, S4 = 3). Every row in
-`docs/DEFECTS.md` carries a status of `fixed`, `accepted` or `deferred` with a
-change reference; `A01` (no RPM spec) and `A02` (untracked files in the source
-tarball) are `fixed`.
+Expected: `docs/AUDIT.md:24` and `docs/DEFECTS.md:29` - the command counts one
+header row per defect id, A01-A24 in the audit and A01-A29 in the defect list.
+`docs/AUDIT.md` keeps the 24 defects it audited (S1 = 2, S2 = 8, S3 = 11,
+S4 = 3); `docs/DEFECTS.md` adds the five later dispositions `A25`-`A29`. Every
+row in `docs/DEFECTS.md` carries a status of `fixed`, `accepted` or `deferred`
+with a change reference; `A01` (no RPM spec) and `A02` (untracked files in the
+source tarball) are `fixed`.
 
 ### 2.3 AC-3: validation ladder
 
@@ -85,9 +88,10 @@ grep -o 'docs/evidence/[A-Za-z0-9._/-]*' docs/TEST-STRATEGY.md | sort -u |
 while read -r p; do test -e "$p" || echo "MISSING $p"; done
 ```
 
-Expected: no output. Recorded totals are 10 `PASS`, 0 `FAIL`, 5 `GAP`; the
-`GAP` rows are the four KMS-client probes and the register read, each pointing
-at its denial.
+Expected: no output. Recorded totals are 13 `PASS`, 2 `FAIL`, 3 `GAP`, as
+`docs/TEST-STRATEGY.md` section 4 states (`Counts: 13 PASS, 2 FAIL, 3 GAP.`);
+the `GAP` rows are R11 (debugfs `regs`), R12 (the skipped live vblank probe) and
+the VT-blocked IGT subset inside R15, each pointing at its denial.
 
 ### 2.5 AC-5: build integrity
 
@@ -109,7 +113,9 @@ to `src/*.c` or `src/*.h` (`docs/evidence/builds/11-warnings-scan.log`).
 ```
 
 Expected: exit 0. The script rebuilds the noarch RPM from a fresh `_topdir`,
-asserts the payload against `git ls-files` (73 files), the `%files` list
+asserts the payload against `git ls-files` (115 files in the current tree; the
+same command the script uses is `git ls-files -- . ':(exclude)docs/plan'
+':(exclude)docs/evidence' ':(exclude)docs/images' | wc -l`), the `%files` list
 (36 files), the scriptlets and the dependencies, runs the `%posttrans` branch
 against shims, and reaches `dkms ... : built` in a sandbox. Root-only steps
 print `SKIP` and are listed in section 3. Recipe and rollback:
@@ -118,11 +124,14 @@ print `SKIP` and are listed in section 3. Recipe and rollback:
 ### 2.7 AC-7: this index
 
 ```sh
-comm -23 <(find docs -type f | sort) \
+comm -23 <(git ls-files docs | sort) \
          <(grep -o 'docs/[A-Za-z0-9._/-]*' docs/DELIVERABLES.md | sort -u)
 ```
 
-Expected: no output, meaning every file under `docs/` is named by this file.
+Expected: no output, meaning every tracked file under `docs/` is named by this
+file. The check reads `git ls-files`, not `find`, so untracked working files
+such as the final reviewer's `docs/ACCEPTANCE-REPORT.md` are outside it. Before
+T23 this check printed 21 tracked paths; section 5 now lists all of them.
 `README.md` links every user-facing document; see section 5.
 
 ### 2.8 Static analysis (opt-in, not part of `check`)
@@ -160,7 +169,7 @@ bodies and the recovery recipe for a broken allowlist are in
 | Register readback | `sudo /usr/local/sbin/sm750-regs > /mega/tmp/sm750/regs-before.txt` (resolves the `dri/<N>` index from the by-path link) | **CLOSED, GAP-B4.** Exit 0 on the loaded 0.6.0 module, 49 registers with `# card node: /dev/dri/card0 (debugfs dri/0)`; captured as `docs/evidence/runtime/08-register-dump.txt`. |
 | VBIOS image | `sudo /usr/local/sbin/sm750-vbios-dump /mega/tmp/sm750/vbios-01-00-0.bin` | **CLOSED, GAP-B1.** Captured 2026-11-18T10:11Z: 49152 bytes, sha256 `16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551`. The image is complete at 48 KiB (header size 0x60, PCIR image length 0x0060, whole-image checksum 0), so the helper's exit 2 and its `expected 65536` warning are a stale constant, not a short read. Signature `55 aa`, PCIR at 0x1c, 126f:0750, VBE 2.0, version 1.00.59-, build 05/14/19 16:25. The v3 body documented in `docs/ROOT-ACTIONS.md` section 3.3 sets `EXPECT=49152` and adds the `55 aa` check; it was installed by the host owner on 2026-11-18T12:07Z and re-executed with exit 0, `signature 55aa, checksum ok`, hashing to the same value. Binary stays in `/mega/tmp/sm750/`, not committed; transcript `docs/evidence/baseline/18-vbios-dump.txt`. |
 | Kernel log | `sudo -n dmesg` (also `sudo -n journalctl -k -b -q --no-pager`) | **CLOSED, GAP-B2.** Exit 0; 169860 bytes with 240 `sm750` lines measured 2026-11-18T09:36Z (154236 bytes / 150 lines at the earlier capture). |
-| PCI config space > 0x40 | `sudo /usr/local/sbin/sm750-lspci` | **CLOSED, GAP-B5.** Exit 0, 9465 bytes, capability list above 0x40 present. |
+| PCI config space > 0x40 | `sudo /usr/local/sbin/sm750-lspci` | **CLOSED, GAP-B5.** Exit 0, 9465 bytes, capability list above 0x40 present; stored as `docs/evidence/baseline/19-pci-config-space-full.txt`. |
 | KMS clients | `modetest -c -M sm750hdmidrm`, `kmscube -D /dev/dri/card0 -c 60`, IGT `kms_setmode` | **PARTIAL, GAP-B3.** The card node opens unprivileged through the udev ACL; `modetest` and `kmscube` pass as pre-fix baselines (`docs/evidence/runtime/04-modeset.txt`, `05-kmscube.txt`), IGT on 0.6.0 (`docs/evidence/runtime/19-igt-0.6.0.txt`) runs `kms_addfb_basic` to completion with 26 SUCCESS / 14 SKIP / 1 FAIL, the single failure being `size-max` at `tests/kms_addfb_basic.c:594` which A26 records as correct by design. The `/dev/tty0` ACL in `docs/ROOT-ACTIONS.md` section 4.1 was installed on 2026-11-18T12:08Z, so the five binaries that used to abort at `kmstest_set_vt_graphics_mode` with `errno 13` can open the VT. No scanout CRC or external capture. |
 | RPM install | `sudo -n dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm` | **CLOSED, GAP-B7.** Executed 2026-11-18; `%posttrans` built and installed the module for 7.2.15-100, 7.3.3-100 and 7.3.4-100 (`docs/evidence/runtime/12-rpmbuild-0.6.0.txt`). |
 | Installed-state assertion | `sudo -n dkms status -m sm750hdmifb -v 0.6.0` (expected `: installed`) and `sudo -n modprobe sm750hdmidrm` | **CLOSED, GAP-B7.** `dkms status` reports 0.6.0 `installed` for all three kernels, the module loads, and `/sys/module/sm750hdmidrm/version` reads 0.6.0. The only remaining stale rows are two `0.5.9 ... built` registrations, which task T22 removes. |
@@ -376,6 +385,7 @@ list.
 | `docs/STAGING-BENCHMARK.md` | DMA batch benchmark procedure and analysis rules |
 | `docs/TESTING.md` | validation scope, recovery, live reload |
 | `docs/VBLANK.md` | private vblank timer and its locking |
+| `docs/VBIOS-REVERSE-ENGINEERING.md` | option-ROM structure map and the bit-exact 16-bit reconstruction, with its limits |
 
 ### 5.2 Audit, test and packaging documentation
 
@@ -402,7 +412,7 @@ list.
 
 | Path | Content |
 | --- | --- |
-| `docs/evidence/EVIDENCE-GAPS.md` | GAP-B1 .. GAP-B7 with denial and closing command |
+| `docs/evidence/EVIDENCE-GAPS.md` | GAP-B1 .. GAP-B8 with denial and closing command |
 | `docs/evidence/audit/identity-and-range.txt` | HEAD, remotes, layout, declared kernel range |
 | `docs/evidence/audit/privilege-probe.txt` | privilege denials as probed by the audit |
 | `docs/evidence/audit/release-gate-and-environment.txt` | release-gate failure and host toolchain |
@@ -474,6 +484,26 @@ list.
 | `docs/evidence/runtime/06-igt.txt` | IGT `kms_setmode` result, still a gap |
 | `docs/evidence/runtime/07-kernel-log.txt` | kernel log during the runtime tiers, pre-fix baseline |
 | `docs/evidence/runtime/cursor-alpha-01-warning-before.txt` | T13: the cursor-plane alpha warning reproduced from the pre-fix 0.5.9 build |
+| `docs/evidence/runtime/09-hdmi-minus-110.txt` | T16: isolation of the `failed to enable HDMI mode: -110` episode, 1 hit in 205 attempts |
+| `docs/evidence/runtime/10-addfb-size-max.txt` | T15: root cause of the `kms_addfb_basic` `size-max` `ADDFB2` EINVAL |
+| `docs/evidence/runtime/11-preconditions.txt` | T11: machine state captured before the 0.6.0 replacement |
+| `docs/evidence/runtime/13-module-reload.txt` | T11: unload of the stale 0.5.9 module and load of 0.6.0 |
+| `docs/evidence/runtime/14-modetest-connector-0.6.0.txt` | `modetest -c` connector enumeration on 0.6.0 |
+| `docs/evidence/runtime/15-modetest-properties-0.6.0.txt` | `modetest -p` CRTC, plane and property enumeration on 0.6.0 |
+| `docs/evidence/runtime/16-modeset-0.6.0.txt` | `modetest -s` modeset and restoration on 0.6.0 |
+| `docs/evidence/runtime/17-a27-fix-build.txt` | T20: static gate, build and RPM rebuild after the A27 fix |
+| `docs/evidence/runtime/17-kmscube-0.6.0.txt` | `kmscube` run on 0.6.0 |
+| `docs/evidence/runtime/18-a27-fix-install.txt` | T20: delivery of the A27 fix to the running kernel through the allowlisted dnf pair |
+| `docs/evidence/runtime/18-kernel-log-0.6.0.txt` | kernel log captured on 0.6.0, cross-checked against `journalctl -k` |
+| `docs/evidence/runtime/19-a27-fix-reproduce.txt` | T20: post-fix reproduction of the `-110` episode, 108 attempts |
+| `docs/evidence/runtime/21-final-state.txt` | T11: final machine state after the rollback proof and reinstall |
+| `docs/evidence/runtime/22-dkms-stale-purge.txt` | T22: the `%posttrans` stale-registration purge, with the pre-fix `dkms status` and the post-purge result |
+| `docs/evidence/vbios-re/01-rebuild.txt` | T17: `tools/vbios-re/reencode.py` rebuild of the captured ROM, every structural check PASS |
+| `docs/evidence/vbios-re/02-bitexact.txt` | T17: rebuilt image is byte-identical to the capture, 49152 bytes each |
+| `docs/evidence/vbios-re/03-decode-equality.txt` | T17: `objdump` disassembly of both images compares equal |
+| `docs/evidence/vbios-re/04-toolchain.txt` | T17: why the reconstruction is 16-bit assembly, with the toolchain it was built by |
+| `docs/evidence/builds/26-audit-release.log` | T18: `build-package.sh` and `tests/audit-release.sh` after the A29 fix |
+| `docs/evidence/builds/27-source-archive-manifest.log` | T18: tarball manifest after the A29 fix, with the development-only directory counts |
 
 ### 5.5 Images and plan
 

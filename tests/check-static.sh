@@ -34,6 +34,16 @@ export LC_ALL=C
 # the host LANG; set LANG/LC_MESSAGES as well to keep the captured logs ASCII.
 export LANG=C LC_MESSAGES=C
 unset LANGUAGE
+# Coccinelle's Python bridge locates libpython by running
+# `pkg-config --libs python-3.14`. That probe answers with the empty string
+# when libpython lives in a system directory, but a caller's pkg-config
+# resolver settings change the answer: with PKG_CONFIG_SYSROOT_DIR set
+# (docs/ENVIRONMENT.md section 4 exports it for the rootless libdrm build) the
+# answer becomes "-L<mega>/t3/libdrm/usr/lib64", spatch cannot parse it and
+# every .cocci invocation exits 255 before analysing a single file. The gate
+# analyses C and uses pkg-config nowhere else, so the probe runs with the
+# resolver variables cleared. Proved in docs/evidence/builds/28-static-determinism.log.
+unset PKG_CONFIG_SYSROOT_DIR PKG_CONFIG_PATH PKG_CONFIG_LIBDIR
 KDIR=${KDIR:-/lib/modules/$(uname -r)/build}
 update=0
 logdir=
@@ -202,7 +212,10 @@ if have spatch; then
 			-I "$project_dir/src" "$project_dir"/src/*.c >>"$log" 2>&1
 		sub=$?
 		set -e
-		[ "$sub" -eq 0 ] || rc=$sub
+		if [ "$sub" -ne 0 ]; then
+			echo "  spatch exit $sub on $(basename "$patch")" >&2
+			rc=$sub
+		fi
 	done
 	# Kernel-tree patches, when the tree ships scripts/coccinelle. These are
 	# report-only: several need -D report to emit anything.
@@ -220,7 +233,10 @@ if have spatch; then
 				"$project_dir"/src/*.c >>"$log" 2>&1
 			sub=$?
 			set -e
-			[ "$sub" -eq 0 ] || rc=$sub
+			if [ "$sub" -ne 0 ]; then
+				echo "  spatch exit $sub on kernel $patch" >&2
+				rc=$sub
+			fi
 		done
 	fi
 	matches=$(sed -n \
@@ -229,7 +245,14 @@ if have spatch; then
 	count=$(printf '%s' "$matches" | grep -c . || true)
 	echo "coccinelle: exit $rc, $count finding(s)"
 	printf '%s\n' "$matches" | grep . >>"$logdir/coccinelle.fingerprints" || true
-	[ "$rc" -eq 0 ] || { echo "  spatch failed, see $log" >&2; fail=1; }
+	[ "$rc" -eq 0 ] || {
+		if [ "$rc" -eq 255 ]; then
+			echo "  spatch fatal exit (255: internal error or patch parse error, not a finding), see $log" >&2
+		else
+			echo "  spatch failed, see $log" >&2
+		fi
+		fail=1
+	}
 else
 	note_missing spatch
 fi

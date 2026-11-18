@@ -1,0 +1,414 @@
+# utc: 2026-11-18T19:35:00Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# compiler: gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1) (/usr/bin/gcc)
+# toolchain: spatch 1.3 (OCaml 5.3.0), pkg-config 2.3.0
+# command: ./tests/check-static.sh --logs <dir>
+# env: CC=/usr/bin/gcc; sparse 0.6.4, smatch 1.73-8.fc43, cppcheck 2.19.1,
+#      bear 3.1.6, spatch 1.3, pahole v1.32; baseline tests/static/baseline/
+# workdir: /mega/tmp/sm750/t24/tree (git archive of HEAD 332b997)
+# scope: defect A30. T8 round 1 saw the gate both PASS (exit 0) and FAIL with
+#        'coccinelle: exit 255' / 'spatch failed' (exit 1) over the same tree.
+#        This log reproduces that, identifies the cause as one inherited
+#        environment variable, records the fix in tests/check-static.sh, and
+#        proves ten consecutive runs now agree.
+
+## 1. the original flip, as captured by T8
+
+The failing run's raw log survived in the T8 scratch directory. Every one of
+the twelve spatch invocations printed the same line and none of them analysed a
+file (there is no HANDLING: line anywhere in the capture):
+
+$ grep -n "Py.find\|Compilation OK" /tmp/sm750-static.mje5yt/coccinelle.log
+
+# deref-under-null-check.cocci
+...
+$ grep -c 'HANDLING:' /tmp/sm750-static.mje5yt/coccinelle.log
+0
+
+The same run's gate summary (T8, /mega/tmp/sm750/t8/static.log):
+
+coccinelle: exit 255, 0 finding(s)
+  spatch failed, see /tmp/sm750-static.mje5yt/coccinelle.log
+static gate: FAIL (raw logs in /tmp/sm750-static.mje5yt)
+
+sparse, smatch, cppcheck and pahole exited 0 in that run, so the disagreement
+was confined to spatch.
+
+## 2. what the probe under test actually asks pkg-config
+
+spatch's Python bridge is loaded for every .cocci that carries a
+@script:python rule. At load time it locates libpython with
+`pkg-config --libs python-3.14`. The wrappers in /mega/tmp/sm750/t24/shim
+recorded the argv of every pkg-config call spatch made:
+
+$ cat pkgconfig-calls.log        (PATH shim in front of /usr/bin/pkg-config)
+ARGV: --libs python-3.14
+
+/usr/lib64/pkgconfig/python-3.14.pc declares libdir=/usr/lib64 and
+`Libs: -L${libdir}`, and pkg-config suppresses a -L for a system directory:
+
+## probe 1: clean environment
+$ env -u PKG_CONFIG_SYSROOT_DIR -u PKG_CONFIG_PATH pkg-config --libs python-3.14
+$
+[exit 0]
+
+## probe 2: docs/ENVIRONMENT.md section 4 exported
+$ PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm pkg-config --libs python-3.14
+-L/mega/tmp/sm750/t3/libdrm/usr/lib64
+[exit 0]
+
+## probe 3: PKG_CONFIG_SYSROOT_DIR alone is sufficient
+$ PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm pkg-config --libs python-3.14
+-L/mega/tmp/sm750/t3/libdrm/usr/lib64
+[exit 0]
+
+So the probe's answer is the empty string in a clean shell and a sysroot-
+prefixed -L in a shell that carries docs/ENVIRONMENT.md section 4's variables.
+PKG_CONFIG_SYSROOT_DIR alone is enough; PKG_CONFIG_PATH is not needed to
+trigger it.
+
+## 3. the flip is the environment, not the patch, the files or the tree
+
+Twelve spatch invocations, run twice each over the identical tree, once with
+the section-4 variables exported and once with them cleared. Every patch fails
+with the variables set and succeeds with them cleared, so the failure is not
+attributable to any single patch:
+
+$ ./patch-matrix.sh
+
+local/deref-under-null-check       leak   exit 255
+local/deref-under-null-check       clean  exit 0
+local/missing-unlock               leak   exit 255
+local/missing-unlock               clean  exit 0
+local/sizeof-pointer               leak   exit 255
+local/sizeof-pointer               clean  exit 0
+kernel/null/deref_null             leak   exit 255
+kernel/null/deref_null             clean  exit 0
+kernel/api/err_cast                leak   exit 255
+kernel/api/err_cast                clean  exit 0
+kernel/misc/array_size             leak   exit 255
+kernel/misc/array_size             clean  exit 0
+kernel/locks/double_lock           leak   exit 255
+kernel/locks/double_lock           clean  exit 0
+kernel/null/kmerr                  leak   exit 255
+kernel/null/kmerr                  clean  exit 0
+kernel/api/kfree_mismatch          leak   exit 255
+kernel/api/kfree_mismatch          clean  exit 0
+kernel/misc/minmax                 leak   exit 255
+kernel/misc/minmax                 clean  exit 0
+kernel/misc/struct_size            leak   exit 255
+kernel/misc/struct_size            clean  exit 0
+kernel/null/badzero                leak   exit 255
+kernel/null/badzero                clean  exit 0
+
+Verbatim tails. A local patch under the leak exits before it parses a file:
+
+$ tail -2 pm-local_sizeof-pointer-leak.log
+
+Py.find_library_path: unable to parse the output of pkg-config '-L/mega/tmp/sm750/t3/libdrm/usr/lib64'
+
+The one kernel patch that compiles OCaml support code shows the same message
+after loading its module:
+
+$ tail -5 pm-kernel_null_badzero-leak.log
+
+Using native version of ocamlc/ocamlopt/ocamldep
+ocamlopt.opt -shared -o /tmp/ocaml_cocci_7b464c.cmxs -g -I /usr/lib64/coccinelle/ocaml  -I /usr/lib64/ocaml -for-pack Coccinelle_modules /tmp/ocaml_cocci_7b464c.ml
+Compilation OK!
+Loading ML code of the SP...
+Py.find_library_path: unable to parse the output of pkg-config '-L/mega/tmp/sm750/t3/libdrm/usr/lib64'
+
+The same patch with the variables cleared reaches the analysis phase:
+
+$ tail -3 pm-kernel_null_badzero-clean.log
+
+init_defs_builtins: /usr/lib64/coccinelle/standard.h
+Using native version of ocamlc/ocamlopt/ocamldep
+ocamlopt.opt -shared -o /tmp/ocaml_cocci_4a776c.cmxs -g -I /usr/lib64/coccinelle/ocaml  -I /usr/lib64/ocaml -for-pack Coccinelle_modules /tmp/ocaml_cocci_4a776c.ml
+Compilation OK!
+Loading ML code of the SP...
+HANDLING: /mega/tmp/sm750/t24/tree/src/ddk750_chip.c /mega/tmp/sm750/t24/tree/src/ddk750_display.c /mega/tmp/sm750/t24/tree/src/ddk750_hwi2c.c /mega/tmp/sm750/t24/tree/src/ddk750_mode.c /mega/tmp/sm750/t24/tree/src/ddk750_power.c /mega/tmp/sm750/t24/tree/src/ddk750_swi2c.c /mega/tmp/sm750/t24/tree/src/sii902x.c /mega/tmp/sm750/t24/tree/src/sm750_dither.c /mega/tmp/sm750/t24/tree/src/sm750_drm.c /mega/tmp/sm750/t24/tree/src/sm750_drm_mode.c /mega/tmp/sm750/t24/tree/src/sm750hdmidrm.mod.c
+SPECIAL NAMES: adding DEFINE_SIMPLE_DEV_PM_OPS as a declarer
+SPECIAL NAMES: adding list_for_each_entry as a iterator
+SPECIAL NAMES: adding list_for_each_entry_safe as a iterator
+SPECIAL NAMES: adding drm_atomic_for_each_plane_damage as a iterator
+
+## 4. three consecutive full-gate runs with the leak present
+
+Same tree, same baseline, docs/ENVIRONMENT.md section 4's variables exported.
+All three fail on coccinelle and on nothing else:
+
+$ git show HEAD:tests/check-static.sh > pre/tests/check-static.sh
+$ for i in 1 2 3; do env PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig \
+    PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm \
+    LD_LIBRARY_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64 \
+    ./tests/check-static.sh --logs /mega/tmp/sm750/t24/flip$i \
+    >/mega/tmp/sm750/t24/flip$i.out 2>&1; echo "flip$i exit=$?"; done
+
+flip1 exit=1
+flip2 exit=1
+flip3 exit=1
+
+$ cat flip1.out      (flip2.out and flip3.out differ only in the scratch path)
+
+static gate: sparse smatch cppcheck coccinelle pahole
+  kernel trees: /lib/modules/7.3.4-100.fc43.x86_64/build
+  raw logs:     /mega/tmp/sm750/t24/flip1
+sparse[7.3.4-100.fc43.x86_64]: exit 0, 0 warning(s)
+smatch[7.3.4-100.fc43.x86_64]: exit 0, 5 finding(s)
+cppcheck: exit 0, 0 finding(s)
+coccinelle: exit 255, 0 finding(s)
+  spatch failed, see /mega/tmp/sm750/t24/flip1/coccinelle.log
+pahole: exit 0 (informational, struct layout in /mega/tmp/sm750/t24/flip1/pahole.log)
+static gate: FAIL (raw logs in /mega/tmp/sm750/t24/flip1)
+
+The same pre-fix script, same tree, with the variables never set, passes - the
+flip needs only the environment to change:
+
+$ env -u PKG_CONFIG_PATH -u PKG_CONFIG_SYSROOT_DIR -u PKG_CONFIG_LIBDIR \
+    ./tests/check-static.sh --logs /mega/tmp/sm750/t24/preclean
+
+static gate: sparse smatch cppcheck coccinelle pahole
+  kernel trees: /lib/modules/7.3.4-100.fc43.x86_64/build
+  raw logs:     /mega/tmp/sm750/t24/preclean
+sparse[7.3.4-100.fc43.x86_64]: exit 0, 0 warning(s)
+smatch[7.3.4-100.fc43.x86_64]: exit 0, 5 finding(s)
+cppcheck: exit 0, 0 finding(s)
+coccinelle: exit 0, 0 finding(s)
+pahole: exit 0 (informational, struct layout in /mega/tmp/sm750/t24/preclean/pahole.log)
+static gate: PASS (raw logs in /mega/tmp/sm750/t24/preclean)
+
+## 5. the fix
+
+tests/check-static.sh clears the three pkg-config resolver variables next to
+the existing locale sanitisation. The gate analyses C and consumes pkg-config
+nowhere else, so this removes a dependency rather than a check: no patch, no
+file and no baseline line was touched.
+
+
+diff --git a/tests/check-static.sh b/tests/check-static.sh
+index 48941b6..9e5a62f 100755
+--- a/tests/check-static.sh
++++ b/tests/check-static.sh
+@@ -34,6 +34,16 @@ export LC_ALL=C
+ # the host LANG; set LANG/LC_MESSAGES as well to keep the captured logs ASCII.
+ export LANG=C LC_MESSAGES=C
+ unset LANGUAGE
++# Coccinelle's Python bridge locates libpython by running
++# `pkg-config --libs python-3.14`. That probe answers with the empty string
++# when libpython lives in a system directory, but a caller's pkg-config
++# resolver settings change the answer: with PKG_CONFIG_SYSROOT_DIR set
++# (docs/ENVIRONMENT.md section 4 exports it for the rootless libdrm build) the
++# answer becomes "-L<mega>/t3/libdrm/usr/lib64", spatch cannot parse it and
++# every .cocci invocation exits 255 before analysing a single file. The gate
++# analyses C and uses pkg-config nowhere else, so the probe runs with the
++# resolver variables cleared. Proved in docs/evidence/builds/28-static-determinism.log.
++unset PKG_CONFIG_SYSROOT_DIR PKG_CONFIG_PATH PKG_CONFIG_LIBDIR
+ KDIR=${KDIR:-/lib/modules/$(uname -r)/build}
+ update=0
+ logdir=
+@@ -202,7 +212,10 @@ if have spatch; then
+ 			-I "$project_dir/src" "$project_dir"/src/*.c >>"$log" 2>&1
+ 		sub=$?
+ 		set -e
+-		[ "$sub" -eq 0 ] || rc=$sub
++		if [ "$sub" -ne 0 ]; then
++			echo "  spatch exit $sub on $(basename "$patch")" >&2
++			rc=$sub
++		fi
+ 	done
+ 	# Kernel-tree patches, when the tree ships scripts/coccinelle. These are
+ 	# report-only: several need -D report to emit anything.
+@@ -220,7 +233,10 @@ if have spatch; then
+ 				"$project_dir"/src/*.c >>"$log" 2>&1
+ 			sub=$?
+ 			set -e
+-			[ "$sub" -eq 0 ] || rc=$sub
++			if [ "$sub" -ne 0 ]; then
++				echo "  spatch exit $sub on kernel $patch" >&2
++				rc=$sub
++			fi
+ 		done
+ 	fi
+ 	matches=$(sed -n \
+@@ -229,7 +245,14 @@ if have spatch; then
+ 	count=$(printf '%s' "$matches" | grep -c . || true)
+ 	echo "coccinelle: exit $rc, $count finding(s)"
+ 	printf '%s\n' "$matches" | grep . >>"$logdir/coccinelle.fingerprints" || true
+-	[ "$rc" -eq 0 ] || { echo "  spatch failed, see $log" >&2; fail=1; }
++	[ "$rc" -eq 0 ] || {
++		if [ "$rc" -eq 255 ]; then
++			echo "  spatch fatal exit (255: internal error or patch parse error, not a finding), see $log" >&2
++		else
++			echo "  spatch failed, see $log" >&2
++		fi
++		fail=1
++	}
+ else
+ 	note_missing spatch
+ fi
+
+## 6. ten consecutive runs, unchanged tree, leak still exported
+
+The proof is "identical exit codes over an unchanged tree", run in the
+environment that used to fail, so a PASS cannot be an artefact of a fresh
+shell:
+
+$ for i in $(seq 1 10); do logger=ten$i; \
+    env PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig \
+    PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm \
+    LD_LIBRARY_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64 \
+    ./tests/check-static.sh --logs /mega/tmp/sm750/t24/$logger \
+    >/mega/tmp/sm750/t24/$logger.out 2>&1; \
+    echo "$logger exit=$?"; done > /mega/tmp/sm750/t24/ten.log
+
+ten1 exit=0
+ten2 exit=0
+ten3 exit=0
+ten4 exit=0
+ten5 exit=0
+ten6 exit=0
+ten7 exit=0
+ten8 exit=0
+ten9 exit=0
+ten10 exit=0
+
+Exit codes: 0 0 0 0 0 0 0 0 0 0 (ten identical). Every run ends
+`static gate: PASS` and no run's coccinelle log contains the pkg-config line:
+
+$ for i in $(seq 1 10); do tail -1 ten$i.out; done
+
+static gate: PASS (raw logs in /mega/tmp/sm750/t24/ten1)
+static gate: PASS (raw logs in /mega/tmp/sm750/t24/ten2)
+static gate: PASS (raw logs in /mega/tmp/sm750/t24/ten3)
+static gate: PASS (raw logs in /mega/tmp/sm750/t24/ten4)
+static gate: PASS (raw logs in /mega/tmp/sm750/t24/ten5)
+static gate: PASS (raw logs in /mega/tmp/sm750/t24/ten6)
+static gate: PASS (raw logs in /mega/tmp/sm750/t24/ten7)
+static gate: PASS (raw logs in /mega/tmp/sm750/t24/ten8)
+static gate: PASS (raw logs in /mega/tmp/sm750/t24/ten9)
+static gate: PASS (raw logs in /mega/tmp/sm750/t24/ten10)
+
+$ grep -l 'pkg-config' ten*/coccinelle.log
+(no output)
+
+Full transcript of one of the ten:
+
+$ cat ten5.out
+
+static gate: sparse smatch cppcheck coccinelle pahole
+  kernel trees: /lib/modules/7.3.4-100.fc43.x86_64/build
+  raw logs:     /mega/tmp/sm750/t24/ten5
+sparse[7.3.4-100.fc43.x86_64]: exit 0, 0 warning(s)
+smatch[7.3.4-100.fc43.x86_64]: exit 0, 5 finding(s)
+cppcheck: exit 0, 0 finding(s)
+coccinelle: exit 0, 0 finding(s)
+pahole: exit 0 (informational, struct layout in /mega/tmp/sm750/t24/ten5/pahole.log)
+static gate: PASS (raw logs in /mega/tmp/sm750/t24/ten5)
+
+## 7. control: a clean shell still passes
+
+The fix must not have made the gate pass by disabling anything. A run with the
+variables never set produces the same result and the same finding counts:
+
+$ env -u PKG_CONFIG_PATH -u PKG_CONFIG_SYSROOT_DIR -u PKG_CONFIG_LIBDIR \
+    ./tests/check-static.sh --logs /mega/tmp/sm750/t24/clean1
+
+static gate: sparse smatch cppcheck coccinelle pahole
+  kernel trees: /lib/modules/7.3.4-100.fc43.x86_64/build
+  raw logs:     /mega/tmp/sm750/t24/clean1
+sparse[7.3.4-100.fc43.x86_64]: exit 0, 0 warning(s)
+smatch[7.3.4-100.fc43.x86_64]: exit 0, 5 finding(s)
+cppcheck: exit 0, 0 finding(s)
+coccinelle: exit 0, 0 finding(s)
+pahole: exit 0 (informational, struct layout in /mega/tmp/sm750/t24/clean1/pahole.log)
+static gate: PASS (raw logs in /mega/tmp/sm750/t24/clean1)
+
+## 8. control: a planted defect is still caught, by sparse and by smatch
+
+Throwaway copy with two plants appended to src/sm750_dither.c (a non-static
+global with no declaration, and `u8 small[4]` written in a loop to index 4).
+The gate must fail, and must name the findings:
+
+
+static gate: sparse smatch cppcheck coccinelle pahole
+  kernel trees: /lib/modules/7.3.4-100.fc43.x86_64/build
+  raw logs:     /mega/tmp/sm750/t24/planted-logs
+sparse[7.3.4-100.fc43.x86_64]: exit 0, 3 warning(s)
+smatch[7.3.4-100.fc43.x86_64]: exit 0, 6 finding(s)
+cppcheck: exit 0, 1 finding(s)
+coccinelle: exit 0, 0 finding(s)
+pahole: exit 0 (informational, struct layout in /mega/tmp/sm750/t24/planted-logs/pahole.log)
+NEW sparse findings beyond the recorded baseline:
+  1 7.3.4-100.fc43.x86_64 sparse sm750_dither.c warning: no previous prototype for 'sm750_planted_smatch_gate' [-Wmissing-prototypes]
+  1 7.3.4-100.fc43.x86_64 sparse sm750_dither.c warning: symbol 'sm750_planted_global_for_gate' was not declared. Should it be static?
+  1 7.3.4-100.fc43.x86_64 sparse sm750_dither.c warning: symbol 'sm750_planted_smatch_gate' was not declared. Should it be static?
+NEW smatch findings beyond the recorded baseline:
+  1 7.3.4-100.fc43.x86_64 smatch sm750_dither.c sm750_planted_smatch_gate() error: buffer overflow 'small' 4 <= 4
+NEW cppcheck findings beyond the recorded baseline:
+  1 cppcheck sm750_dither.c error arrayIndexOutOfBounds
+static gate: FAIL (raw logs in /mega/tmp/sm750/t24/planted-logs)
+
+## 8b. control: a corrupted patch names itself instead of failing anonymously
+
+A copy whose tests/static/cocci/sizeof-pointer.cocci has four malformed lines
+appended. spatch refuses to parse it and exits 255 as well, so the new
+diagnostic must attribute that 255 to the patch and must not describe it as a
+finding:
+
+
+static gate: sparse smatch cppcheck coccinelle pahole
+  kernel trees: /lib/modules/7.3.4-100.fc43.x86_64/build
+  raw logs:     /mega/tmp/sm750/t24/badpatch-logs
+sparse[7.3.4-100.fc43.x86_64]: exit 0, 0 warning(s)
+smatch[7.3.4-100.fc43.x86_64]: exit 0, 5 finding(s)
+cppcheck: exit 0, 0 finding(s)
+  spatch exit 255 on sizeof-pointer.cocci
+coccinelle: exit 255, 0 finding(s)
+  spatch fatal exit (255: internal error or patch parse error, not a finding), see /mega/tmp/sm750/t24/badpatch-logs/coccinelle.log
+pahole: exit 0 (informational, struct layout in /mega/tmp/sm750/t24/badpatch-logs/pahole.log)
+static gate: FAIL (raw logs in /mega/tmp/sm750/t24/badpatch-logs)
+
+The raw log names the real reason:
+
+$ sed -n '/# sizeof-pointer.cocci/,$p' badpatch-logs/coccinelle.log | head -5
+
+HANDLING: /mega/tmp/sm750/t24/badpatch/src/ddk750_chip.c /mega/tmp/sm750/t24/badpatch/src/ddk750_display.c /mega/tmp/sm750/t24/badpatch/src/ddk750_hwi2c.c /mega/tmp/sm750/t24/badpatch/src/ddk750_mode.c /mega/tmp/sm750/t24/badpatch/src/ddk750_power.c /mega/tmp/sm750/t24/badpatch/src/ddk750_swi2c.c /mega/tmp/sm750/t24/badpatch/src/sii902x.c /mega/tmp/sm750/t24/badpatch/src/sm750_dither.c /mega/tmp/sm750/t24/badpatch/src/sm750_drm.c /mega/tmp/sm750/t24/badpatch/src/sm750_drm_mode.c /mega/tmp/sm750/t24/badpatch/src/sm750hdmidrm.mod.c
+SPECIAL NAMES: adding DEFINE_SIMPLE_DEV_PM_OPS as a declarer
+SPECIAL NAMES: adding list_for_each_entry as a iterator
+SPECIAL NAMES: adding list_for_each_entry_safe as a iterator
+SPECIAL NAMES: adding drm_atomic_for_each_plane_damage as a iterator
+
+## 8c. the edit that widened the 255 message did not break the gate
+
+The message in tests/check-static.sh was changed from "spatch internal error"
+to "spatch fatal exit (255: internal error or patch parse error, not a
+finding)" after 8b showed 255 also covers a parse error. One further run in the
+leaking environment after that edit:
+
+$ tail -2 ten11.out
+
+pahole: exit 0 (informational, struct layout in /mega/tmp/sm750/t24/ten11/pahole.log)
+static gate: PASS (raw logs in /mega/tmp/sm750/t24/ten11)
+
+## 9. invariants
+
+tests/static/baseline/ is unchanged by this task:
+
+$ for f in tests/static/baseline/*.txt; do echo "$f: $(grep -c . $f)"; done
+tests/static/baseline/coccinelle.txt: 0
+tests/static/baseline/cppcheck.txt: 0
+tests/static/baseline/smatch.txt: 4
+tests/static/baseline/sparse.txt: 0
+
+`check:` in the Makefile is untouched; its recipe still holds 17 command lines
+(Makefile:32-48; Makefile:31 is a tab continuation of the prerequisite list at
+Makefile:30, which is why a naive tab count over the whole block reports 18):
+
+$ sed -n '30,48p' Makefile | grep -c '^\t\t'
+1        (the prerequisite continuation, Makefile:31)
+$ sed -n '32,48p' Makefile | grep -c '^\t'
+17
+
+The gate remains opt-in: `make static` -> ./tests/check-static.sh (Makefile:58-59).
+

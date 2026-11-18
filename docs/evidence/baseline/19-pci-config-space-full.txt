@@ -1,0 +1,174 @@
+# host: deneb
+# command: sudo -n /usr/local/sbin/sm750-lspci  ->  lspci -vvv -xxx -s 01:00.0
+# source: sm750-lspci helper, captured 2026-11-18T09:35:17Z by task T14; raw copy /mega/tmp/sm750/t14/lspci.txt
+# why: closes GAP-B5. Full config space including the capability list above 0x40 that an unprivileged lspci reports as "access denied".
+# companion: docs/evidence/baseline/07-pci-config-space.txt (unprivileged, stops at 0x3f)
+# ---- output (stdout, LC_ALL=C) ----
+# date: 2026-11-18T09:35:17Z
+# ===== lspci -vvv -xxx -s 01:00.0 =====
+01:00.0 VGA compatible controller: Silicon Motion, Inc. SM750 (rev a1) (prog-if 00 [VGA controller])
+	Subsystem: Silicon Motion, Inc. SM750
+	Physical Slot: 1
+	Control: I/O- Mem+ BusMaster+ SpecCycle- MemWINV- VGASnoop- ParErr+ Stepping- SERR+ FastB2B- DisINTx-
+	Status: Cap+ 66MHz- UDF- FastB2B- ParErr- DEVSEL=fast >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
+	Latency: 0, Cache Line Size: 32 bytes
+	Interrupts: pin B routed to IRQ 25
+	NUMA node: 0
+	Region 0: Memory at c0000000 (32-bit, prefetchable) [size=64M]
+	Region 1: Memory at c7200000 (32-bit, non-prefetchable) [size=2M]
+	Expansion ROM at c7400000 [disabled] [size=64K]
+	Capabilities: [40] Power Management version 3
+		Flags: PMEClk- DSI- D1+ D2- AuxCurrent=375mA PME(D0+,D1+,D2-,D3hot+,D3cold-)
+		Status: D0 NoSoftRst- PME-Enable- DSel=0 DScale=0 PME-
+	Capabilities: [50] MSI: Enable- Count=1/1 Maskable- 64bit+
+		Address: 0000000000000000  Data: 0000
+	Capabilities: [70] Express (v2) Legacy Endpoint, IntMsgNum 0
+		DevCap:	MaxPayload 128 bytes, PhantFunc 0, Latency L0s <1us, L1 <8us
+			ExtTag- AttnBtn- AttnInd- PwrInd- RBE+ FLReset- TEE-IO-
+		DevCtl:	CorrErr- NonFatalErr- FatalErr- UnsupReq-
+			RlxdOrd- ExtTag- PhantFunc- AuxPwr- NoSnoop-
+			MaxPayload 128 bytes, MaxReadReq 512 bytes
+		DevSta:	CorrErr+ NonFatalErr- FatalErr- UnsupReq+ AuxPwr- TransPend-
+		LnkCap:	Port #0, Speed 2.5GT/s, Width x1, ASPM L0s L1, Exit Latency L0s <512ns, L1 <16us
+			ClockPM+ Surprise- LLActRep- BwNot- ASPMOptComp-
+		LnkCtl:	ASPM Disabled; RCB 64 bytes, LnkDisable- CommClk+
+			ExtSynch- ClockPM- AutWidDis- BWInt- AutBWInt- FltModeDis-
+		LnkSta:	Speed 2.5GT/s, Width x1
+			TrErr- Train- SlotClk+ DLActive- BWMgmt- ABWMgmt-
+		DevCap2: Completion Timeout: Not Supported, TimeoutDis+ NROPrPrP- LTR-
+			 10BitTagComp- 10BitTagReq- OBFF Not Supported, ExtFmt- EETLPPrefix-
+			 EmergencyPowerReduction Not Supported, EmergencyPowerReductionInit-
+			 FRS-
+			 AtomicOpsCap: 32bit- 64bit- 128bitCAS-
+		DevCtl2: Completion Timeout: 50us to 50ms, TimeoutDis-
+			 AtomicOpsCtl: ReqEn-
+			 IDOReq- IDOCompl- LTR- EmergencyPowerReductionReq-
+			 10BitTagReq- OBFF Disabled, EETLPPrefixBlk-
+		LnkCtl2: Target Link Speed: 2.5GT/s, EnterCompliance- SpeedDis-
+			 Transmit Margin: Normal Operating Range, EnterModifiedCompliance- ComplianceSOS-
+			 Compliance Preset/De-emphasis: -6dB de-emphasis, 0dB preshoot
+		LnkSta2: Current De-emphasis Level: -6dB, EqualizationComplete- EqualizationPhase1-
+			 EqualizationPhase2- EqualizationPhase3- LinkEqualizationRequest-
+			 Retimer- 2Retimers- CrosslinkRes: unsupported, FltMode-
+	Capabilities: [b0] MSI-X: Enable- Count=1 Masked-
+		Vector table: BAR=5 offset=00000000
+		PBA: BAR=5 offset=00000000
+	Capabilities: [100 v1] Advanced Error Reporting
+		UESta:	DLP- SDES- TLP- FCP- CmpltTO- CmpltAbrt- UnxCmplt- RxOF- MalfTLP-
+			ECRC- UnsupReq- ACSViol- UncorrIntErr- BlockedTLP- AtomicOpBlocked- TLPBlockedErr-
+			PoisonTLPBlocked- DMWrReqBlocked- IDECheck- MisIDETLP- PCRC_CHECK- TLPXlatBlocked-
+		UEMsk:	DLP- SDES- TLP- FCP- CmpltTO- CmpltAbrt- UnxCmplt- RxOF- MalfTLP-
+			ECRC- UnsupReq- ACSViol- UncorrIntErr- BlockedTLP- AtomicOpBlocked- TLPBlockedErr-
+			PoisonTLPBlocked- DMWrReqBlocked- IDECheck- MisIDETLP- PCRC_CHECK- TLPXlatBlocked-
+		UESvrt:	DLP+ SDES+ TLP- FCP+ CmpltTO- CmpltAbrt- UnxCmplt- RxOF+ MalfTLP+
+			ECRC- UnsupReq- ACSViol- UncorrIntErr- BlockedTLP- AtomicOpBlocked- TLPBlockedErr-
+			PoisonTLPBlocked- DMWrReqBlocked- IDECheck- MisIDETLP- PCRC_CHECK- TLPXlatBlocked-
+		CESta:	RxErr- BadTLP- BadDLLP- Rollover- Timeout- AdvNonFatalErr+ CorrIntErr- HeaderOF-
+		CEMsk:	RxErr- BadTLP- BadDLLP- Rollover- Timeout- AdvNonFatalErr+ CorrIntErr- HeaderOF-
+		AERCap:	First Error Pointer: 00, ECRCGenCap+ ECRCGenEn- ECRCChkCap+ ECRCChkEn-
+			MultHdrRecCap- MultHdrRecEn- TLPPfxPres- HdrLogCap-
+		HeaderLog: 00000000 00000000 00000000 00000000
+	Capabilities: [140 v1] Virtual Channel
+		Caps:	LPEVC=0 RefClk=100ns PATEntryBits=1
+		Arb:	Fixed- WRR32- WRR64- WRR128-
+		Ctrl:	ArbSelect=Fixed
+		Status:	InProgress-
+		VC0:	Caps:	PATOffset=00 MaxTimeSlots=1 RejSnoopTrans-
+			Arb:	Fixed- WRR32- WRR64- WRR128- TWRR128- WRR256-
+			Ctrl:	Enable+ ID=0 ArbSelect=Fixed TC/VC=01
+			Status:	NegoPending- InProgress-
+	Kernel driver in use: sm750hdmidrm
+	Kernel modules: sm750hdmidrm
+00: 6f 12 50 07 46 01 10 00 a1 00 00 03 08 00 00 00
+10: 08 00 00 c0 00 00 20 c7 00 00 00 00 00 00 00 00
+20: 00 00 00 00 00 00 00 00 00 00 00 00 6f 12 50 07
+30: 00 00 40 c7 40 00 00 00 00 00 00 00 0b 01 00 00
+40: 01 50 c3 5b 00 00 00 00 00 00 00 00 00 00 00 00
+50: 05 70 80 00 00 00 00 00 00 00 00 00 00 00 00 00
+60: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+70: 10 b0 12 00 00 87 00 00 00 20 09 00 11 3c 06 00
+80: 40 00 11 10 00 00 00 00 00 00 00 00 00 00 00 00
+90: 00 00 00 00 10 00 00 00 00 00 00 00 00 00 00 00
+a0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+b0: 11 00 00 00 05 00 00 00 05 00 00 00 00 00 00 00
+c0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+d0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+e0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+f0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+
+
+# ===== lspci -vvv -d 126f:0750 =====
+01:00.0 VGA compatible controller: Silicon Motion, Inc. SM750 (rev a1) (prog-if 00 [VGA controller])
+	Subsystem: Silicon Motion, Inc. SM750
+	Physical Slot: 1
+	Control: I/O- Mem+ BusMaster+ SpecCycle- MemWINV- VGASnoop- ParErr+ Stepping- SERR+ FastB2B- DisINTx-
+	Status: Cap+ 66MHz- UDF- FastB2B- ParErr- DEVSEL=fast >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
+	Latency: 0, Cache Line Size: 32 bytes
+	Interrupts: pin B routed to IRQ 25
+	NUMA node: 0
+	Region 0: Memory at c0000000 (32-bit, prefetchable) [size=64M]
+	Region 1: Memory at c7200000 (32-bit, non-prefetchable) [size=2M]
+	Expansion ROM at c7400000 [disabled] [size=64K]
+	Capabilities: [40] Power Management version 3
+		Flags: PMEClk- DSI- D1+ D2- AuxCurrent=375mA PME(D0+,D1+,D2-,D3hot+,D3cold-)
+		Status: D0 NoSoftRst- PME-Enable- DSel=0 DScale=0 PME-
+	Capabilities: [50] MSI: Enable- Count=1/1 Maskable- 64bit+
+		Address: 0000000000000000  Data: 0000
+	Capabilities: [70] Express (v2) Legacy Endpoint, IntMsgNum 0
+		DevCap:	MaxPayload 128 bytes, PhantFunc 0, Latency L0s <1us, L1 <8us
+			ExtTag- AttnBtn- AttnInd- PwrInd- RBE+ FLReset- TEE-IO-
+		DevCtl:	CorrErr- NonFatalErr- FatalErr- UnsupReq-
+			RlxdOrd- ExtTag- PhantFunc- AuxPwr- NoSnoop-
+			MaxPayload 128 bytes, MaxReadReq 512 bytes
+		DevSta:	CorrErr+ NonFatalErr- FatalErr- UnsupReq+ AuxPwr- TransPend-
+		LnkCap:	Port #0, Speed 2.5GT/s, Width x1, ASPM L0s L1, Exit Latency L0s <512ns, L1 <16us
+			ClockPM+ Surprise- LLActRep- BwNot- ASPMOptComp-
+		LnkCtl:	ASPM Disabled; RCB 64 bytes, LnkDisable- CommClk+
+			ExtSynch- ClockPM- AutWidDis- BWInt- AutBWInt- FltModeDis-
+		LnkSta:	Speed 2.5GT/s, Width x1
+			TrErr- Train- SlotClk+ DLActive- BWMgmt- ABWMgmt-
+		DevCap2: Completion Timeout: Not Supported, TimeoutDis+ NROPrPrP- LTR-
+			 10BitTagComp- 10BitTagReq- OBFF Not Supported, ExtFmt- EETLPPrefix-
+			 EmergencyPowerReduction Not Supported, EmergencyPowerReductionInit-
+			 FRS-
+			 AtomicOpsCap: 32bit- 64bit- 128bitCAS-
+		DevCtl2: Completion Timeout: 50us to 50ms, TimeoutDis-
+			 AtomicOpsCtl: ReqEn-
+			 IDOReq- IDOCompl- LTR- EmergencyPowerReductionReq-
+			 10BitTagReq- OBFF Disabled, EETLPPrefixBlk-
+		LnkCtl2: Target Link Speed: 2.5GT/s, EnterCompliance- SpeedDis-
+			 Transmit Margin: Normal Operating Range, EnterModifiedCompliance- ComplianceSOS-
+			 Compliance Preset/De-emphasis: -6dB de-emphasis, 0dB preshoot
+		LnkSta2: Current De-emphasis Level: -6dB, EqualizationComplete- EqualizationPhase1-
+			 EqualizationPhase2- EqualizationPhase3- LinkEqualizationRequest-
+			 Retimer- 2Retimers- CrosslinkRes: unsupported, FltMode-
+	Capabilities: [b0] MSI-X: Enable- Count=1 Masked-
+		Vector table: BAR=5 offset=00000000
+		PBA: BAR=5 offset=00000000
+	Capabilities: [100 v1] Advanced Error Reporting
+		UESta:	DLP- SDES- TLP- FCP- CmpltTO- CmpltAbrt- UnxCmplt- RxOF- MalfTLP-
+			ECRC- UnsupReq- ACSViol- UncorrIntErr- BlockedTLP- AtomicOpBlocked- TLPBlockedErr-
+			PoisonTLPBlocked- DMWrReqBlocked- IDECheck- MisIDETLP- PCRC_CHECK- TLPXlatBlocked-
+		UEMsk:	DLP- SDES- TLP- FCP- CmpltTO- CmpltAbrt- UnxCmplt- RxOF- MalfTLP-
+			ECRC- UnsupReq- ACSViol- UncorrIntErr- BlockedTLP- AtomicOpBlocked- TLPBlockedErr-
+			PoisonTLPBlocked- DMWrReqBlocked- IDECheck- MisIDETLP- PCRC_CHECK- TLPXlatBlocked-
+		UESvrt:	DLP+ SDES+ TLP- FCP+ CmpltTO- CmpltAbrt- UnxCmplt- RxOF+ MalfTLP+
+			ECRC- UnsupReq- ACSViol- UncorrIntErr- BlockedTLP- AtomicOpBlocked- TLPBlockedErr-
+			PoisonTLPBlocked- DMWrReqBlocked- IDECheck- MisIDETLP- PCRC_CHECK- TLPXlatBlocked-
+		CESta:	RxErr- BadTLP- BadDLLP- Rollover- Timeout- AdvNonFatalErr+ CorrIntErr- HeaderOF-
+		CEMsk:	RxErr- BadTLP- BadDLLP- Rollover- Timeout- AdvNonFatalErr+ CorrIntErr- HeaderOF-
+		AERCap:	First Error Pointer: 00, ECRCGenCap+ ECRCGenEn- ECRCChkCap+ ECRCChkEn-
+			MultHdrRecCap- MultHdrRecEn- TLPPfxPres- HdrLogCap-
+		HeaderLog: 00000000 00000000 00000000 00000000
+	Capabilities: [140 v1] Virtual Channel
+		Caps:	LPEVC=0 RefClk=100ns PATEntryBits=1
+		Arb:	Fixed- WRR32- WRR64- WRR128-
+		Ctrl:	ArbSelect=Fixed
+		Status:	InProgress-
+		VC0:	Caps:	PATOffset=00 MaxTimeSlots=1 RejSnoopTrans-
+			Arb:	Fixed- WRR32- WRR64- WRR128- TWRR128- WRR256-
+			Ctrl:	Enable+ ID=0 ArbSelect=Fixed TC/VC=01
+			Status:	NegoPending- InProgress-
+	Kernel driver in use: sm750hdmidrm
+	Kernel modules: sm750hdmidrm
+

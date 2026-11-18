@@ -1,11 +1,12 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Defect dispositions
 
-One row per defect inventoried in [AUDIT.md](AUDIT.md), plus five found later:
+One row per defect inventoried in [AUDIT.md](AUDIT.md), plus six found later:
 `A25`, in the kernel log of the running 0.5.9 build, `A26`, in the IGT
 `kms_addfb_basic` run, `A27`, isolated by a targeted reproduction of the
 same 0.5.9 kernel log episode, `A28`, by the static-analysis gate added in
-T19, and `A29`, by the release gate itself. They are recorded here because this
+T19, `A29`, by the release gate itself, and `A30`, by the acceptance review of
+that same static gate. They are recorded here because this
 table is the current defect state, not a copy of the audit. [AUDIT.md](AUDIT.md)
 still describes the pre-fix tree and is not rewritten. Statuses:
 
@@ -50,6 +51,7 @@ after (working tree) form of every fixed item. All logs were produced unprivileg
 | A27 | S3 | A single failed modeset becomes a kernel WARNING plus 30 s of stalled atomic commits, and once a refcount underflow. `sm750_pipe_enable`'s `fail:` label returns `-110` from `sm750_program_mode` without calling `drm_crtc_vblank_on()` and without consuming the commit's vblank event, so `drm_atomic_helper_commit_hw_done` trips `WARN_ON(new_crtc_state->event)` (`drivers/gpu/drm/drm_atomic_helper.c:2758` in 7.3.4), every later commit waits 10 s per atomic object (CRTC 38, CONNECTOR 35, PLANE 36) and a later `drm_release` restore can underflow a refcount in `__drm_atomic_helper_plane_destroy_state` via `drm_gem_simple_kms_destroy_shadow_plane_state` | fixed | trigger isolated by reproduction: SIGINT a kmscube ~300 ms into its first commit, then `modetest -s 35@38:1024x768-60`; the failure lands on the fbdev-restore commit issued from `drm_release`. Measured rate 1/36 (2.8 %) for that shape and 0/169 for every other shape, so the trigger is established and the rate is not; the fail path (`src/sm750_drm.c:3105-3117`, success path `:3101-3102`) is the defect and is independent of the trigger. Which of the five fallible calls in `sm750_program_mode` (`src/sm750_drm.c:1312`, `:1316`, `:1319`, `:1346`, `:1349`) returns `-110` is not identifiable on 0.5.9 (no debug output on that path, no `regs` debugfs); the 330.003 ms gap ranks `ddk750_set_display_control(0, false)` at `src/sm750_drm.c:1316` first (`src/ddk750_display.c:12-26`, `:68-97`, `src/ddk750_mode.c:285-305`). Re-produced on the installed 0.6.0 by T11, which rules out any T5/T9/T13 change as the cause; fixed in T20 by finishing the abandoned commit at the shared `fail:` label - `drm_crtc_vblank_on()` then `sm750_arm_vblank_event()` at `src/sm750_drm.c:3131`/`:3132`, the same two calls the success path makes at `:3101`/`:3102`, so `new_crtc_state->event` is consumed whether the event is armed on the driver timer or sent at once. Static gate: `tests/check-drm-policy.sh:141-167` asserts the fail block contains both calls and has no early `return;` (no new `make check` recipe line, so the count stays 17). Post-fix reproduction: 108/108 attempts with zero WARNING, zero `commit wait timed out` and zero refcount underflow, while the `-110` itself still fired 5 times in the run - the trigger is unchanged, the cascade is gone | `docs/evidence/runtime/09-hdmi-minus-110.txt`, `docs/evidence/runtime/07-kernel-log.txt:50-110`, `docs/evidence/runtime/18-kernel-log-0.6.0.txt`, `docs/evidence/runtime/17-a27-fix-build.txt`, `docs/evidence/runtime/18-a27-fix-install.txt`, `docs/evidence/runtime/19-a27-fix-reproduce.txt` |
 | A28 | S4 | Found by static analysis, not by the audit: smatch reports `shift has higher precedence than mask` five times on 7.3.4 and three times on 6.17.1, at `src/sm750_drm.c:1651,1663,1665,1673` and `src/sii902x.c:741`. Not a driver defect and not fixable in the driver: the message is produced by `GENMASK_TYPE()` (`include/linux/bits.h:52`), which mixes `<<` with `&`/`>>` without inner parentheses and is reached through `DMA_BIT_MASK()` (`include/linux/dma-mapping.h:126`) and `GENMASK()`; the enclosing cast and parentheses make the value correct, and smatch's precedence check does not model the cast. A five-line out-of-tree probe reproduces the warning with no driver code. The four fixed sparse findings (`sm750_test_*` globals with no declaration in scope) and the cppcheck `unknownMacro` suppression are also recorded there | accepted | no code change: the driver expressions are correct and the header macro is not ours to edit. The residual findings are pinned in the opt-in gate baseline, so the gate fails on anything new while these stay quiet. Also records that the out-of-tree module has no `.BTF` section (`Skipping BTF generation ... due to unavailability of vmlinux`), so `pahole -F btf` is unavailable and layouts come from DWARF | `docs/STATIC-ANALYSIS.md`, `docs/evidence/builds/20-static-sparse.log` to `25-static-gate.log` |
 | A29 | S2 | The packager and the release gate each carried their own copy of the development-only directory list, so they disagreed by construction: `build-package.sh:98-100` shipped the tracked tree minus `docs/images` only, while `tests/audit-release.sh:54-58` failed the archive if `docs/plan`, `docs/evidence` or `docs/images` appeared in it. Once `docs/plan/` and `docs/evidence/` became tracked, every fresh build produced a tarball the gate rejected: `./tests/audit-release.sh` exited 1 with `Source archive contains development-only content: docs/plan` on a 160-file archive that carried 1 `docs/plan` and 69 `docs/evidence` entries. The same divergence had a second consequence: the shipped `docs/ENVIRONMENT.md` named three absolute `$HOME` paths that the audit's own private-path scan rejects, hidden behind the earlier exit | fixed | one list, read by every consumer: `packaging/source-excludes.sh` declares `sm750_dev_only=(docs/plan docs/evidence docs/images)` and `sm750_dev_only_pathspecs()`; `build-package.sh:90-128` sources it for both the `git ls-files` pathspecs and the non-git `--exclude=` arguments; `tests/audit-release.sh:52-80` sources it for the forbidden-directory loop and for the manifest diff; `tests/check-rpm-dkms.sh:70-85` sources it for the DKMS payload. `tests/check-drm-packaging.sh:32-49` asserts all three paths are in the shared file, that both scripts read it, and that neither hard-codes `:(exclude)docs/` again. `docs/ENVIRONMENT.md:41-51` now writes those paths with `~/`. The gate is not narrowed: a tarball rebuilt without the list still fails it | `docs/evidence/builds/26-audit-release.log`, `docs/evidence/builds/27-source-archive-manifest.log` |
+| A30 | S3 | The opt-in static gate was non-deterministic: over one unchanged tree, T8's acceptance run got `static gate: PASS` (exit 0) and another got `coccinelle: exit 255` / `spatch failed` (exit 1). The cause is an inherited variable, not the driver and not a patch: spatch's Python bridge locates libpython with `pkg-config --libs python-3.14`, which returns the empty string in a clean shell but `-L/mega/tmp/sm750/t3/libdrm/usr/lib64` once `docs/ENVIRONMENT.md` section 4's `PKG_CONFIG_SYSROOT_DIR` is exported, and spatch then dies with `Py.find_library_path: unable to parse the output of pkg-config ...` before analysing a file | fixed | `tests/check-static.sh:37-46` clears `PKG_CONFIG_SYSROOT_DIR`, `PKG_CONFIG_PATH` and `PKG_CONFIG_LIBDIR` next to the existing locale sanitisation (the gate asks pkg-config nothing, so this removes a dependency and not a check); `:216` and `:237` name the patch behind a non-zero spatch exit; `:250` labels a 255 as a fatal spatch exit rather than a finding. No patch, no baseline line and no `src/` file was touched; the `check` recipe is still 17 commands | `docs/evidence/builds/28-static-determinism.log` |
 
 ## Deferred and accepted items in detail
 
@@ -376,6 +378,51 @@ so the fix is the missing declaration, now at `src/ddk750_chip.h:15-24`, with
 the three ad-hoc `extern` lines in `src/ddk750_mode.c` and the one in
 `src/sii902x.c` removed. No behaviour change; sparse is clean on both trees
 afterwards.
+
+### A30 - the static gate flipped between PASS and a coccinelle failure (fixed)
+
+T8's acceptance review ran `make static` twice over the same tree and got
+different answers: `static gate: PASS` with exit 0 once, and
+`coccinelle: exit 255` / `spatch failed` with exit 1 the other time. Every
+other analyser agreed in both runs (sparse 0, smatch 5, cppcheck 0, pahole 0),
+so the disagreement was confined to spatch.
+
+Reproduction and cause are in
+[`docs/evidence/builds/28-static-determinism.log`](evidence/builds/28-static-determinism.log);
+the short form is that the gate inherited `docs/ENVIRONMENT.md` section 4's
+`PKG_CONFIG_SYSROOT_DIR`. spatch's Python bridge resolves libpython by running
+`pkg-config --libs python-3.14`; in a clean shell that prints nothing and
+spatch continues, but with the sysroot exported it prints
+`-L/mega/tmp/sm750/t3/libdrm/usr/lib64` and spatch exits 255 while printing,
+verbatim,
+
+```
+Py.find_library_path: unable to parse the output of pkg-config '-L/mega/tmp/sm750/t3/libdrm/usr/lib64'
+```
+
+before analysing any file (that invocation has no `HANDLING:` line). All twelve
+patches, the three local ones and the nine kernel ones, fail that way and all
+twelve exit 0 with the variables cleared, so the flip was never patch-specific.
+A shell that had just built a libdrm client failed the gate; a fresh shell
+passed.
+
+The fix is `tests/check-static.sh:37-46`, which clears `PKG_CONFIG_SYSROOT_DIR`,
+`PKG_CONFIG_PATH` and `PKG_CONFIG_LIBDIR` beside the existing locale
+sanitisation. The gate does not use pkg-config for anything else, so this
+removes a dependency instead of a check: all twelve patches stay, and
+`tests/static/baseline/` still holds 0 sparse, 0 cppcheck, 0 coccinelle and 4
+smatch lines. A non-zero spatch exit still fails the run, and now names the
+patch (`tests/check-static.sh:216`, `:237`) and distinguishes a 255, spatch's
+fatal status, from a finding count (`:250`). Ten consecutive runs over an
+unchanged tree in the environment that used to fail return exit 0 ten times; a
+planted defect is still caught by sparse and by smatch; and a deliberately
+corrupted patch still fails the gate and is attributed to the file. The `check`
+recipe is untouched at 17 commands, so the gate stays opt-in via `make static`.
+
+Residual limitation: 255 is spatch's generic fatal status and also covers a
+`.cocci` that does not parse, so the exit code alone does not name the cause.
+The raw log does, and the gate prints which patch produced it; it does not
+assert that spatch can never fail for a reason other than these.
 
 ## Evidence handling
 

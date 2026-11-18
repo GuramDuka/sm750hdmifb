@@ -1,8 +1,10 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Test strategy and recorded results
 
-Scope: the driver and packaging artifacts at version 0.5.9, tested after the
-fixes recorded in [DEFECTS.md](DEFECTS.md). Every result row below is a run
+Scope: sections 1 to 9 are the 0.5.9 record - the driver and packaging artifacts
+at version 0.5.9, tested after the fixes recorded in [DEFECTS.md](DEFECTS.md).
+The later 0.6.0 re-runs form a separate record, named in section 4; the 0.5.9
+rows are kept unchanged as the before-fix half. Every result row below is a run
 performed on 2026-11-18 after T5 completed, or a blocked probe whose denial was
 observed on the same day. Baseline captures taken on 2026-11-17 (connector
 state, EDID, tool matrix) are cited only as state description, never as a test
@@ -368,6 +370,17 @@ All rows are post-T5 runs or post-T5 probes on 2026-11-18. PASS rows point at
 an existing file under `docs/evidence/builds/`. GAP rows point at the archived
 denial or at the probe transcript in section 9.
 
+This R table is the **0.5.9 record**: every row was run against the stale
+pre-fix module described in section 1, and the rows are kept as they were. The
+0.6.0 re-runs are a separate record and are not folded into these rows:
+`docs/evidence/builds/13-make-check-0.6.0.log` (17 commands, exit 0),
+`14-check-all-kernels-0.6.0.log` (Built 9), `15-kernel-6.17.1-0.6.0.log`
+(Built 3), `16-build-package-0.6.0.log`, `17-check-rpm-dkms-0.6.0.log`,
+`19-cursor-alpha-fix.log` for the build and packaging chain, and
+`docs/evidence/runtime/16-modeset-0.6.0.txt`, `17-kmscube-0.6.0.txt`,
+`18-kernel-log-0.6.0.txt`, `19-igt-0.6.0.txt` for the runtime tiers, with
+`22-dkms-stale-purge.txt` for the installed-state cleanup.
+
 | # | Run | Kernel | Tool version | Command | Evidence | Verdict |
 | --- | --- | --- | --- | --- | --- | --- |
 | R1 | `make check`, 17 commands | 7.3.4 running, KDIR 7.3.3 | GCC 15.3.1, libdrm 2.4.134 | `make check KDIR=/lib/modules/7.3.3-100.fc43.x86_64/build CC=/usr/bin/gcc` | `docs/evidence/builds/01-make-check.log` | PASS |
@@ -421,7 +434,7 @@ pre-fix baseline; the pixel rungs do not.
 | Sysfs connector state and EDID | The driver registered the connector, read a 256-byte EDID, reports `connected`/`enabled`/`dpms: On` and 28 modes with 1920x1080 preferred. This is state description, not a modeset test: it is the state left by whatever configured the display before the test and does not prove this build produced it. | Yes, `docs/evidence/baseline/03-connector.txt`, `02-edid.txt`, `15-edid-decode.txt` (pre-T5 baseline) |
 | `modetest -c` | libdrm can open the KMS device and enumerate connector 35, encoders, CRTCs and planes with their properties. | Yes, `docs/evidence/runtime/02-modetest-connector.txt` (pre-fix baseline, exit 0) |
 | `modetest -s 35@38:1920x1080` | The atomic commit for the requested mode is accepted by the driver and the connector stays enabled with DPMS On. | Yes, `docs/evidence/runtime/04-modeset.txt` (pre-fix baseline; the alternate mode is programmed but reverted on client exit) |
-| Framebuffer content readback | A known pattern written through the driver can be read back from the GEM/dumb buffer. This proves the upload/composition path, not the scanout: the bytes may be correct while the panel shows nothing. | Partly: a GEM readback of the fb bound to crtc 38 succeeded unprivileged but returned a static, essentially blank buffer (48 nonzero bytes of 8294400, byte-identical across three samples while Plasma ran), because the shadow/backbuffer path means the GEM object is not the scanned-out memory. Not usable as pixel proof. |
+| Framebuffer content readback | A known pattern written through the driver can be read back from the GEM/dumb buffer. This proves the upload/composition path, not the scanout: the bytes may be correct while the panel shows nothing. | No. Three independent blockers, each checked: `CONFIG_FB_DEVICE` is unset, so there is no `/dev/fb*` node to read (A24 in [DEFECTS.md](DEFECTS.md)); the driver registers no writeback connector (`grep -rn writeback src/` returns nothing), so no CRTC output can be captured through DRM; and a second DRM client cannot map a framebuffer it did not allocate. No unprivileged reader of the scanned-out pixels exists on this host. Closing action: an external capture of the panel, or a future in-driver debugfs pixel dump that reads the staging buffer back through the DMA path. Both are a source or hardware change, not a test command, so this rung stays `GAP`. |
 | Scanout CRC | A CRC of the CRTC output proves the pixel stream at the connector. The driver implements no CRC source (`src/` has no crc/writeback code), so this rung is unavailable even with `/dev/dri` access. | No |
 | External capture or photograph of the panel | The only end-to-end proof that the requested pixels reached the display. No capture hardware is attached to this host. | No |
 
@@ -500,8 +513,8 @@ module, and no runtime claim is made.
 
 | Claim | Why it is unproven | Blocking gap |
 | --- | --- | --- |
-| A post-fix build performs a modeset on the panel | The modeset path now works unprivileged, but only the **stale pre-fix 0.5.9** module has been exercised; the 0.6.0 build was not loaded in T10 | needs the after-fix run |
-| The panel shows the expected pixels at 1920x1080 | No CRC source, no framebuffer capture, no external capture; the GEM readback returns a static blank buffer because of the shadow path | GAP-B3 (partly), pixel proof open |
+| A post-fix build performs a modeset on the panel | The modeset works unprivileged on both builds. The 0.5.9 half is `docs/evidence/runtime/04-modeset.txt`; the after-fix half is `docs/evidence/runtime/16-modeset-0.6.0.txt`, recorded with 0.6.0 loaded, the 1024x768-60 mode set and the original mode restored | closed for the modeset; pixel proof stays GAP-B3 |
+| The panel shows the expected pixels at 1920x1080 | No CRC source in the driver, no `/dev/fb*`, no writeback connector, no external capture; no unprivileged reader of the scanned-out pixels exists (section 5) | GAP-B3 (partly), pixel proof open |
 | Hotplug detect and the SiI902X workaround behave on hardware | The SiI9024A not-ready warning is now observed on every mode program (`HPD=1 RSEN=0 status=04`), but no hotplug event can be generated | GAP-B2 |
 | Vblank timing meets 60 Hz on hardware | `check-vblank` live probe is still skipped; kmscube reaches 59.01 fps over 299 frames, which is suggestive but not a vblank-timing measurement | GAP-B3 |
 | DMA upload and its failure fallback work on hardware | Software checks only; no device-path execution | GAP-B3 |
@@ -511,7 +524,7 @@ module, and no runtime claim is made.
 | `kmscube` renders on this card | Proven for the pre-fix baseline: 299 frames in 5.07 s, real `SETCRTC`/`PAGE_FLIP` | resolved (pre-fix baseline) |
 | Kernel-log evidence of probe/remove or errors | Now readable: `dmesg` and `journalctl -k` both return the full 2017-line log. One error episode observed and not reproduced | resolved for access; episode open |
 | VBIOS ROM contents and strap configuration | ROM image captured (T12): 49152 bytes, checksum valid, `PCIR` 126f:0750; strap configuration still not readable from the image | GAP-B1 closed for contents; strap unknown |
-| PCI capabilities beyond 0x40 | `Capabilities: <access denied>` | GAP-B5 |
+| PCI capabilities beyond 0x40 | Closed: the allowlisted `sudo -n /usr/local/sbin/sm750-lspci` returned the full space (9465 bytes, capabilities at 0x40, 0x50, 0x70, 0xb0, 0x100, 0x140), stored as `docs/evidence/baseline/19-pci-config-space-full.txt` | GAP-B5 closed |
 | Runtime on 6.18, 7.0, 7.1 and final 7.4 | Headers absent or release not final; no boot | offline matrix only |
 | `.deb` or RPM install/erase | Root-only packaging path; T6 owns it | out of T4 scope |
 

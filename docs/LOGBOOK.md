@@ -1254,3 +1254,208 @@ or `build-package.sh` changed, and the image is not in the tree.
   rejects `*.bin`/`*.rom` payload entries and grep-fails the ROM's own banner.
 - Nothing committed - the orchestrator commits. `Makefile` is shared with the
   concurrent T19 `static` target, so its diff carries both hunks.
+
+### 2026-11-18T18:53Z | orchestrator | README index refreshed for the new verification targets
+
+- User asked for the documentation to keep pace and for the logbook rule to be
+  maintained. `docs/LOGBOOK.md` already exists and is tracked (created in
+  commit `6332870`, 54 entries before this one, newest last); the append-only
+  rule is stated in `AGENTS.md` under "Records" and in `docs/DELIVERABLES.md`.
+  Nothing needed creating - only continuing.
+- `README.md` "Developers" section: added `docs/STATIC-ANALYSIS.md`,
+  `docs/VBIOS-REVERSE-ENGINEERING.md` and `docs/ACCEPTANCE-REPORT.md` to the
+  link list, plus a short block naming the two opt-in targets and why they are
+  outside `make check`:
+  `make static` (sparse, smatch, cppcheck, coccinelle, pahole over `src/`) and
+  `make vbios-re` (rebuild the option ROM and compare byte for byte, exit 0
+  with `SKIP` when the captured image is absent).
+- Reason for the wording: `Makefile:32-48` holds exactly 17 recipe commands for
+  `check`, asserted by `tests/check-drm-module.sh` and `docs/AUDIT.md` A23. The
+  two new targets are separate so that count stays true and so a machine
+  without the analysers or without the ROM image still passes the default gate.
+- No `src/`, `tests/`, `packaging/` or `Makefile` change in this entry.
+
+### 2026-11-18T19:15Z | orchestrator | corrected the runtime-validation claims in release notes and testing guide
+
+- `docs/RELEASE-NOTES.md` 0.6.0 said "Kernels >= 7.1 are still untested at
+  runtime". That is no longer true and has not been since T11: the module is
+  loaded and driving the console on 7.3.4-100 right now
+  (`/sys/module/sm750hdmidrm/version` = 0.6.0, srcversion
+  07E8F503FC7D839EEC5EE64 equal to the on-disk `extra/sm750hdmidrm.ko.xz`).
+  Replaced with what was actually measured: runtime-validated on 7.3.4-100
+  (modeset, IGT `kms_*` subset, vblank timer test, hardware cursor, in-kernel
+  console); 7.2.15-100 and 7.3.3-100 built and installed by DKMS but never
+  booted; 6.17.1-300 a build-only floor check
+  (`docs/evidence/builds/06-kernel-6.17.1.log`, `Built 3`).
+- `docs/TESTING.md` "Offline build validation (2026-10-28)" was the
+  pre-packaging generic-header matrix and read as if it were the current
+  record. Split into the current Fedora matrix (6.17.1-300 / 7.2.15-100 /
+  7.3.3-100 / 7.3.4-100, with built / installed / booted columns) and the
+  historical 2026-10-28 generic matrix, and stated explicitly that only
+  7.3.4-100 is runtime-validated and that nothing above it has been built.
+- Also recorded in that section that `/lib/modules/6.18.13-200.fc43.x86_64` on
+  the release host is an unowned leftover NVIDIA directory, not a kernel, and
+  that DKMS skips it with "matching kernel headers are absent".
+- No `src/`, `tests/`, `packaging/` or `Makefile` change in this entry.
+
+### 2026-11-18T19:18Z | gem-documentation-writer | T23 closed the seven documentation findings of the T8 round-1 acceptance report
+
+- `docs/specs/REGISTER-MAP.md`: the register set now counts the 16 registers
+  that are read only through `sm750_reg_dump_registers[]`
+  (`src/sm750_drm.c:3282-3331`) as referenced. 13 joined the cited table with
+  DS-1 pages (DEVICE_ID p95, PANEL_PAN_CTRL and PANEL_COLOR_KEY p150, the
+  VIDEO_FB set p159-p161, ALPHA_FB_ADDRESS p176, the CRT_FB set p181-p185);
+  3 joined the uncited table (GPIO_INTERRUPT_SETUP 0x010008, the GAP-2 stride
+  conflict; DE_STATE1 and DE_STATE2, absent from DS-1). The Method section
+  carries the reproduction heredoc and the Result line moved from "54
+  registers, 51 cited, 3 uncited" to the printed numbers.
+- Reason for the count: the earlier 326/87/28 measurement came from a parser
+  anchored at column 0, which misses the four indented defines at
+  `src/ddk750_reg.h:1142,1144,1146,1149`. The leading-whitespace-tolerant
+  pattern is authoritative and is in the document; it prints 330 header
+  defines, 90 referenced in `src/*.c`, 70 registers, 20 mask macros, 70
+  documented, 64 cited, 6 uncited, none missing.
+- `docs/TEST-STRATEGY.md`: the framebuffer-readback row lost the unsupported
+  "48 nonzero bytes of 8294400" claim, which no evidence file or tracked
+  script produced, and now reads `GAP` with the three real blockers (no
+  `CONFIG_FB_DEVICE`, no writeback connector, no foreign-framebuffer mapping)
+  and a closing action. The scope paragraph and section 4 state that sections
+  1-9 are the 0.5.9 record and name the 0.6.0 record (`docs/evidence/builds/13`
+  to `19`, `docs/evidence/runtime/16` to `19`,
+  `22-dkms-stale-purge.txt`); the section 7 rows for the modeset and for PCI
+  capabilities beyond 0x40 now point at the after-fix evidence instead of
+  saying 0.6.0 was never loaded.
+- `docs/evidence/EVIDENCE-GAPS.md`: the tier-5 scanout CRC command is
+  withdrawn with its reason - the driver implements no `get_crc_sources`, so
+  `drm_debugfs_crtc_crc_add()` adds nothing
+  (`/usr/src/kernels/7.3.4-100.fc43.x86_64/include/drm/drm_crtc.h:843-861`) -
+  and the reachable substitutes are named. GAP-B5 is `CLOSED` against a
+  tracked artefact, and the summary table agrees.
+- New evidence file: `docs/evidence/baseline/19-pci-config-space-full.txt`
+  (174 lines, 9934 bytes) is the T14 capture
+  `/mega/tmp/sm750/t14/lspci.txt` with a header block recording host, command
+  and source; `git ls-files` lists it. `07-pci-config-space.txt` stays as the
+  452-byte unprivileged before capture.
+- `docs/DELIVERABLES.md`: defect counts corrected to 24 and 29, totals to
+  13 PASS / 2 FAIL / 3 GAP, payload to 115 files, AC-3 to cite
+  `docs/evidence/runtime/08-register-dump.txt`; the self-check now reads
+  `git ls-files docs` and prints nothing; section 5 gains
+  `docs/VBIOS-REVERSE-ENGINEERING.md` and 21 evidence rows; 5.4 claims
+  `GAP-B1 .. GAP-B8`.
+- Three 0.5.9-era packaging transcripts
+  (`docs/evidence/packaging/07-check-rpm-dkms.log`,
+  `docs/evidence/packaging/0.5.9/07-check-rpm-dkms.log`,
+  `docs/evidence/builds/17-check-rpm-dkms-0.6.0.log`) carry a `SUPERSEDED`
+  header naming the 73-file payload, the 115-file count of the current tree and
+  `docs/evidence/runtime/22-dkms-stale-purge.txt` as the current record. No
+  line below a header was edited.
+- `docs/ROOT-ACTIONS.md`: both GAP-B5 citations name the new baseline file.
+- Not closed, with reasons: `docs/evidence/builds/09-register-dump.log` does
+  exist (tracked, 2473 bytes), so the finding that it was fabricated was wrong
+  and only its citation needed fixing; `22-dkms-stale-purge.txt` is a DKMS
+  purge transcript, not a register-dump diff, so it is not cited as one.
+- Verification: the coverage heredoc prints 330/90/70/20/70/64/6 with an empty
+  missing list, exit 0; the DELIVERABLES self-check prints nothing; every
+  touched file is ASCII.
+- No `src/`, `tests/`, `packaging/` or `Makefile` change in this entry.
+
+### 2026-11-18T19:36Z | gem-implementer | T24: the static gate is deterministic; coccinelle's exit 255 came from an inherited PKG_CONFIG_SYSROOT_DIR (defect A30)
+
+- Reproduced the T8 round-1 flip: over one unchanged tree (HEAD `332b997`,
+  `git archive` into `/mega/tmp/sm750/t24/tree`) three consecutive
+  `./tests/check-static.sh` runs with `docs/ENVIRONMENT.md` section 4's
+  variables exported all exit 1 with `coccinelle: exit 255, 0 finding(s)` while
+  sparse, smatch, cppcheck and pahole agree with the passing run. The T8 raw
+  log survived at `/tmp/sm750-static.mje5yt/coccinelle.log` and is copied into
+  the evidence; it holds twelve `Py.find_library_path` lines and no `HANDLING:`
+  line, i.e. spatch analysed nothing.
+- Cause proved from evidence, not inferred: spatch's Python bridge resolves
+  libpython with `pkg-config --libs python-3.14` (a PATH shim recorded exactly
+  `ARGV: --libs python-3.14`). `/usr/lib64/pkgconfig/python-3.14.pc` has
+  `libdir=/usr/lib64` and `Libs: -L${libdir}`, so a clean shell prints the
+  empty string; with `PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm` the
+  same probe prints `-L/mega/tmp/sm750/t3/libdrm/usr/lib64` and spatch exits
+  255 after printing, verbatim,
+  `Py.find_library_path: unable to parse the output of pkg-config '-L/mega/tmp/sm750/t3/libdrm/usr/lib64'`.
+  The sysroot alone is sufficient. A 12-patch x 2-environment matrix shows all
+  twelve patches exit 255 under the leak and 0 with it cleared, so the failure
+  was never patch-specific; 255 is spatch's fatal status, not a finding count.
+- Fix in `tests/check-static.sh:37-46`: clear `PKG_CONFIG_SYSROOT_DIR`,
+  `PKG_CONFIG_PATH` and `PKG_CONFIG_LIBDIR` beside the existing locale
+  sanitisation. The gate asks pkg-config nothing else, so this removes a
+  dependency and not a check; all twelve patches and every baseline line stay.
+  `tests/check-static.sh:216` and `:237` now name the patch behind a non-zero
+  spatch exit, and `:250` labels a 255 as a fatal spatch exit rather than a
+  finding.
+- Proof, in the environment that used to fail: ten consecutive runs over the
+  unchanged tree, exit codes 0 0 0 0 0 0 0 0 0 0, `static gate: PASS` ten
+  times, no `pkg-config` line in any coccinelle log; one further run after the
+  255-message edit also passes (`/mega/tmp/sm750/t24/ten11.out`).
+- Controls: a clean-shell run still passes with identical counts; a
+  planted-defect copy (non-static global plus an out-of-bounds write appended
+  to `src/sm750_dither.c`) fails the gate with three new sparse findings, the
+  smatch `error: buffer overflow 'small' 4 <= 4` and a cppcheck
+  `arrayIndexOutOfBounds`; a deliberately corrupted
+  `tests/static/cocci/sizeof-pointer.cocci` exits 1 with
+  `spatch exit 255 on sizeof-pointer.cocci` and the raw log's
+  `minus: parse error:`, which is why the 255 label names a parse error as a
+  possible cause.
+- Invariants: `tests/static/baseline/` unchanged (sparse 0, cppcheck 0,
+  coccinelle 0, smatch 4); `Makefile` untouched, `check:` still exactly 17
+  recipe commands (`Makefile:32-48`, line 31 being a tab continuation of the
+  prerequisite list), and the gate stays opt-in via `make static`
+  (`Makefile:58-59`). No `src/` change.
+- New evidence `docs/evidence/builds/28-static-determinism.log` (409 lines,
+  `# utc: 2026-11-18T19:35:00Z`, assembled by
+  `/mega/tmp/sm750/t24/build-evidence.py` from the captured transcripts).
+  `docs/STATIC-ANALYSIS.md` gains section 8 ("Determinism of the gate, and what
+  a PASS means"); sections 8 and 9 of the old numbering become 9 and 10.
+  `docs/DEFECTS.md` gains row A30 and its detail section, and the preface count
+  moves from five late-found defects to six.
+- Residual limitation: 255 also covers a `.cocci` that does not parse, so the
+  exit code alone does not name the cause; the raw log and the per-patch line
+  do, and the gate remains fatal on any non-zero spatch exit.
+
+### 2026-11-18T19:44Z | gem-implementer | correction to the T24 entry above: the evidence log is 415 lines, not 409
+
+- `docs/evidence/builds/28-static-determinism.log` gained two blocks after
+  that entry was written: (a) the three failing runs were re-captured with the
+  pre-fix `tests/check-static.sh` (`git show HEAD:tests/check-static.sh` into
+  `/mega/tmp/sm750/t24/pre`) so their exit codes are recorded beside each
+  transcript - `flip1 exit=1`, `flip2 exit=1`, `flip3 exit=1` - and (b) the
+  same pre-fix script was run once with the section-4 variables never set,
+  which exits 0 with `static gate: PASS`, so the flip is demonstrable with one
+  script and one tree, the environment being the only difference.
+- Final size 415 lines, still ASCII clean, `# utc:` header unchanged. Nothing
+  else in that entry changes.
+
+### 2026-11-18T19:47Z | gem-implementer | correction to the two T24 entries above: the evidence log is 414 lines by `wc -l`
+
+- `413` content lines plus the final newline: `wc -l docs/evidence/builds/28-static-determinism.log`
+  prints `414`, and the earlier figure of 415 counted the empty string after
+  the trailing newline. The 409 figure in the first entry predates the two
+  blocks named in the correction above. No other claim changes.
+
+### 2026-11-18T19:50Z | orchestrator | publishing topology: second push remote, upstream made pull-only
+
+Requested by the owner: push to `github.com/GuramDuka/sm750hdmifb` the same way
+we push to `origin`, and only ever pull from `github.com/KodeMunkie/sm750hdmifb`.
+
+- `origin` gained a second push URL (`git remote set-url --add --push origin
+  https://github.com/GuramDuka/sm750hdmifb.git`), so a single `git push`
+  publishes to the Gitea instance and to GitHub. The polaris URL was added
+  back explicitly first, because defining any push URL replaces the implicit
+  one. The two URLs are pushed in sequence, not atomically.
+- New remote `github` -> `https://github.com/GuramDuka/sm750hdmifb.git` with
+  fetch, for `git fetch github` and `git push github` as an explicit target.
+- New remote path `refs/remotes/github/*` populated by `git fetch github main`.
+- `upstream` (KodeMunkie) is now pull-only in configuration:
+  `git config remote.upstream.pushurl DISABLED`. A push attempt stops locally
+  with `fatal: 'DISABLED' does not appear to be a git repository` before any
+  network access, verified.
+- Verified state: all three remotes at `27db03b`; local `main` at `332b997`,
+  9 ahead / 0 behind; `git push --dry-run` to both push URLs reports
+  `27db03b..332b997  main -> main` with `GIT_TERMINAL_PROMPT=0`, so no
+  credential prompt blocks a push. Nothing was pushed in this entry.
+- Documented as `docs/ENVIRONMENT.md` section 1.1. No `src/`, `tests/`,
+  `packaging/` or `Makefile` change.

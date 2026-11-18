@@ -404,9 +404,26 @@ fbdev client restore its own 1920x1080 mode.
 - [Repository audit](docs/AUDIT.md) and [defect inventory](docs/DEFECTS.md)
 - [Build environment](docs/ENVIRONMENT.md)
 - [Deliverables index and reproduction](docs/DELIVERABLES.md)
+- [Static analysis](docs/STATIC-ANALYSIS.md) - sparse, smatch, cppcheck, coccinelle, pahole
+- [VBIOS reconstruction](docs/VBIOS-REVERSE-ENGINEERING.md) - 239-region map and the C model of the option ROM
+- [Acceptance report](docs/ACCEPTANCE-REPORT.md) - criterion-by-criterion verdict with evidence paths
 - [Project logbook](docs/LOGBOOK.md) - chronological record, newest entry last
 - [Host root actions](docs/ROOT-ACTIONS.md) - sudoers, helpers, udev rule, recovery
 - [Manual CI build](https://github.com/KodeMunkie/sm750hdmifb/actions/workflows/build.yml)
+
+Two verification targets are opt-in and deliberately outside `make check`, so
+the default gate stays the same 17 commands on machines without the analysers:
+
+```sh
+make static     # sparse, smatch, cppcheck, coccinelle, pahole against src/
+make vbios-re   # rebuild the option ROM and compare it byte for byte
+```
+
+`make vbios-re` needs the captured image (`VBIOS_ROM=...`, or the default path)
+and prints `SKIP` with exit 0 when it is absent, so a fresh checkout without the
+image still passes. `make static` prints a skip message when the analysers are
+missing. Both are documented in [static analysis](docs/STATIC-ANALYSIS.md) and
+[VBIOS reconstruction](docs/VBIOS-REVERSE-ENGINEERING.md).
 
 The official SM750 specification is known to be wrong for at least one
 hardware-observed partial-update boundary. Empirically verified workarounds are
