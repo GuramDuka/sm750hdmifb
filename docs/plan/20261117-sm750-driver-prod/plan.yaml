@@ -637,6 +637,53 @@ tasks:
       high_risk_signals: []
       critic_signals: []
 
+  - id: T17
+    title: Reverse-engineer the VBIOS into a bit-exact rebuildable source tree
+    description: |
+      Rung: new artifact requested by the user after the image was captured. The 48 KiB
+      option ROM is the only executable description of how this board brings the SM750 and
+      the SiI9024A up, and it disagrees with the driver in places the datasheet does not
+      cover. The deliverable is a structure map, a re-encoded 16-bit assembly reconstruction
+      that rebuilds the image byte-for-byte, a C semantic model of what the ROM programs, and
+      a verifier that proves bit-exactness by hash, by byte diff and by per-instruction
+      decode equality - not by copying bytes.
+    wave: 9
+    depends_on: [T12]
+    agent: gem-implementer
+    context_cluster: vbios-re
+    status: pending
+    retries_used: 0
+    acceptance_criteria:
+      - "A structure map is committed (docs/VBIOS-REVERSE-ENGINEERING.md) naming every region with its file offset range, length, kind (header, PCI data structure, code, data table, font bitmap, string, padding) and the evidence used to classify it; the regions must cover all 49152 bytes with no unclassified gap, and the map states that the image is loaded at 0xC0000."
+      - "The rebuild is a real re-encode, not a copy: the reconstruction emits bytes from .code16 assembly mnemonics assembled by GNU as 2.45.1 (as --32 with a .code16 section) and linked with a script using OUTPUT_FORMAT(binary), and the task reports the re-encoded coverage metric (bytes emitted from mnemonics / total code bytes) with a floor of 85 percent, listing every residual region carried as a data blob and why it is data rather than code."
+      - "Bit-exactness is proven, not asserted: the rebuilt file is 49152 bytes, its sha256 equals 16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551, `cmp -l rebuilt original` prints nothing, and the verifier exits 0 only when all three hold; the verification transcript is committed under docs/evidence/vbios-re/."
+      - "The verifier also proves semantic fidelity of the encoding: for every code region it disassembles both images with `objdump -D -b binary -m i8086 -M intel --adjust-vma=0xc0000` and compares the mnemonic-and-operand stream instruction by instruction, so an accidental re-encode that happens to differ in encoding but not in behaviour is still reported per offset."
+      - "The ROM checksum byte is COMPUTED, not copied: the build derives it so that the whole image sums to 0 mod 256, and the build fails when the computed value differs from the captured byte; the same applies to the PCIR image-length and ROM size fields, which are generated from the region table rather than hardcoded."
+      - "A C semantic model (vbios-re/model/) reconstructs what the ROM programs for the init path: clock/PLL setup, panel and SiI9024A bring-up, DPMS and the mode table, expressed as C functions with register writes and bit fields, each cross-referenced to the assembly offset it came from and to docs/specs/REGISTER-MAP.md; every divergence between the ROM and src/*.c is listed with both register values, because that list is the actual output of value."
+      - "The toolchain constraint is stated in the report with evidence: gcc -m16 emits 32-bit operand-size prefixes (`66 55` for push %ebp) and therefore cannot produce a byte-exact 16-bit image, so the byte emitter is .code16 assembly driven by a C generator; nasm, yasm and radare2 are absent on this host and the pipeline uses binutils only."
+      - "The rebuild is reproducible from a clean checkout with one command under /mega/tmp/sm750/t17/, needs only binutils and python3, and is wired into the test suite as an opt-in target that SKIPS (not passes) when the captured ROM is absent, because the ROM binary itself is never committed."
+      - "PROVENANCE IS DECIDED, NOT ASSUMED: docs/PROVENANCE.md is updated to state exactly what the new directory contains, and the reconstructed sources are kept out of the DKMS source package, the .deb and the RPM payload; if the repo owner instead wants them withheld entirely, that decision is recorded and the reconstruction lives only under /mega/tmp/sm750/t17/ with only the map and the verifier committed."
+      - "docs/LOGBOOK.md records each step; no src/, tests/, packaging/, Makefile, dkms.conf or build-package.sh behavioural change is made by this task; ASCII only; make check stays green with the new opt-in target skipped."
+    handoff:
+      constraints:
+        - "Diagnosis and tooling only: do NOT change driver behaviour. A register divergence found by this task becomes a finding for a later task, not a patch here."
+        - "Never commit the ROM binary; it stays at /mega/tmp/sm750/vbios-01-00-0.bin."
+        - "Do not weaken the verifier to get a green run: a mismatch is the finding."
+        - "Scratch under /mega/tmp/sm750/t17/; nothing in $HOME; ASCII only."
+        - "The panel is live with a Plasma session: this task needs no modeset and must not perform one."
+      relevant_context:
+        - "The captured image is /mega/tmp/sm750/vbios-01-00-0.bin, 49152 bytes, sha256 16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551, byte sum 0 mod 256. It is 48 KiB, NOT 64 KiB: header size byte at 0x02 is 0x60 = 96 blocks of 512, and the PCIR image-length field at 0x2c is also 0x0060."
+        - "Header: 0x00 55 aa; 0x02 0x60; 0x03 e9 50 12 = jmp to linear 0xc1256 (the VGA BIOS init entry, disassembles to enter 0xa,0x0 / push ds / pushad / push es / call 0xc6065); 0x18 word 0x001c points at PCIR; 0x1c 'PCIR'; 0x20 vendor 0x126f; 0x22 device 0x0750; 0x24 VPD 0x0000; 0x26 structure length 0x0018; 0x28 revision 0x00; 0x29-0x2b class code 00 00 03; 0x2c image length 0x0060; 0x2e code revision 0x0000; 0x30 code type 0x00; 0x31 indicator 0x80 (last image); 0x32 reserved."
+        - "Strings: 0x36 'Version 1.00.59-', 0x4a '05/14/19 16:25', 0x5b 'Silicon Motion SM750 VGA BIOS (CRT)', 0x99 'Copyright 2000/2010, Silicon Motion Inc. - All Rights Reserved', 'VESA' at 0x7f, 'VBE/FP' at 0x6caa."
+        - "Glyph bitmaps occupy roughly 0x3400-0x5a00 (repeating 8-byte and 16-byte cell patterns, recognisable as font rows). Only one inline `cd 10` exists in the whole image (at 0xa2e), so the INT 10h path is installed through a far pointer at init rather than dispatched inline; 52 `ea` far-jump opcodes are present; `55 aa` recurs at 0x762 and in the 0x3a00 and 0x4640 ranges as table data, not as ROM headers."
+        - "Toolchain measured on this host: binutils 2.45.1 (`objdump` supports -m i8086; `objdump --help` lists i8086). A working byte-exact 16-bit pipeline was proven: printf '.code16' source with `ljmp $0xf000,$label` / `movw $0x03c0,%ax` / `ret`, assembled with `as --32`, linked with `ld -m elf_i386 -T script` where the script is `OUTPUT_FORMAT(binary)` plus `SECTIONS { . = 0; .text : { *(.text) } }`, yields exactly `ea 05 00 00 f0 b8 c0 03 c3`. Plain `ld -m elf_i386 -Ttext=0 -e _start --oformat binary` produced 4136 bytes of padding and must not be used."
+        - "gcc 15.3.1 exists at /usr/bin/gcc; `gcc -m16 -c` of a trivial function emitted `66 55 push %ebp`, proving 32-bit operand prefixes, so compiled C cannot be the byte emitter for a 16-bit ROM. nasm, yasm and radare2 are absent; python3 has no capstone or pefile module."
+        - "docs/PROVENANCE.md:43-52 currently states that no vendor option ROM or 'translated vendor function' is included in the repository. A full reconstruction is arguably a translated vendor work, so the provenance decision in AC-9 is a real licensing step, not paperwork; the safest default is to exclude the reconstruction from every shipped artifact and state the basis in PROVENANCE.md."
+        - "Packaging exclusion points, if the reconstruction is committed: build-package.sh:98-114 builds the source archive from `git ls-files` with an explicit exclude list, and packaging/sm750hdmifb.spec enumerates %files explicitly, so a new top-level directory is excluded by default from the RPM payload but NOT from the source tarball unless added to the exclude list."
+        - "docs/specs/REGISTER-MAP.md cites every MMIO register the driver uses against datasheet pages; use it as the cross-reference for the C semantic model. docs/specs/GAPS.md lists what the datasheet does not cover."
+      high_risk_signals: []
+      critic_signals: [architecture]
+
   - id: T8
     title: Independent acceptance review against all seven criteria
     description: |
@@ -644,8 +691,8 @@ tasks:
       committed artifacts, confirm that no hardware or packaging result is simulated,
       confirm the AC-6 rootless/root split is stated correctly, and issue a verdict with
       remaining gaps.
-    wave: 8
-    depends_on: [T1, T2, T3, T4, T5, T6, T7, T9, T10, T11, T13, T14, T15, T16]
+    wave: 10
+    depends_on: [T1, T2, T3, T4, T5, T6, T7, T9, T10, T11, T12, T13, T14, T15, T16, T17]
     agent: gem-reviewer
     status: pending
     retries_used: 0

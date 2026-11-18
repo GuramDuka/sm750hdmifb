@@ -418,3 +418,36 @@ additionally consolidated, with their exact commands and hashes, in
   the staged copy; line 28 reads `dd if="$DEV/rom" of="$OUT" bs=4096`.
 - Outcome: the page-cap defect is no longer installed. T12 was dispatched to take
   the full 64 KiB capture and close GAP-B1.
+
+### 2026-11-18T10:24Z | orchestrator | VBIOS image size corrected: 49152 bytes, not 65536
+
+- Action: corrected the image-size expectation after measuring the captured ROM
+  `/mega/tmp/sm750/vbios-01-00-0.bin` directly, and sent a correction follow-up to
+  T12 (session `ses_e11dc74e8ffeOvLqdWWNlBnyMk`).
+- Files: `docs/LOGBOOK.md`, `docs/plan/20261117-sm750-driver-prod/plan.yaml`.
+- Evidence: the capture is 49152 bytes, sha256
+  `16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551`, whole-image
+  byte sum 0 mod 256. Header byte at 0x02 is `0x60` (96 blocks of 512) and the PCIR
+  image-length field at 0x2c is also `0x0060`, so the option ROM is 48 KiB.
+- Outcome: this corrects the previous entry, which said T12 would take a 64 KiB
+  capture. The helper's `exit 2` with `WARNING size is 49152, expected 65536` is a
+  stale constant, not a truncated read; the installed helper is left unchanged
+  because the sudoers grant is on the path and an edit needs the host owner again.
+
+### 2026-11-18T10:24Z | orchestrator | T17 added: VBIOS reverse engineering to a bit-exact rebuild
+
+- Action: inserted task T17 into the plan at wave 9 (`depends_on: [T12]`,
+  agent `gem-implementer`, `context_cluster: vbios-re`, `critic_signals:
+  [architecture]`), and moved T8 to wave 10 with T12 and T17 added to its
+  dependencies.
+- Files: `docs/plan/20261117-sm750-driver-prod/plan.yaml` (17 tasks, re-validated
+  with `yaml.safe_load`), `docs/LOGBOOK.md`.
+- Evidence: the byte-exact 16-bit pipeline was proven on this host in
+  `/mega/tmp/sm750/probe16`: a `.code16` source assembled with `as --32` and linked
+  with a script using `OUTPUT_FORMAT(binary)` produced exactly
+  `ea 05 00 00 f0 b8 c0 03 c3`. `gcc -m16 -c` of a trivial function emitted
+  `66 55 push %ebp`, so compiled C cannot emit byte-exact 16-bit code; binutils
+  2.45.1 is present, nasm/yasm/radare2 are not.
+- Outcome: T17 is defined but not dispatched; it waits for T12 so the structure map
+  and the capture agree. Requested by the repo owner (m00644): reverse engineering of
+  the VBIOS into C with build verification accurate to the bit and byte.
