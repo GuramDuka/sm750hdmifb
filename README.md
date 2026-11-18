@@ -27,18 +27,70 @@ transmitter, or different GPIO wiring and are not currently supported.
 
 ## Install
 
+### Debian and Ubuntu
+
 Ubuntu 24.04 and Linux Mint 22 users can build a DKMS package locally:
 
 ```sh
 sudo apt update
-sudo apt install build-essential dkms linux-headers-$(uname -r) libdrm-dev git
+sudo apt install build-essential dkms linux-headers-$(uname -r) libdrm-dev ripgrep git
 git clone https://github.com/KodeMunkie/sm750hdmifb.git
 cd sm750hdmifb
 make check
 ./build-package.sh
-sudo apt install ./dist/sm750hdmifb_0.5.9_all.deb
+sudo apt install ./dist/sm750hdmifb_0.6.0_all.deb
 sudo reboot
 ```
+
+`make check` needs `pkg-config`, the libdrm development headers (`libdrm-dev`
+on Debian and Ubuntu, `libdrm-devel` on Fedora) and `rg` from ripgrep. The
+`check-deps` preflight target stops with an install hint when one is missing.
+
+### Fedora and other RPM distributions
+
+`packaging/sm750hdmifb.spec` builds the same DKMS package as a `noarch` RPM, so
+the installed file set matches the `.deb` and DKMS compiles the module against
+each installed kernel:
+
+```sh
+sudo dnf install rpm-build gcc make dkms kernel-devel libdrm-devel pkgconf-pkg-config ripgrep git tar
+git clone https://github.com/KodeMunkie/sm750hdmifb.git
+cd sm750hdmifb
+
+work=$(mktemp -d) && topdir=$work/rpmbuild
+mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS}
+git ls-files -z -- . ':(exclude)docs/images/*' >"$work/tracked"
+tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.0-source.tar.gz" \
+    --transform='s|^|sm750hdmifb-0.6.0/|' --null -T "$work/tracked"
+
+rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb.spec
+sudo dnf install -y "$topdir"/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+sudo reboot
+```
+
+The RPM build needs no root; only `dnf install` and the reboot do. The package
+carries no compiled module: DKMS builds `src/` for every installed kernel that
+satisfies `BUILD_EXCLUSIVE_KERNEL` in `dkms.conf` (6.17 and newer, the same
+floor as the `.deb`). Kernels 7.1 and newer are untested at runtime, exactly as
+described under [Kernel compatibility](#kernel-compatibility).
+
+`./tests/check-rpm-dkms.sh` re-verifies the package without root - fresh
+`rpmbuild`, payload against `git ls-files`, scriptlets, dependencies and a
+sandbox DKMS build - and exits non-zero on regression. See
+[RPM packaging](docs/PACKAGING-RPM.md) for the full recipe, verification and
+rollback.
+
+To run the checks before packaging anything:
+
+```sh
+make KDIR=/lib/modules/$(uname -r)/build CC=/usr/bin/gcc check
+```
+
+Pin `CC` to the compiler that built the running kernel. If `gcc` on `PATH`
+resolves to a different toolchain (CUDA toolkits do this), the kernel build
+prints `warning: the compiler differs from the one used to build the kernel`
+and the log is no longer clean. `scripts/gcc-version.sh` on Fedora reports the
+expected version as `150301` for GCC 15.3.1.
 
 The reboot matters: it lets the package blacklist Linux's old `sm750fb` driver
 before it can claim the card. The package is named `sm750hdmifb`; the kernel
@@ -48,7 +100,7 @@ module is `sm750hdmidrm.ko` so it cannot be confused with `sm750fb.ko`.
 
 **Kernels >= 7.1 are untested.** Offline compilation checks are available,
 but boot and runtime behavior have not been validated on those kernels.
-See the [0.5.9 release notes](docs/RELEASE-NOTES.md).
+See the [0.6.0 release notes](docs/RELEASE-NOTES.md).
 
 The driver is intended for **Linux 6.17 and newer**. DKMS deliberately refuses
 older kernels because the required DRM interfaces are not supported by this
@@ -269,13 +321,54 @@ If an experimental mode gives no signal, boot an older kernel entry or remove
 the added `sm750hdmidrm.*` GRUB options from recovery access. Testing and live
 reload guidance is in [Testing and recovery](docs/TESTING.md).
 
+### Register dump
+
+The driver registers a read-only MMIO dump as a debugfs file, which is the only
+supported way to read SM750 registers without `/dev/mem` (`CONFIG_STRICT_DEVMEM`
+blocks that path). The debugfs directory is named after the DRM minor, which is
+not always `0`; resolve it from the card node first:
+
+```sh
+card=$(readlink -f /dev/dri/by-path/pci-0000:01:00.0-card)
+minor=${card##*/card}
+sudo cat /sys/kernel/debug/dri/$minor/regs
+```
+
+The card registers no render node, so `/dev/dri/by-path/pci-0000:01:00.0-card`
+is the only stable handle for it; the `renderD*` nodes on a multi-GPU host
+belong to other cards.
+
+The file is mode `0444` and lives under the DRM minor's debugfs directory, so
+reading it requires root. It is inert until read, never writes to the device,
+and deliberately omits the read-to-clear registers (`RAW_INT`, `INT_STATUS`,
+`GPIO_INTERRUPT_STATUS`) so a dump taken before and after one modeset stays
+comparable. The dump is a stable `0x<offset> <name> 0x<value>` table; see
+[docs/REGISTERS.md](docs/REGISTERS.md) for the list of reported registers.
+
+### Framebuffer console
+
+The driver sets up fbdev emulation through `DRM_FBDEV_TTM_DRIVER_OPS` and
+`drm_client_setup()`. A `/dev/fb0` node appears only when the kernel is built
+with fbdev emulation and no other framebuffer driver already owns the device.
+KMS output works without it, so a missing `/dev/fb0` is not a driver fault.
+
 ## Developers
 
 - [Hardware and capability comparison](docs/HARDWARE.md)
 - [Module parameters](docs/PARAMETERS.md)
+- [Register reference](docs/REGISTERS.md)
 - [Modes and clock risks](docs/MODES.md)
 - [Provenance and licensing audit](docs/PROVENANCE.md)
 - [Testing and recovery](docs/TESTING.md)
+- [Test strategy and results](docs/TEST-STRATEGY.md)
+- [RPM packaging](docs/PACKAGING-RPM.md)
+- [Staging benchmark](docs/STAGING-BENCHMARK.md)
+- [Device specification archive](docs/specs/INDEX.md)
+- [Repository audit](docs/AUDIT.md) and [defect inventory](docs/DEFECTS.md)
+- [Build environment](docs/ENVIRONMENT.md)
+- [Deliverables index and reproduction](docs/DELIVERABLES.md)
+- [Project logbook](docs/LOGBOOK.md) - chronological record, newest entry last
+- [Host root actions](docs/ROOT-ACTIONS.md) - sudoers, helpers, udev rule, recovery
 - [Manual CI build](https://github.com/KodeMunkie/sm750hdmifb/actions/workflows/build.yml)
 
 The official SM750 specification is known to be wrong for at least one
