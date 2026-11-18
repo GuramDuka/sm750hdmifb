@@ -371,3 +371,20 @@ additionally consolidated, with their exact commands and hashes, in
   above `27db03b`. Unrelated in-flight work by other tasks stays uncommitted.
   The deliverables index gained a row for the T13 capture so its section 2.7
   `comm -23` check still returns nothing.
+
+### 2026-11-18T10:05Z | gem-planner | T10 accepted, T15 and T16 added and dispatched
+
+- Action: marked T10 completed, recorded its four findings in the plan of record as
+  decisions, and added two diagnosis tasks (T15 addfb size-max, T16 HDMI -110 episode)
+  at wave 8, then dispatched both to gem-debugger.
+- Files: `docs/plan/20261117-sm750-driver-prod/plan.yaml` (T10 status; four decisions;
+  T15 and T16 task blocks; T8 depends_on extended to both).
+- Evidence: `docs/evidence/runtime/01-original-state.txt` .. `07-kernel-log.txt`
+  (T10); the plan blocks carry the failure text and code locations for T15 and T16.
+- Outcome: 9 of 16 tasks completed. T15 and T16 run diagnosis only and must not edit
+  `src/`. Four tasks are now in flight: T13 (cursor alpha), T15, T16.
+- Note: `docs/evidence/EVIDENCE-GAPS.md:87-89` still states that the kernel log yields
+  0 lines, which T10 contradicted with 2017 lines from both `sudo -n dmesg` and
+  `sudo -n journalctl -k -b -q --no-pager`. The correction belongs to T11, which owns
+  that file; until then the contradiction stands recorded in
+  `docs/evidence/runtime/07-kernel-log.txt`.

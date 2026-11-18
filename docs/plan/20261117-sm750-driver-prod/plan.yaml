@@ -1,0 +1,663 @@
+plan_id: 20261117-sm750-driver-prod
+status: in_progress
+tldr: |
+  Stage 0-3 plan for the SM750 HDMI driver repo, revised to the VERIFIED ROOTLESS
+  reality of this host. Planning discovery corrects three handoff premises: the repo is
+  already an atomic DRM/KMS driver (module sm750hdmidrm, package sm750hdmifb 0.5.9,
+  DKMS-installed for 7.3.3-100.fc43), the declared kernel floor is 6.17 (not 5.14), and
+  the SM750 card is present and bound (01:00.0 126f:0750, card0-HDMI-A-1 connected) but
+  not reachable for MMIO/modeset work without root. Privileges are NOT granted: sudo -n
+  permits only dmidecode, ncu and nvprof, coder is in no video group, /dev/dri/card0
+  denies open, dmesg and the PCI ROM are unreadable, and dkms/rpm install refuse to run.
+  The normative method is therefore rootless: dnf download + rpm2cpio extraction for
+  libdrm and kernel-devel, with PKG_CONFIG_PATH/PKG_CONFIG_SYSROOT_DIR/LD_LIBRARY_PATH.
+  A separate privilege-upgrade path activates only if sudo is later granted.
+  Real gaps are: no archived device specifications, no defect inventory, no recorded
+  test strategy/results, and no rpmbuild spec (packaging today is .deb-only via
+  build-package.sh). Waves: W1 spec archive + repo audit -> W2 rootless environment and
+  readable baseline -> W3 surgical fixes and build matrix -> W4 test strategy/results +
+  RPM/DKMS -> W5 docs index -> W6 independent acceptance review. Atomic DRM/KMS rewrite
+  is out of scope.
+created_at: 2026-11-17T18:56:00Z
+created_by: gem-planner
+revision: 3
+replan_count: 0
+planner_revision_used: true
+
+decisions:
+  - "Normative path is the VERIFIED ROOTLESS method, not a fallback: dnf download libdrm libdrm-devel, rpm2cpio extraction, then PKG_CONFIG_PATH/PKG_CONFIG_SYSROOT_DIR/LD_LIBRARY_PATH. Reviewer verified make check exits 0 and the Makefile:14 check target is 17 recipe commands (measured, docs/evidence/baseline/13-make-check-count.txt), and JOBS=12 ./tests/build-all-kernels.sh exits 0 with 'Built 9 sm750hdmidrm kernel/format combinations'."
+  - "Privilege-upgrade path is separate and inert by default: it activates only if sudo is later granted. Activation = re-run T3 captures and the T6 install/erase assertions with the now-permitted commands and flip the corresponding GAP rows to observed PASS in docs/evidence/EVIDENCE-GAPS.md and docs/ACCEPTANCE-REPORT.md. No task asserts granted privileges anywhere."
+  - "6.17 floor coverage is achievable rootless: dnf download kernel-devel-6.17.1-300.fc43, rpm2cpio extract (about 4 minutes, one retry on 'Interrupted by header callback: Inconsistent server data'), then make KDIR=<extracted>/usr/src/kernels/6.17.1-300.fc43.x86_64 all and build-all-kernels.sh against that tree ('Built 3 combinations'). Reviewer verified exit 0."
+  - "Register dumps: option (a) chosen. modetest is NOT a register-dump source (no such option; driver exposes only drm_vram_mm_debugfs_init at src/sm750_drm.c:3256; /dev/mem is closed by CONFIG_STRICT_DEVMEM=y and CONFIG_IO_STRICT_DEVMEM=y). T3 records an explicit GAP whose closing command is a debugfs MMIO dump; T5 owns adding that facility (module_param or debugfs file in src/)."
+  - "Wave-3 race resolved by moving T4 to wave 4 with depends_on [T3, T5]: T4 records only post-fix runs in the same worktree, and no two tasks invoke make in the worktree concurrently. Wave numbering is otherwise preserved; T4 and T6 share wave 4 with disjoint file ownership (docs/TEST-STRATEGY.md vs packaging/)."
+  - "Spec archive keeps third-party binaries OUT of the tree: docs/specs/INDEX.md stores source URL, version/date and SHA-256 for each vendor document, and the checksum is reproducible by re-download and hash. This keeps docs/PROVENANCE.md:47 ('vendor material with restrictive notices is not included in the repository or source package') true and avoids shipping vendor PDFs in the source tarball produced by build-package.sh. Reviewer verified tests/audit-release.sh:54 does not trip on these PDFs, so this is provenance consistency, not a release-gate failure."
+  - "AC-6 is split explicitly: rootless-verifiable now = rpmbuild -ba, rpm -qp --scripts, rpm -qlp, rpm -qpR, and dkms add/build in a --dkmstree/--sourcetree/--installtree sandbox reporting status 'built'. Root-required = actual RPM install/erase, 'installed' status, and post-erase unregistration; those ship as a documented gap with exact closing commands."
+  - "Fedora 43 is the primary RPM target; the spec stays EL9-portable where macros allow (portable equivalents preferred, EL9 divergences as in-spec comments, not blockers). Kernel floor stays 6.17 from dkms.conf BUILD_EXCLUSIVE_KERNEL."
+  - "No atomic DRM/KMS rewrite: the driver already registers a DRM/KMS device with drm_vram_helper/ttm (modinfo: 'Atomic DRM/KMS driver for SM750G10 SiI9024A HDMI boards'); rewrite only if a specific defect provably requires it (none identified at plan time)."
+  - "Kernel matrix is the declared 6.17 floor through 7.x (dkms.conf BUILD_EXCLUSIVE_KERNEL, README, tests/build-all-kernels.sh), not 5.14; verification uses installed header trees 7.2.13-100, 7.2.15-100, 7.3.3-100 plus the extracted 6.17.1-300 tree."
+  - "Spec-archive stage is a degradable gate, never a blocker: fallback ladder is public SM750/SM718 datasheet+product brief, then register/mode definitions in mainline drivers/video/fbdev/sm750 (and drivers/staging/sm750fb) headers, then any locally present vendor SDK headers. Only a register-level unknown provably unresolved for a specific fix may block that fix."
+  - "Reuse existing in-repo checks as the primary suite (17 recipe commands via make check, 3-scanout-default matrix via make check-all-kernels); external suites (IGT, kmscube, modetest) are added only where they prove a claim the in-repo suite cannot, and each is gated on /dev/dri access that is currently denied."
+  - "Observed variance at T5: the 7.2.13-100 header tree no longer has a build link on the host, so the 3-tree matrix ran on 7.2.15-100, 7.3.3-100 and 7.3.4-100 (Built 9) instead of 7.2.13/7.2.15/7.3.3. The 6.17.1-300 fc43 tree was fetched from Fedora koji and built (Built 3). Evidence: docs/evidence/builds/02..06."
+  - "T4 resolved the 17-vs-18 count definitively: the Makefile check target has 17 recipe commands, and the 18th tab-indented line is the continuation of the Makefile:30-31 prerequisite, not a command. Post-T5 the check target moved to Makefile:30-48, so docs/ENVIRONMENT.md line references are stale and T7 must refresh them."
+  - "Device-access correction (2026-11-18): the SM750 registers no render node (no /dev/dri/by-path/pci-0000:01:00.0-render; renderD128 belongs to 0000:02:00.0). Only the card node is relevant, addressed by the stable by-path link pci-0000:01:00.0-card; the debugfs index equals the cardN suffix and must be resolved via readlink rather than hardcoded. A udev ACL rule replaces the manual setfacl step - artifacts staged at /mega/tmp/sm750/."
+  - "Device access decision (2026-11-18, user choice): the udev rule 99-sm750-coder-acl.rules grants u:coder rw on the SM750 card node at every probe, so no setfacl sudo line is enabled; the sudoers line stays commented as a one-shot fallback."
+  - "T6 correction (2026-11-18): kernel headers are NOT missing. /usr/src/kernels/ holds 7.2.15-100, 7.3.3-100 and 7.3.4-100, /lib/modules/7.3.4-100.fc43.x86_64/build -> /usr/src/kernels/7.3.4-100.fc43.x86_64, Module.symvers present. The dkms sandbox failure was a lookup-path artifact: with a custom --installtree dkms resolves headers at <installtree>/<kver>/build|source. Fix by symlinking build inside the sandbox installtree (fallback: --kernelsourcedir). No dnf download of kernel-devel is required. Only 6.17 is absent from /usr/src/kernels and stays covered by the koji tree at /mega/tmp/sm750/t5/k617."
+  - "sudoers syntax rule (2026-11-18): sudoers treats ':' ',' '=' and '\\' as special inside command arguments and requires a backslash before each one. Escaping alone proved fragile, so the policy is now to keep ZERO colons in command lines: anything needing a PCI address or vendor:device pair goes through a fixed helper in /usr/local/sbin (sm750-regs, sm750-lspci, sm750-vbios-dump). Staged file sha256 9b0249ce6572da5a57f73e4e2991ddf86a197ec4c88c0a79367c9ff2cb2db14a passes visudo -c -f standalone and appended to a copy of /etc/sudoers (both exit 0). The dnf install line names the exact RPM instead of a glob."
+  - "Sudo recovery note (2026-11-18): an earlier broken copy was installed at /etc/sudoers.d/10-sm750-debug, which makes every sudo invocation fail with a syntax error at lines 32:63 and 33:60 (the unescaped 01:00.0 and 126f:0750 in the lspci lines). Repair needs a non-sudo root path: pkexec (polkit admin) or su -, since sudo itself is unusable until the file is replaced. Documented closing commands: pkexec install -m 0440 -o root -g root /mega/tmp/sm750/10-sm750-debug.sudoers /etc/sudoers.d/10-sm750-debug then visudo -c."
+  - "Access state 2026-11-18: with the sudo grants active, sudo -n dmesg returns 154236 bytes (150 sm750-matching lines) and sudo -n journalctl -k -b -q --no-pager returns 1903 lines, so GAP-B2 is observable now. sm750-lspci, modetest -c and the card0 ACL all work. Two root steps remain outstanding: /usr/local/sbin/sm750-vbios-dump is installed 0644 so sudo reports it as not found, and the installed allowlist still carries 0.5.9 in the four dkms lines plus the dnf install path while the regenerated file carries 0.6.0."
+  - "Sysfs page cap (2026-11-18): the VBIOS helper v1 used `dd bs=65536 count=1` and produced a 4096-byte file. A sysfs binary attribute returns at most one page per read(2), so dd takes the short read as EOF. Proven on an unrelated attribute: /sys/kernel/btf/nf_conntrack is 26549 bytes, `dd bs=65536 count=1` gives 4096 bytes, `dd bs=4096` gives all 26549. Helper v2 uses `dd bs=4096` with no count and exits 2 with a warning when the size is not 65536; staged at /mega/tmp/sm750/sm750-vbios-dump, sha256 9e6c5db7853e3a58160d83c63aaee01144b20061a98a57c241188b3b6dd62a8f, ASCII only, sh -n clean."
+  - "Host-owner root actions executed 2026-11-18 (verified): /usr/local/sbin/sm750-vbios-dump installed 0755 root:root (sha256 e2f6f68791ebd3f341ca77cb84169bda8843c1ce192f2e500b51faa01e67f585, i.e. the v1 body) and /etc/sudoers.d/10-sm750-debug replaced with the 0.6.0 file. Verified by `sudo -n -l` (19 NOPASSWD entries, every dkms line and the dnf install path at 0.6.0, zero colons in command lines) and by one successful end-to-end run of the helper. Remaining root action: reinstall the helper with the v2 body (the grant covers the path, not the content, so no sudoers edit is needed)."
+  - "T10 completed 2026-11-18 on the stale 0.5.9 module and is the BEFORE half of the pair. Evidence: docs/evidence/runtime/01-original-state.txt .. 07-kernel-log.txt. The CRTC already had an active 1920x1080 mode (connector 35, crtc 38, fb 43), so every experiment captured state first and restored it by trap; the final state is byte-identical. modetest -s really programs 1024x768 (dmesg staging 1572864 = 1024*768*2, reverting to 4147200 at +2.576 s) but the mode is dropped when the process exits; `modetest -a` is a silent no-op on this driver. kmscube renders 299 frames in 5.066709 s = 59.01 fps at 60 Hz on llvmpipe (software, not SM750 acceleration); the earlier 'user interrupted!' was stdin EOF, fixed with `tail -f /dev/null |`. Pixel-level readback stays impossible unprivileged: CONFIG_FB_DEVICE is not set (no /dev/fb*), no writeback connector, modetest -o needs atomic+writeback, and a non-owning client cannot MAP_DUMB another client's fb - the GEM object behind fb 43 reads back 48 nonzero bytes of 8294400 because of the shadow/backbuffer path."
+  - "T10 found a genuine driver defect in IGT: kms_addfb_basic subtest size-max fails with DRM_IOCTL_MODE_ADDFB2 errno 22 EINVAL at ../tests/kms_addfb_basic.c:594. This is driver behaviour, not tooling, and is not in docs/AUDIT.md. Five further IGT failures are tooling: kms_getfb getfb-handle-protection and getfb2-handle-protection need root (igt_drop_root, ../lib/igt_aux.c:1123), and kms_setmode/kms_atomic/kms_rmfb/kms_flip/kms_pipe_crc_basic abort at kmstest_set_vt_graphics_mode (../lib/igt_kms.c:1558, errno 13) because /dev/tty0 is crw------- root tty. kms_fb_coherency and kms_dirtyfb exit 77 because IGT cannot classify sm750hdmidrm (../lib/drmtest.c:754, IGT_FORCE_DRIVER does not help). core_getversion and dumb_buffer pass."
+  - "T10 captured a seven-line kernel error episode at dmesg [8523..8586]: 'sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI mode: -110' plus a drm_atomic_helper_commit_hw_done WARNING (src/sm750_drm.c:3116 in the fail label of sm750_pipe_enable), three 10 s commit-wait timeouts (CRTC:38, CONNECTOR:35, PLANE:36) and 'refcount_t: underflow; use-after-free' at refcount_warn_saturate via __drm_atomic_helper_plane_destroy_state -> drm_gem_simple_kms_destroy_shadow_plane_state -> drm_release, all on the fbdev-restore path at client close. It did NOT reproduce in ~25 controlled attempts, so it is recorded as an observed 0.5.9 defect with an unisolated trigger."
+  - "docs/evidence/EVIDENCE-GAPS.md:87-89 is CONTRADICTED: it claims journalctl -k -b yields 0 lines and '-- No entries --', but T10 measured 2017 lines from both `sudo -n dmesg` and `sudo -n journalctl -k -b -q --no-pager`. The file was not edited by T10; the contradiction is recorded in docs/evidence/runtime/07-kernel-log.txt and in the TEST-STRATEGY conflict table. GAP-B2 must be closed on the corrected measurement."
+  - "Context clusters are grouped by primary agent because a shared_context key requires one agent: baseline-env = T3/T6 (gem-devops), audit-context = T1/T2 (gem-researcher), docs-context = T4/T7 (gem-documentation-writer). T5 (gem-implementer) and T8 (gem-reviewer) are intentionally standalone: no peer task shares their agent, and they consume cluster findings through relevant_context references."
+
+assumptions:
+  - "Primary RPM target Fedora 43 x86_64 (current host), spec written EL9-portable where macros allow: prefer portable macro equivalents over Fedora-only macros, and record any EL9 divergence as a comment in the spec rather than treating it as a blocker. dkms, rpmbuild 6.0.2, rpmdev-setuptree and spectool are present; ~/rpmbuild now EXISTS, so clean-buildroot work uses a fresh _topdir via --define."
+  - "Kernel floor remains 6.17 per dkms.conf BUILD_EXCLUSIVE_KERNEL; the EL9 portability target does not lower it, so EL9 kernels below 6.17 are documented as unsupported in the spec comment rather than accommodated."
+  - "No privileges are available: sudo -n permits only /usr/bin/dmidecode, /usr/local/cuda/bin/ncu and /usr/local/cuda/bin/nvprof; id reports groups=1006(coder) only; /dev/dri/card0 ACL grants user:duka:rw-; python3 open('/dev/dri/card0') raises PermissionError [Errno 13]; modetest -c prints 'no device found'; dmesg is denied; /sys/bus/pci/devices/0000:01:00.0/rom is unreadable; dkms install fails 'Error! You must be root to use this command.'; rpm -i --root= fails 'Unable to change root directory'."
+  - "A second user decision on rootless-vs-wait is still pending; this plan is written so it is correct either way, because the privilege-upgrade path is additive and does not change task ownership or wave order."
+  - "Repo is a fork (origin polaris.root.sx, upstream github.com/KodeMunkie/sm750hdmifb) at HEAD 27db03b on main, clean worktree; committed evidence files are acceptable deliverables."
+  - "Scratch-path constraint (user, 2026-11-17): all intermediate and temporary files use /mega/tmp/, /mnt/INTEL_SSDSC2KB019T8_PHYF238503BW1P9DGN/tmp/ or /mnt/INTEL_SSDSC2KB038T8_PHYF320200Y73P8EGN/tmp/ (scratch root /mega/tmp/sm750/); nothing is written to the project worktree except committed deliverables and nothing to the user's home directory."
+
+shared_context:
+  baseline-env:
+    - "Host: Fedora Linux 43 (Server Edition), kernel 7.3.3-100.fc43.x86_64, DMI product X10DRi, not containerized."
+    - "Header trees present: /lib/modules/7.2.13-100.fc43.x86_64/build, 7.2.15-100.fc43.x86_64/build, 7.3.3-100.fc43.x86_64/build; no installed 6.17 tree (6.17.1-300.fc43 is obtained by rootless rpm2cpio extraction)."
+    - "Tools present: rpmbuild 6.0.2, rpmdev-setuptree, spectool, dkms, modinfo, modetest, gcc 14.4.1 (/usr/bin), python3, make, dnf, rpm2cpio. Missing: igt-info, kmscube, v4l2-ctl, libdrm-devel (xf86drm.h) - all obtainable rootless via dnf download + rpm2cpio extraction."
+    - "Privileges (verified by reviewer, authoritative): sudo -n -l lists only /usr/bin/dmidecode, /usr/local/cuda/bin/ncu, /usr/local/cuda/bin/nvprof; getent group video = video:x:39:cosmic-greeter,duka; /dev/dri/card0 ACL grants user:duka:rw-, not coder. No privileged operation may be assumed anywhere in this plan."
+    - "Rootless libdrm procedure (reviewer-verified): mkdir -p /mega/tmp/sm750/libdrm && cd /mega/tmp/sm750/libdrm && dnf download libdrm libdrm-devel && for r in libdrm-*.rpm; do rpm2cpio \"$r\" | cpio -idmv; done && export PKG_CONFIG_PATH=/mega/tmp/sm750/libdrm/usr/lib64/pkgconfig PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/libdrm LD_LIBRARY_PATH=/mega/tmp/sm750/libdrm/usr/lib64 && make check -> exit 0, all 17 recipe commands green."
+    - "Rootless 6.17 headers (reviewer-verified): dnf download kernel-devel-6.17.1-300.fc43; rpm2cpio <rpm> | cpio -idmv (about 4 min, retry once on 'Interrupted by header callback: Inconsistent server data'); make KDIR=/mega/tmp/sm750/k617/usr/src/kernels/6.17.1-300.fc43.x86_64 all -> exit 0; ./tests/build-all-kernels.sh <same dir> -> 'Built 3 combinations'."
+    - "Hardware in place: 01:00.0 Silicon Motion SM750 [126f:0750] rev a1 bound to sm750hdmidrm; /sys/class/drm/card0-HDMI-A-1 status=connected, EDID world-readable, modes start 1920x1080; dkms status: sm750hdmifb/0.5.9, 7.3.3-100.fc43.x86_64, installed."
+    - "Offline module build works rootless: make KDIR=/lib/modules/7.3.3-100.fc43.x86_64/build all exits 0 and produces src/sm750hdmidrm.ko; only diagnostics are kernel-header (linux/fs.h __counted_by) and gcc-version-mismatch warnings."
+    - "Privilege-upgrade trigger (inert until sudo is granted): re-run the GAP-closing commands recorded in docs/evidence/EVIDENCE-GAPS.md and flip those rows to observed PASS; no task restructures."
+  audit-context:
+    - "Makefile anchors: Makefile:14 check target (17 recipe commands, measured), Makefile:34 check-all-kernels, Makefile:40 tests/check-vblank rule (uses pkg-config libdrm)."
+    - "Build/package entry points: build-package.sh (deb + source tarball), dkms.conf (PACKAGE_NAME sm750hdmifb, PACKAGE_VERSION 0.5.9, BUILT_MODULE_NAME sm750hdmidrm, BUILD_EXCLUSIVE_KERNEL floor 6.17), .github/workflows/build.yml."
+    - "Packaging assets: packaging/drm-postinst, drm-postrm, drm-prerm, sm750hdmidrm.conf, sm750hdmidrm.modules-load, 20-sm750hdmidrm.conf, write-xorg-config.sh, copyright."
+    - "No .spec file exists anywhere in the tree at plan time."
+  docs-context:
+    - "Existing docs: HARDWARE, MODES, PARAMETERS, PROVENANCE, RELEASE-NOTES, STAGING-BENCHMARK, TESTING, VBLANK."
+    - "make check covers metadata, mode, dither, softscale, cursor, DMA, damage, Xorg and packaging checks; make check-all-kernels covers three scanout defaults per header tree."
+    - "Test entry points: tests/build-all-kernels.sh, tests/audit-release.sh, tests/check-drm-module.sh, tests/check-rpm-dkms.sh (to be added by T6)."
+
+acceptance_criteria:
+  - "AC-1 Device specifications located, read and archived: docs/specs/INDEX.md carries source URL, version, date and SHA-256 for the SM750 datasheet and product brief; docs/specs/REGISTER-MAP.md cross-references every MMIO register used by src/*.c; unresolved items are listed in docs/specs/GAPS.md; no vendor binaries enter the tree."
+  - "AC-2 Repository audit and defect inventory: docs/AUDIT.md records every defect with severity and evidence, and docs/DEFECTS.md gives each one a status of fixed, accepted or deferred with justification."
+  - "AC-3 Runtime and hardware validation ladder: connector state -> modetest enumeration -> modeset -> framebuffer readback -> scanout CRC -> external capture, each tier backed by an evidence path; tiers that could not be reached are GAP rows with closing commands."
+  - "AC-4 Test strategy and results: docs/TEST-STRATEGY.md names the in-repo and external suites, and every PASS row is backed by an evidence file that exists in the tree."
+  - "AC-5 Build integrity: make check green (17 recipe commands), build matrix covering the declared 6.17 floor plus the installed 7.2/7.3 header trees, and no compiler warnings originating in src/."
+  - "AC-6 Packaging: an rpmbuild spec produces a noarch DKMS source carrier with correct scriptlets and dependencies, verified rootless (rpmbuild -ba, rpm -qp --scripts, rpm -qlp, rpm -qpR, dkms sandbox status built); root-only install and erase are documented gaps with exact closing commands."
+  - "AC-7 Deliverable index and clean-checkout reproduction: docs/DELIVERABLES.md maps AC-1..AC-7 to repo paths and verification commands, README documents the RPM/DKMS path, and every root-only step is labelled with its closing command."
+
+tasks:
+  - id: T1
+    title: Archive SM750 device specifications with checksums and authority index
+    description: |
+      Rung: new artifact (no in-repo spec archive exists). Locate and cite the
+      authoritative SM750 documents, record URL/version/date/SHA-256, and cross-reference
+      register and mode definitions against the driver. Third-party binaries stay out of
+      the tree; only the index, checksums and authored cross-reference tables are
+      committed. Enforce the degradable-gate fallback ladder; record every gap instead of
+      blocking.
+    wave: 1
+    depends_on: []
+    agent: gem-researcher
+    exploration_mode: question
+    context_cluster: audit-context
+    status: completed
+    retries_used: 0
+    acceptance_criteria:
+      - "docs/specs/INDEX.md records for the SM750 datasheet and the SM750 product brief: source URL, document version and date, retrieval date, and SHA-256 of the downloaded file; each checksum is reproducible by the documented re-download-and-hash command."
+      - "No third-party binary document is committed: `git ls-files docs/specs` lists only text artifacts (INDEX.md, SHA256SUMS, GAPS.md and authored cross-reference files), keeping docs/PROVENANCE.md:47 true and keeping vendor PDFs out of the build-package.sh source tarball."
+      - "docs/specs/INDEX.md classifies each source as authoritative vs vendor-supplied vs substitute and states which fallback rung was used per document."
+      - "Coverage table maps display controller, mode/clock tables, DMA engine, GPIO/I2C (SiI9024 control bus) and cursor registers to a cited document section or to a named substitute source."
+      - "Cross-check of src/ddk750_reg.h against the cited sources lists every register used by the driver without a citation, each with file:line."
+      - "If a document is unobtainable, docs/specs/GAPS.md records the exact URL/attempt, the substitute used, and states that the stage is not blocked."
+    handoff:
+      constraints:
+        - "Known existing source URLs in docs/HARDWARE.md:59 (SM750 product brief, siliconmotion.com) and docs/HARDWARE.md:60 (SM750 datasheet v1.4, VersaLogic)."
+        - "Download to /mega/tmp/sm750 for hashing; never commit the PDFs."
+        - "No writes outside docs/specs/."
+        - "Treat documented boundary/count/completion semantics as hypotheses; docs/HARDWARE.md:23 records a case where the spec is wrong."
+      relevant_context:
+        - "docs/PROVENANCE.md asserts DDK files originate from Linux staging sm750fb; that tree is the first substitute for register semantics."
+        - "Driver source: src/ddk750_reg.h, src/ddk750_mode.c, src/ddk750_display.c, src/ddk750_hwi2c.c, src/ddk750_swi2c.c, src/sii902x.c."
+        - "Reviewer-verified: tests/audit-release.sh:54 greps for 'all rights reserved|confidential' and does not trip on these PDFs, so provenance consistency is the only concern."
+      high_risk_signals:
+        - "Spec/behavior divergence already proven (docs/HARDWARE.md:23); do not let spec text override validated workarounds."
+      critic_signals: []
+
+  - id: T2
+    title: Audit repo state and produce severity-ranked defect inventory
+    description: |
+      Rung: reuse existing sources; no code changes. Establish executable ground truth
+      for layout, build system, declared kernel range, packaging state and current test
+      status under rootless conditions, then enumerate defects with reproduction commands.
+      This inventory is the input to the fix task and the acceptance review.
+    wave: 1
+    depends_on: []
+    agent: gem-researcher
+    exploration_mode: audit
+    context_cluster: audit-context
+    status: completed
+    retries_used: 0
+    acceptance_criteria:
+      - "docs/AUDIT.md records HEAD sha, branch, remotes, worktree cleanliness, source file count/LOC, module identity (sm750hdmidrm) vs package identity (sm750hdmifb 0.5.9), and every build/package entry point (Makefile targets, build-package.sh, dkms.conf, .github/workflows/build.yml) with file:line references."
+      - "Declared kernel support range is stated with evidence from dkms.conf BUILD_EXCLUSIVE_KERNEL, README.md kernel-compatibility section and tests/build-all-kernels.sh version case, and contrasted with the handoff claim of 5.14."
+      - "docs/AUDIT.md defect table has IDs, severity S1-S4, symptom, reproduction command and observed evidence; it includes at minimum: no rpmbuild spec anywhere, make check requiring libdrm which is absent from the host, no archived specifications, absent igt/kmscube, gcc 14.4.1 vs kernel gcc 15.3.1 mismatch, no installed 6.17 header tree, and no register-dump facility in the driver."
+      - "Packaging audit states precisely what exists (build-package.sh .deb plus source tarball, packaging/ maintainer scripts including the Debian-only packaging/drm-postinst:66-73 update-initramfs call, modprobe/modules-load/xorg conf) and what is missing for RPM/DKMS install verification."
+      - "Privilege matrix is recorded with the exact verified denials (sudo -n -l entries, groups, /dev/dri/card0 ACL, dmesg, PCI ROM, dkms install, rpm --root) and names which acceptance evidence each denial blocks."
+      - "Contradicted-claim list names each README/acceptance premise not supported by repo state (fbdev userspace contract, 5.14 kernel floor, assumed root access) with file:line."
+    handoff:
+      constraints:
+        - "Read-only: no writes outside docs/."
+        - "Do not attempt privileged operations; cite the verified denial instead."
+        - "Build in a copy such as /tmp/sm750build, never in the worktree, to keep it clean."
+      relevant_context:
+        - "Verified at plan time: make KDIR=/lib/modules/7.3.3-100.fc43.x86_64/build all exits 0; plain make check exits 2 at tests/check-vblank because libdrm-devel is absent."
+        - "Test entry points: Makefile:14 check (17 recipe commands), Makefile:34 check-all-kernels, Makefile:40 tests/check-vblank rule, tests/build-all-kernels.sh, tests/audit-release.sh."
+        - "Register-dump absence: driver exposes only drm_vram_mm_debugfs_init at src/sm750_drm.c:3256 and has no register-dump module_param; /dev/mem is closed by CONFIG_STRICT_DEVMEM=y and CONFIG_IO_STRICT_DEVMEM=y."
+      high_risk_signals: []
+      critic_signals: []
+
+  - id: T3
+    title: Provision rootless test toolchain and capture readable hardware baseline
+    description: |
+      Rung: reuse existing host tooling; new scripts only for capture. Establish the
+      rootless toolchain (libdrm via dnf download + rpm2cpio, IGT and kmscube availability
+      assessment), capture every baseline artifact that is readable without privileges, and
+      record each unreadable artifact as an explicit GAP with its exact closing command.
+    wave: 2
+    depends_on: [T2]
+    agent: gem-devops
+    context_cluster: baseline-env
+    status: completed
+    retries_used: 0
+    acceptance_criteria:
+      - "docs/ENVIRONMENT.md lists host kernel, distro, header trees, a tool matrix (rpmbuild, dkms, modinfo, modetest, gcc, python3, igt-info, kmscube, v4l2-ctl, libdrm) with version or MISSING plus how each missing item is obtained rootless, and a privilege matrix with the exact verified denials."
+      - "The rootless libdrm procedure is recorded verbatim with the env-var chain (dnf download libdrm libdrm-devel, rpm2cpio | cpio -idmv, PKG_CONFIG_PATH, PKG_CONFIG_SYSROOT_DIR, LD_LIBRARY_PATH) together with the observed `pkg-config --modversion libdrm` output and confirmation that tests/check-vblank compiles."
+      - "docs/evidence/baseline/ contains committed captures, each with exact command line and timestamp: lspci -vvv -d 126f:0750, EDID blob as hex dump plus crc32 from /sys/class/drm/card0-HDMI-A-1/edid, connector status/modes/enabled, dkms status, modinfo sm750hdmidrm, lsmod state."
+      - "docs/evidence/EVIDENCE-GAPS.md names each blocked artifact with its exact closing command and the observed denial: VBIOS ROM (dd from /sys/bus/pci/devices/0000:01:00.0/rom, currently unreadable), dmesg excerpt (dmesg currently denied; test and record whether journalctl -k -b is an available substitute), /dev/dri modeset capture (modetest -c currently 'no device found'), and register dumps."
+      - "Register-dump entry is an explicit GAP citing option (a): the closing command is a debugfs MMIO dump whose facility T5 adds in src/, then a root-only read of that debugfs file before and after a single modeset. modetest is not cited as a register-dump source anywhere."
+      - "IGT and kmscube availability is stated factually (packages obtainable via dnf download, but execution requires /dev/dri access that is denied), and no run is claimed."
+      - "No changes to src/ or tests/ in this task."
+    handoff:
+      constraints:
+        - "Never claim an observed result that was not produced on this host; a denial is recorded as a gap, not a failure and not a pass."
+        - "Capture files are text or small binaries only; keep the corpus reproducible from the recorded commands."
+        - "Use /mega/tmp/sm750 for scratch space and for extracted RPM trees."
+      relevant_context:
+        - "modetest -c prints 'no device found' because /dev/dri/card0 is root:video 0660 with ACL user:duka:rw- and coder lacks both."
+        - "/sys/bus/pci/devices/0000:01:00.0/rom exists but is root-only (0600); VBIOS layout is 64 KiB."
+        - "Card is bound to sm750hdmidrm and connector card0-HDMI-A-1 is connected with a world-readable EDID, so the read-only capture path works without privileges."
+        - "Privilege-upgrade trigger: if sudo is later granted, re-run the recorded closing commands and flip the gap rows to observed PASS."
+      high_risk_signals:
+        - "Shared GPU global register state: register dumps must be taken with a documented capture point (before/after a single modeset) so they are comparable."
+      critic_signals: [cross_domain_impact]
+
+  - id: T5
+    title: Fix inventoried defects, add register-dump facility, prove warning-clean build matrix
+    description: |
+      Rung: reuse existing code and checks; surgical fixes only, no architectural rewrite.
+      Address S1/S2 defects from docs/AUDIT.md with before/after evidence, add the debugfs
+      MMIO register-dump facility that closes the T3 register gap, and prove the driver
+      builds warning-clean in driver sources across all four header trees (6.17.1-300
+      extracted rootless, 7.2.13-100, 7.2.15-100, 7.3.3-100) and all three scanout
+      defaults.
+    wave: 3
+    depends_on: [T2, T3]
+    agent: gem-implementer
+    status: completed
+    retries_used: 1
+    acceptance_criteria:
+      - "docs/DEFECTS.md carries one row per inventoried defect with status fixed/deferred/accepted, the change reference, and a before/after evidence path under docs/evidence/builds/ for every fixed item."
+      - "A debugfs (or module_param) register-dump facility exists in src/, is documented in docs/ and in docs/evidence/EVIDENCE-GAPS.md as the closing mechanism for the T3 register gap, and is exercised as far as privileges allow; if the read requires root, the exact command is recorded and the row stays a documented gap."
+      - "`make check` passes with all 17 recipe commands executing under the recorded rootless libdrm env chain (PKG_CONFIG_PATH, PKG_CONFIG_SYSROOT_DIR, LD_LIBRARY_PATH); the command and exit status are archived."
+      - "`JOBS=12 ./tests/build-all-kernels.sh` completes for all installed trees and all three scanout defaults ('Built 9 sm750hdmidrm kernel/format combinations'); the extracted 6.17.1-300.fc43 tree additionally builds ('Built 3 combinations'); all logs archived."
+      - "No compiler warning or error originates in src/*.c or src/*.h in any archived build log; kernel-header diagnostics and gcc-version-mismatch notes are documented as out-of-scope in docs/DEFECTS.md."
+      - "Deferred defects each carry a justification naming why the fix is out of scope (for example requiring an atomic rewrite or a privilege this host does not have)."
+    handoff:
+      constraints:
+        - "No atomic DRM/KMS rewrite; no new userspace contract."
+        - "Preserve empirically validated workarounds even where the datasheet disagrees (docs/HARDWARE.md:23)."
+        - "Do not weaken existing checks to make the suite pass; changing a check requires a documented reason."
+        - "Keep the module name sm750hdmidrm and package sm750hdmifb unchanged."
+        - "Do not add privileged operations; the register-dump facility must be inert until a root user reads it."
+      relevant_context:
+        - "Known S1: no rpmbuild spec (owned by T6, do not duplicate). Known S2: tests/check-vblank needs libdrm headers, supplied rootless by T3."
+        - "Register-dump anchors: src/sm750_drm.c:3256 currently sets only .debugfs_init = drm_vram_mm_debugfs_init; /dev/mem is unavailable (CONFIG_STRICT_DEVMEM=y, CONFIG_IO_STRICT_DEVMEM=y)."
+        - "6.17 rootless build: dnf download kernel-devel-6.17.1-300.fc43 then rpm2cpio extract; retry once on 'Interrupted by header callback: Inconsistent server data'."
+        - "Build is clean in driver sources today apart from kernel-header __counted_by warnings."
+      high_risk_signals:
+        - "Shared GPU global register state: fixes touching DDK register sequences must keep the documented capture points comparable."
+      critic_signals: [architecture]
+
+  - id: T4
+    title: Select test strategy and record post-fix runs with pass/fail criteria
+    description: |
+      Rung: reuse existing suite first, add external suites only where they prove a claim
+      the in-repo suite cannot. Define an explicit testable production bar per acceptance
+      criterion, then record post-fix runs in the same worktree (T5 has completed) plus the
+      blocked hardware runs as gaps.
+    wave: 4
+    depends_on: [T3, T5]
+    agent: gem-documentation-writer
+    context_cluster: docs-context
+    status: completed
+    retries_used: 0
+    acceptance_criteria:
+      - "docs/TEST-STRATEGY.md chooses suites from in-repo checks, libdrm modetest, kmscube and an IGT GPU Tools subset, and excludes v4l2-utils with a stated reason (no capture path on this board); each entry gives exact package name and version or availability status, runnable command, pass/fail criterion and evidence path."
+      - "A results table records every executed run with kernel version, tool version, command, evidence path and verdict PASS/FAIL/GAP; no row is marked PASS without an evidence path that exists in the repo, and every row is a post-T5 run."
+      - "The document defines, per acceptance criterion 3 and 5, what evidence would prove the claim (for example framebuffer content readback versus connector status alone) and lists which claims remain unproven."
+      - "IGT conformance is labelled a stretch artifact, not a gating deliverable, and its current blocker (no /dev/dri access) is stated with the closing command."
+      - "The full 18-check make check suite result is recorded with its rootless env chain; excluding a check requires an explicit documented reason."
+      - "All statements are consistent with docs/ENVIRONMENT.md and docs/evidence/; conflicting claims are resolved in favour of recorded evidence."
+    handoff:
+      constraints:
+        - "No invented versions: tools that are absent are listed as unavailable with how they are obtained."
+        - "Do not upgrade a GAP to PASS by inference."
+        - "Writes limited to docs/TEST-STRATEGY.md."
+        - "Record only runs executed after T5 completed; do not cite pre-fix results as current."
+      relevant_context:
+        - "T5 archives make check (17 recipe commands) and build-matrix logs; cite those paths rather than re-running make in parallel with another task."
+        - "Header trees: 6.17.1-300 (extracted rootless), 7.2.13-100, 7.2.15-100, 7.3.3-100."
+        - "IGT and kmscube packages are obtainable rootless via dnf download but cannot execute without /dev/dri access."
+      high_risk_signals: []
+      critic_signals: [contract_change]
+
+  - id: T6
+    title: Add rpmbuild spec that installs and registers the driver through DKMS
+    description: |
+      Rung: new artifact (no .spec exists; today packaging is .deb-only). Build a noarch
+      DKMS RPM mirroring build-package.sh content, Fedora 43 primary and EL9-portable where
+      macros allow, then verify everything that is verifiable rootless and record the
+      root-only install/erase steps as a gap with exact closing commands.
+    wave: 4
+    depends_on: [T5]
+    agent: gem-devops
+    context_cluster: baseline-env
+    status: completed
+    retries_used: 0
+    acceptance_criteria:
+      - "packaging/sm750hdmifb.spec exists with Version 0.5.9 and BuildArch noarch, and `rpmbuild -ba --define '_topdir /mega/tmp/sm750/rpmbuild-v3' packaging/sm750hdmifb.spec` exits 0 from a fresh _topdir (~/rpmbuild already exists, so a new subdir or explicit _topdir is mandatory), producing SRPM and RPM with the log archived under docs/evidence/packaging/."
+      - "Spec declares dependencies explicitly: BuildRequires rpm-build, dkms, make, gcc; Requires dkms; Requires(post) dkms, kmod; Requires(preun) dkms. `rpm -qpR` and `rpm -qp --buildrequires` output is archived."
+      - "Scriptlet placement is stated and implemented: %post runs dkms add; %posttrans runs dkms build plus dkms install so headers are available by then; %preun runs dkms remove; %postun is not used. --rpm_safe_upgrade semantics are chosen and implemented (scriptlet guard on $1 == 1) and documented in the spec."
+      - "Missing-headers behaviour is defined and implemented: when no supported kernel with headers is present, %posttrans prints a warning to stderr and exits 0 so the transaction does not fail; this is asserted by a shell-level test or documented dry run."
+      - "packaging/drm-postinst:66-73 is NOT ported verbatim: the spec must not call update-initramfs and must not exit 1 on missing headers; the Fedora path uses dkms install plus depmod -a with a warning. The spec contains a comment recording this divergence."
+      - "%files is enumerated exactly, with an explicit ship/no-ship decision for each build-package.sh asset: /usr/src/sm750hdmifb-0.5.9/{Makefile,dkms.conf,src/Makefile,src/Kconfig,src/*.c,src/*.h}, /etc/modprobe.d/sm750hdmidrm.conf, /etc/modules-load.d/sm750hdmidrm.conf, /usr/share/X11/xorg.conf.d/20-sm750hdmidrm.conf, /usr/lib/sm750hdmifb/write-xorg-config (0755), and %doc README.md LICENSE docs/RELEASE-NOTES.md docs/TESTING.md plus packaging/copyright. `rpm -qlp` output is archived and matches the decision list."
+      - "Rootless verification is recorded as observed evidence: rpmbuild -ba, rpm -qp --scripts, rpm -qlp, rpm -qpR, and dkms add plus dkms build inside a sandbox (`dkms --dkmstree/--sourcetree/--installtree` under /mega/tmp/sm750) reporting status 'built'."
+      - "Root-only steps are recorded as an explicit gap in docs/evidence/EVIDENCE-GAPS.md with exact closing commands: dnf install of the built RPM, dkms status reporting 'installed', modinfo from the installed path, dnf remove, and post-erase status showing registration removed. tests/check-rpm-dkms.sh implements all assertions and exits non-zero on failure; it is expected to reach the 'built' assertions rootless and to skip the root-only ones with a clear message."
+      - "docs/PACKAGING-RPM.md documents clean-checkout reproduction including rpmdev-setuptree or explicit _topdir, spec dependencies, EL9 caveats, the missing-headers warning behaviour and rollback."
+    handoff:
+      constraints:
+        - "Do not regress the existing .deb path (build-package.sh, tests/check-drm-packaging.sh)."
+        - "Keep DKMS package name sm750hdmifb and module name sm750hdmidrm; preserve BUILD_EXCLUSIVE_KERNEL semantics (floor 6.17)."
+        - "No source changes outside packaging/, tests/check-rpm-dkms.sh and docs/."
+        - "Assume no privileges: never write scriptlets that require root at RPM build time."
+      relevant_context:
+        - "Content list to mirror is in build-package.sh:30-50 (Makefile, README.md, LICENSE, dkms.conf, src files, modprobe.d, modules-load.d, xorg.conf.d, write-xorg-config, copyright, docs/RELEASE-NOTES.md, docs/TESTING.md)."
+        - "Debian-only script to avoid: packaging/drm-postinst:66-73 calls update-initramfs -u -k and exits 1 when no supported headers exist."
+        - "rpmbuild 6.0.2, rpmdev-setuptree and spectool are installed; ~/rpmbuild exists, so use a fresh _topdir."
+        - "Rootless DKMS sandbox form: dkms --dkmstree /mega/tmp/sm750/dkms --sourcetree /mega/tmp/sm750/dkms/src --installtree /mega/tmp/sm750/dkms/install -m sm750hdmifb -v 0.5.9 add|build|status."
+      high_risk_signals:
+        - "DKMS + RPM scriptlet ordering: build must not run before headers are present, and erase must not leave a stale /lib/modules entry."
+        - "Scriptlet failure mode: an exiting scriptlet can abort a transaction, so missing headers must warn only."
+      critic_signals: [cross_domain_impact]
+
+  - id: T9
+    title: Bump release version to 0.6.0 and align the version the driver reports
+    description: |
+      Rung: new artifact. The installed module on this host is the pre-fix 0.5.9 build:
+      /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz has no version field
+      (MODULE_VERSION was added in T5), contains no "regs" debugfs string, and
+      modetest reports "version 0.1.0 at 0" because the drm_driver struct still carries
+      .major = 0 / .minor = 1. A new release number makes the fixed build distinguishable
+      from the stale one and makes the debugfs register dump reachable.
+      Bump the single release version to 0.6.0 everywhere it is declared, and make the
+      DRM-reported driver version follow it instead of the hardcoded 0.1.
+    wave: 5
+    depends_on: [T7]
+    agent: gem-implementer
+    context_cluster: docs-context
+    status: completed
+    retries_used: 0
+    acceptance_criteria:
+      - "Version 0.6.0 is declared consistently in build-package.sh:8 (readonly version), dkms.conf:3 (PACKAGE_VERSION), src/sm750_drm.c:70 (SM750_DRM_VERSION) and packaging/sm750hdmifb.spec (%global dkms_version and Version), and `./tests/check-release-version.sh` prints 'Release version consistency checks passed: 0.6.0'."
+      - "tests/check-release-version.sh is extended to cover the RPM spec, which today it does not: it must fail when packaging/sm750hdmifb.spec %global dkms_version or Version diverges from build-package.sh, and it must still pass at 0.6.0. Prove the guard by running the script once against a deliberately stale spec value (in a scratch copy, not the tracked file) and recording the non-zero exit."
+      - "The drm_driver struct no longer reports 0.1.0: DRIVER_MAJOR/DRIVER_MINOR/DRIVER_PATCHLEVEL macros are defined next to SM750_DRM_VERSION and used in both drm_driver instances (the shadow driver near src/sm750_drm.c:3367-3382 and the TTM driver near :3854), so modetest prints version 0.6.0."
+      - "Hardcoded 0.5.9 expectations in the test suite are updated: tests/check-drm-packaging.sh:13 (PACKAGE_VERSION grep) and tests/check-rpm-dkms.sh:21 plus the expected_calls block at :346."
+      - "Artifact names follow the new version in .github/workflows/build.yml (sm750hdmifb-0.6.0, sm750hdmifb_0.6.0_all.deb, source tarball) and README.md (deb path, RPM recipe, RPM filename, release-notes link), with no 0.5.9 string left in either file."
+      - "docs/RELEASE-NOTES.md gains a 0.6.0 section above 0.5.9 listing the defect fixes, the read-only debugfs register dump, MODULE_VERSION, the RPM/DKMS packaging path and the kernel matrix 6.17.1-300 / 7.2.15 / 7.3.3 / 7.3.4, and keeps the untested-above-7.1 caveat."
+      - "packaging/sm750hdmifb.spec gains a 0.6.0-1 changelog entry; the historical 0.5.9-1 entry is preserved."
+      - "`make check` stays green (17 recipe commands, check-deps preflight), `JOBS=12 ./tests/build-all-kernels.sh` still reports 'Built 9', `./build-package.sh` produces dist/sm750hdmifb_0.6.0_all.deb and `./tests/audit-release.sh` exits 0, `./tests/check-rpm-dkms.sh` exits 0 with the new version, and no compiler warning originates in src/."
+      - "Historical documents keep their original version strings where they describe what was observed at 0.5.9 (docs/AUDIT.md, docs/TEST-STRATEGY.md result rows, docs/evidence/**, docs/ENVIRONMENT.md host captures); only forward-looking guides (README.md, docs/PACKAGING-RPM.md, docs/DELIVERABLES.md commands) move to 0.6.0."
+      - "The stale GAP-B3 text is corrected: docs/evidence/EVIDENCE-GAPS.md:108-133 still claims /etc/udev/rules.d/99-sm750-coder-acl.rules is not installed and that modetest cannot open the card, but the rule IS installed (root:root 0644, 710 B, 2026-11-18 09:15), getfacl on /dev/dri/by-path/pci-0000:01:00.0-card shows user:coder:rw-, and modetest -c now opens card0 after failing card3/card2/card1. Replace the stale capture with the current one and restate the residual gap as tiers above connector enumeration (modeset, readback, CRC, capture) rather than device access."
+      - "/mega/tmp/sm750/10-sm750-debug.sudoers is regenerated for 0.6.0 (dkms -v 0.6.0 lines and the 0.6.0 RPM filename), keeps zero colons in command lines, and passes visudo -c -f standalone and appended to a copy of /etc/sudoers."
+    handoff:
+      constraints:
+        - "Do not change the kernel floor (BUILD_EXCLUSIVE_KERNEL stays 6.17)."
+        - "Do not rename the package (sm750hdmifb) or the module (sm750hdmidrm)."
+        - "Keep tests/check-release-version.sh's expected pattern intact: the macro line must stay exactly '#define SM750_DRM_VERSION \"0.6.0\"' at column 0."
+        - "ASCII only; scratch under /mega/tmp/sm750/; no $HOME writes."
+      relevant_context:
+        - "tests/check-release-version.sh enforces that build-package.sh, dkms.conf, src/sm750_drm.c and the workflow artifact names agree; it fails on any mismatch, so change them in one pass."
+        - "The stale installed module is /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz (60360 B, mtime 2026-11-17 22:17, no version field, no regs string). dkms status shows sm750hdmifb/0.5.9 installed for 7.3.3 and 7.3.4 from /usr/src/sm750hdmifb-0.5.9, which also lacks the regs code."
+        - "modetest -c now works as coder (udev ACL rule applied): it enumerates HDMI-A-1 connected, 28 modes starting 1920x1080 60.00, and prints 'SM750G10 SiI9024A HDMI DRM shadow driver (version 0.1.0 at 0)'."
+        - "The sudoers allowlist hardcodes 0.5.9 in six dkms lines and in the RPM install path; after the bump those grants no longer match, so the regenerated file is part of this task."
+      high_risk_signals: [contract_change]
+      critic_signals: []
+
+  - id: T7
+    title: Publish deliverable index and clean-checkout reproduction guide
+    description: |
+      Rung: reuse existing docs. Make every acceptance criterion traceable to a repo path
+      and describe reproduction from a clean checkout for the audit, test, build and
+      packaging stages under rootless conditions.
+    wave: 5
+    depends_on: [T1, T2, T4, T6]
+    agent: gem-documentation-writer
+    context_cluster: docs-context
+    status: completed
+    retries_used: 0
+    acceptance_criteria:
+      - "docs/DELIVERABLES.md maps each acceptance criterion 1-7 to concrete repo paths, including the AC-2 audit and defect inventory (docs/AUDIT.md, docs/DEFECTS.md), and states the verification command for each."
+      - "README.md install section documents the RPM/DKMS path alongside the existing .deb path, with the kernel floor 6.17 and the untested-above-7.1 caveat preserved."
+      - "Reproduction section lists the exact command sequence from a clean clone (rootless libdrm setup, make check, build matrix including the extracted 6.17 tree, rpmbuild, DKMS sandbox verification) and the prerequisites each step needs."
+      - "Every root-only step is labelled as such with its closing command, and no step is presented as executed without an evidence path."
+      - "No deliverable file under docs/ is unreferenced by docs/DELIVERABLES.md or README.md."
+    handoff:
+      constraints:
+        - "Document only what exists; steps needing sudo are recorded with the exact command and their observed outcome."
+        - "Preserve existing SPDX headers and tone of docs/."
+      relevant_context:
+        - "Existing docs: HARDWARE, MODES, PARAMETERS, PROVENANCE, RELEASE-NOTES, STAGING-BENCHMARK, TESTING, VBLANK."
+        - "New artifacts to index: docs/specs/, docs/AUDIT.md, docs/ENVIRONMENT.md, docs/evidence/, docs/TEST-STRATEGY.md, docs/DEFECTS.md, docs/PACKAGING-RPM.md."
+      high_risk_signals: []
+      critic_signals: []
+
+  - id: T10
+    title: Rootless runtime validation on the live SM750 device
+    description: |
+      Rung: new evidence. The udev ACL now lets coder open /dev/dri/card0, so the runtime
+      tiers that were blocked can finally be attempted without root. Execute them in
+      non-destructive order and always restore the panel to its original mode.
+      Covers AC-3 tiers 2-6 (connector enumeration -> modeset -> framebuffer readback ->
+      scanout CRC -> external capture) as far as the tooling allows, and produces the
+      before-half of a before/after pair: the module currently loaded is the stale
+      pre-fix 0.5.9 build, so this run characterises it explicitly as such.
+    wave: 6
+    depends_on: [T4]
+    agent: gem-devops
+    context_cluster: runtime-context
+    status: completed
+    retries_used: 0
+    acceptance_criteria:
+      - "The original display state is captured BEFORE any modeset: connector id, current mode, CRTC and encoder binding from modetest -c and modetest -p, written to docs/evidence/runtime/01-original-state.txt."
+      - "modetest -c and modetest -p succeed as coder and are captured verbatim to docs/evidence/runtime/02-modetest-connector.txt and 03-modetest-properties.txt; the run records the driver-reported version string it observes."
+      - "A modeset is performed only after the original state is recorded, using the already-active mode first (no visible change), then one alternate mode; every command, exit code and the restoration command are logged to docs/evidence/runtime/04-modeset.txt, and the panel is left on its original mode."
+      - "kmscube is run if it can be started from the extracted RPM payload (no root install) and its outcome - frames rendered, exit code, or the exact reason it could not start - is recorded in docs/evidence/runtime/05-kmscube.txt; a failure to start is recorded as a tooling gap, never as a driver defect."
+      - "At least one IGT binary from the extracted igt-gpu-tools payload is executed against card0 and its raw output captured to docs/evidence/runtime/06-igt.txt, naming the exact test and its PASS/FAIL/SKIP verdict; if no IGT binary can be started, the blocking dependency chain is recorded verbatim."
+      - "Any kernel message produced by the runs is captured if readable (sudo -n dmesg is allowlisted) to docs/evidence/runtime/07-kernel-log.txt; if dmesg returns nothing, that is recorded as such rather than interpreted."
+      - "docs/TEST-STRATEGY.md result rows are updated for S4/S5/S6 from GAP to their observed outcome, each row pointing at the new evidence file; nothing is upgraded to PASS without a file that exists."
+      - "The report states explicitly that the module under test is the stale pre-fix 0.5.9 build (no version field, no regs debugfs file) and that these results therefore describe the pre-fix baseline, not the 0.6.0 build."
+    handoff:
+      constraints:
+        - "No root, no sudo beyond the existing allowlist, no dkms install, no dnf install, no modprobe - this task observes the module already loaded."
+        - "Do not leave the panel blanked or on a non-native mode; restore the original mode as the last action even on failure."
+        - "Do not claim a PASS without an evidence file that exists on disk."
+        - "Scratch under /mega/tmp/sm750/t10/; ASCII only; do not write to $HOME."
+      relevant_context:
+        - "Device access works now: /etc/udev/rules.d/99-sm750-coder-acl.rules is installed (root:root 0644, 710 B) and getfacl /dev/dri/by-path/pci-0000:01:00.0-card shows user:coder:rw-. modetest -c opens card0 after failing card3/card2/card1."
+        - "The SM750 has no render node: /dev/dri/by-path contains only pci-0000:01:00.0-card; renderD128/129/130 belong to 02:00.0, 83:00.0, 84:00.0. Never test the SM750 against a render node."
+        - "Observed baseline: 'SM750G10 SiI9024A HDMI DRM shadow driver' on driver sm750hdmidrm, version 0.1.0, connector 35 HDMI-A-1 connected 530x300mm, 28 modes, #0 1920x1080 60.00 preferred."
+        - "modetest is /usr/bin/modetest from drm-utils 2.4.134-1.fc43. kmscube and igt-gpu-tools 2.4-1 RPMs are downloaded at /mega/tmp/sm750/t3-tools and can be unpacked with rpm2cpio | cpio -idmv; IGT binaries live in /usr/libexec/igt-gpu-tools, not /usr/bin, and need libgsl.so.28 plus libgslcblas.so.0 from gsl 2.8-2.fc43."
+        - "The driver is an atomic DRM/KMS driver using drm_atomic_helper_commit (src/sm750_drm.c:3240, :3246) with a shadow-buffer path selected at runtime; modetest -s is the least invasive way to force a modeset, and drmModeSetCrtc via modetest restores state on a clean exit only."
+        - "sudo -n dmesg is allowlisted but has returned nothing useful before; journalctl -k -b -q --no-pager was measured at 0 lines on this host (docs/evidence/EVIDENCE-GAPS.md:87-89), so do not treat an empty kernel log as evidence of a clean run."
+        - "docs/TEST-STRATEGY.md currently records 10 PASS / 0 FAIL / 5 GAP with S4, S5, S6 all GAP; docs/evidence/EVIDENCE-GAPS.md GAP-B3 describes the old blocked state and is being corrected by T9 in parallel - do not edit EVIDENCE-GAPS.md yourself."
+      high_risk_signals: []
+      critic_signals: []
+
+  - id: T11
+    title: Install the 0.6.0 build and close the register-dump and runtime gaps
+    description: |
+      Rung: new evidence, root-assisted. The host still runs the stale pre-fix 0.5.9 module,
+      so the debugfs register dump and every runtime result so far describe the old build.
+      Build the 0.6.0 RPM, install it through the allowlisted dnf path so %posttrans runs
+      dkms build + install + depmod, reload the module, and capture the evidence that only
+      the fixed build can produce.
+    wave: 7
+    depends_on: [T9, T10, T13]
+    agent: gem-devops
+    context_cluster: runtime-context
+    status: pending
+    retries_used: 0
+    acceptance_criteria:
+      - "Preconditions verified before touching the system: /etc/sudoers.d/10-sm750-debug contains 0.6.0 grants and passes visudo -c -f, and the regenerated file's sha256 is recorded."
+      - "rpmbuild -ba produces sm750hdmifb-0.6.0-1.fc43.noarch.rpm from packaging/sm750hdmifb.spec; the build log is captured under docs/evidence/runtime/."
+      - "dnf install of the built RPM succeeds and %posttrans is observed building and installing the module for the running kernel; dkms status afterwards reports sm750hdmifb/0.6.0 for that kernel, and the installed object path is recorded."
+      - "The loaded module is replaced: modprobe -r then modprobe succeeds, modinfo shows the 0.6.0 version field, and modetest -c reports version 0.6.0 instead of 0.1.0."
+      - "GAP-B4 is closed or re-scoped with evidence: /sys/kernel/debug/dri/<n>/regs is read through the allowlisted sm750-regs helper, the dump is captured to docs/evidence/runtime/08-register-dump.txt, and the same dump is taken again after one modeset so a before/after register comparison exists."
+      - "The T10 runtime suite is re-run against the 0.6.0 module and the after-half of the before/after pair is captured under docs/evidence/runtime/, with the same commands so the two runs are comparable."
+      - "dnf remove -y sm750hdmifb is executed as the rollback proof and the resulting state is recorded (module unloaded or still loaded from the old path, dkms status, rpm -q); if removal would leave the machine without a working display driver, the removal is skipped and the reason recorded instead."
+      - "docs/evidence/EVIDENCE-GAPS.md and docs/DEFECTS.md are updated: GAP-B4 and GAP-B7 move to closed or re-scoped with the evidence path that closes them; every remaining gap keeps a closing command."
+    handoff:
+      constraints:
+        - "Every privileged command must be one of the allowlisted exact forms; if a needed command is not allowlisted, stop and report the missing grant instead of asking for broader sudo."
+        - "Never edit /etc/sudoers.d without first validating the candidate with visudo -c -f; a parse error there breaks sudo for every user on the host."
+        - "Restore the panel to its original mode after the re-run, as in T10."
+        - "Scratch under /mega/tmp/sm750/t11/; ASCII only."
+      relevant_context:
+        - "Why this task exists: /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz is 60360 B, mtime 2026-11-17 22:17, no version field in modinfo, zero occurrences of the string 'regs'; dkms status shows sm750hdmifb/0.5.9 installed for 7.3.3-100 and 7.3.4-100 from /usr/src/sm750hdmifb-0.5.9 which also lacks the regs code; rpm -q sm750hdmifb reports not installed. The .ko sits in extra/ rather than updates/dkms, so DEST_MODULE_LOCATION was not honoured by whatever installed it."
+        - "Allowlisted privileged commands as of the last verified sudo -n -l: /usr/local/sbin/sm750-regs, /usr/local/sbin/sm750-lspci, /usr/local/sbin/sm750-vbios-dump, dmesg, journalctl -k -b [--no-pager|-q --no-pager], dkms status|install|uninstall|build|remove -m sm750hdmifb -v <ver>, depmod -a, modprobe [-r] sm750hdmidrm, dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-<ver>-1.fc43.noarch.rpm, dnf remove -y sm750hdmifb."
+        - "The RPM install path in the allowlist points at /mega/tmp/sm750/t6/rpmbuild; either build there or report the mismatch as a missing grant."
+        - "The debugfs index equals the cardN suffix and is resolved by sm750-regs via readlink -f /dev/dri/by-path/pci-0000:01:00.0-card; do not hardcode dri/0 in prose without saying how it was resolved."
+        - "Known-good sandbox proof of the spec already exists (dkms sandbox 'built', module 320960 B, vermagic 7.3.4-100.fc43.x86_64) - see docs/evidence/packaging/05-dkms-sandbox.log; the live install is what has never been proven."
+      high_risk_signals: [irreversible, shared_state]
+      critic_signals: []
+
+  - id: T12
+    title: Capture and document the SM750 VBIOS image
+    description: |
+      Rung: new evidence, root-assisted. The PCI expansion ROM window holds the SM750 VBIOS
+      but is disabled and root-only, so it has never been archived. The user approved
+      capturing it. The read flips the ROM enable bit, copies 64 KiB and flips it back on
+      every exit path; the helper is already staged and allowlisted.
+    wave: 7
+    depends_on: [T3]
+    agent: gem-devops
+    context_cluster: runtime-context
+    status: pending
+    retries_used: 0
+    acceptance_criteria:
+      - "The helper /usr/local/sbin/sm750-vbios-dump runs as coder through the existing sudo grant and writes the image; its stdout and stderr are captured to docs/evidence/baseline/18-vbios-dump.txt."
+      - "The image is 65536 bytes and its sha256 is recorded; the first bytes are checked for the 0x55 0xaa PCI ROM signature and the result stated as observed, not assumed."
+      - "The ROM enable bit is verified restored afterwards: /sys/bus/pci/devices/0000:01:00.0/rom reports the disabled state and lspci -vvv still shows the expansion ROM as [disabled]."
+      - "The binary is NOT committed to the repository: it stays under /mega/tmp/sm750/ and docs/evidence/baseline/18-vbios-dump.txt records the path, size, sha256, signature check and the exact read commands (docs/PROVENANCE.md keeps holding for vendor binary content)."
+      - "Whether the image carries an SM750/SiI9024 PCI data structure and what version string it embeds is reported if it can be determined with edid-decode or a hexdump of the PCI data structure offset; if it cannot be determined, that is stated rather than guessed."
+      - "If the PCI data structure can be read, the ROM's own device ID is compared against 0x0750/0x126f and any mismatch is recorded as a finding."
+    handoff:
+      constraints:
+        - "Only the allowlisted helper may be used to touch the ROM BAR; do not add echo-to-sysfs, dd, or chmod to the grant."
+        - "Sm750-regs and sm750-lspci stay flat: no colon characters in any sudoers command line beyond the NOPASSWD: tag."
+        - "Do not remove or re-enable the ROM window beyond the helper's own enable/disable pair."
+        - "Scratch under /mega/tmp/sm750/; ASCII only."
+      relevant_context:
+        - "The helper is staged at /mega/tmp/sm750/sm750-vbios-dump (sha256 e2f6f68791ebd3f341ca77cb84169bda8843c1ce192f2e500b51faa01e67f585) and installed at /usr/local/sbin/sm750-vbios-dump with the same sha256. The sudo grant '(root) NOPASSWD: /usr/local/sbin/sm750-vbios-dump' is present in sudo -n -l."
+        - "Blocker CLOSED 2026-11-18: the helper is installed 0755 root:root and the sudo grant resolves. But the installed body is v1, whose `dd bs=65536 count=1` yields only 4096 bytes because a sysfs binary attribute returns at most one page per read(2). Verified run: '0+1 records out, 4096 bytes copied' and a 4096-byte file. Do NOT record that file as the VBIOS image."
+        - "Helper v2 is staged at /mega/tmp/sm750/sm750-vbios-dump (sha256 9e6c5db7853e3a58160d83c63aaee01144b20061a98a57c241188b3b6dd62a8f): same structure, `dd bs=4096` with no count, then wc -c and exit 2 with 'WARNING size is N, expected 65536' if short. It must be installed by the host owner before this task runs; the sudo grant is on the path, so no sudoers change is needed."
+        - "Helper behaviour: DEV=/sys/bus/pci/devices/0000:01:00.0, OUT defaults to /mega/tmp/sm750/vbios-01-00-0.bin, refuses to run unless uid 0, echo 1 > $DEV/rom, trap 'echo 0 > $DEV/rom' EXIT INT TERM HUP, then the read, sha256sum and a size assertion."
+        - "The 4096-byte v1 capture is still informative and already observed: first bytes 55 aa (valid PCI ROM signature), 'PCIR' at 0x18, vendor/device 0x126f/0x0750 at 0x1c/0x1e, version string 'Version 1.00.59-' with build date '05/14/19 16:25', banner 'Silicon Motion SM750 VGA BIOS (CRT)' and 'Copyright 2000/2010, Silicon Motion Inc.'. Note the banner says CRT, not HDMI: report it as observed and do not over-read it."
+        - "ROM enable bit is restored after every run: sm750-lspci still shows 'Expansion ROM at c7400000 [disabled] [size=64K]' and /sys/bus/pci/devices/0000:01:00.0/rom is -rw------- root root."
+        - "Observed state: /sys/bus/pci/devices/0000:01:00.0/rom is -rw------- root root 65536; reading it as coder gives permission denied; sm750-lspci reports 'Expansion ROM at c7400000 [disabled] [size=64K]'."
+        - "docs/evidence/baseline/ already holds 00-host-identity.txt through 17-kernel-headers.txt plus capture.sh; the new file continues that numbering as 18-."
+      high_risk_signals: [irreversible]
+      critic_signals: []
+
+  - id: T13
+    title: Fix the cursor-plane alpha exposure warned about at probe
+    description: |
+      Rung: new defect, found in the kernel log that became readable once the sudo grant
+      was active. It is absent from docs/AUDIT.md, so it is new evidence, not a reopen.
+      At every probe the DRM core prints, for the hardware cursor plane:
+        [PLANE:40:sm750-cursor] pixel format with alpha exposed but blend mode not setup.
+        Please fix.
+      Cause: the cursor plane is initialised with cursor_formats[] = { DRM_FORMAT_ARGB8888 }
+      (src/sm750_drm.c:3423, drm_universal_plane_init at :3462-3466) but no alpha/blend
+      property is ever created - there is no drm_plane_create_alpha_property and no
+      blend-mode handling anywhere in src/. The driver then converts the ARGB cursor into a
+      3-entry palette itself (sm750_cursor_atomic_update at :2769, palette[3] at :2784), so
+      the kernel's expectation about how alpha is expressed does not match what the driver
+      does.
+    wave: 8
+    depends_on: [T5, T9]
+    agent: gem-implementer
+    context_cluster: src-context
+    status: pending
+    retries_used: 0
+    acceptance_criteria:
+      - "The probe-time warning disappears: 'pixel format with alpha exposed but blend mode not setup' no longer appears in the kernel log for sm750-cursor after the fix, demonstrated by a captured log excerpt, or the driver's intent is documented in-code and the warning is shown to be expected for this hardware with the reason stated."
+      - "The fix states which of the two resolutions was chosen and why: either expose DRM_FORMAT_XRGB8888 on the cursor plane (no alpha, matching the driver's palette conversion), or keep ARGB8888 and create the alpha/blend property the DRM core expects, with the blend mode the hardware actually implements."
+      - "The hardware cursor still works after the change: sm750_cursor_atomic_update/disable (src/sm750_drm.c:2769, :2874) and the enable path at :3783 are consistent with the chosen format, and the cursor palette conversion is unchanged or its change is explained."
+      - "make check stays green (17 recipe commands), the 4-tree matrix still reports 'Built 9' and 'Built 3', and no new compiler warning originates in src/*.c or src/*.h."
+      - "docs/DEFECTS.md gains a row for this defect with severity, the warning text, the fix and the evidence path; docs/AUDIT.md is not rewritten because it recorded the pre-fix state."
+      - "Because the dmesg grant is now active, docs/evidence/EVIDENCE-GAPS.md GAP-B2 (kernel log) is corrected to a closed state with the captured excerpt as evidence, and any other gap row that assumed an unreadable kernel log is re-checked."
+    handoff:
+      constraints:
+        - "Do not disable the hardware cursor by default: the module parameter described at src/sm750_drm.c:235 stays opt-in, and hardware_cursor keeps its current default."
+        - "Do not touch the SiI9024 I2C path or the DMA1 polling fallback in this task; they are separate observations."
+        - "ASCII only; scratch under /mega/tmp/sm750/."
+      relevant_context:
+        - "The log line was observed on this host as: sm750hdmidrm 0000:01:00.0: [drm] [PLANE:40:sm750-cursor] pixel format with alpha exposed but blend mode not setup. Please fix."
+        - "Also newly visible in the same log, but NOT part of this task: 'DMA1 IRQ was not delivered; reverting to completion polling' (src/sm750_drm.c:1498, fallback also at :3711) and 'SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility' (src/sii902x.c:578, the KVM/RSEN case explained at :544). Record them as observations only."
+        - "The kernel log is readable now: sudo -n /usr/bin/dmesg returns 154236 bytes and 150 sm750-matching lines; sudo -n /usr/bin/journalctl -k -b -q --no-pager returns 1903 lines. Earlier measurements of an empty journal were taken without the grant."
+        - "The running module is still the pre-fix 0.5.9 build, so the warning is reproduced from the stale build; the fix is verified in the 0.6.0 object."
+      high_risk_signals: []
+      critic_signals: []
+
+  - id: T14
+    title: Project logbook, logging rule, and consolidated root-action runbook
+    description: |
+      Rung: bookkeeping deliverable requested by the user. Nothing in the tree records
+      what was done, why, and with which evidence, so the history lives only in this plan
+      and in scattered evidence files. This task creates an append-only logbook, states
+      the logging rule where a future contributor will read it, and consolidates every
+      root action taken on this host into one runbook so the instructions are not lost
+      when /mega/tmp/ is wiped.
+    wave: 8
+    depends_on: [T3, T5, T6, T7, T9]
+    agent: gem-documentation-writer
+    status: pending
+    retries_used: 0
+    acceptance_criteria:
+      - "docs/LOGBOOK.md exists: append-only, newest-last, ASCII, one entry per action or change with UTC date-time, actor, action, files touched, evidence path and outcome. It is backfilled from docs/plan/20261117-sm750-driver-prod/plan.yaml, docs/evidence/ and git history so the T1..T14 history is present, not only future work."
+      - "The logging rule is written where it will be read: AGENTS.md at the repository root states that every action and change is appended to docs/LOGBOOK.md immediately, that entries are never rewritten, and that corrections are new entries."
+      - "docs/ROOT-ACTIONS.md consolidates every host root action in one place: the sudoers file path and its verified content rules (zero colons in command lines, 0440 root:root, visudo -c), the three helpers and their exact bodies or checksums, the udev ACL rule, the pkexec/su recovery recipe for a broken sudoers.d file, and the exact install commands. Each entry states what it closes (which GAP row)."
+      - "docs/ENVIRONMENT.md section 5.2 stops describing the pre-0.6.0 state: the installed allowlist is recorded at 0.6.0 with 19 entries, the helper is 0755, and the v1 page-cap defect plus the v2 requirement are stated."
+      - "docs/DELIVERABLES.md section 3 root-only table reflects observed state: kernel log and lspci config space are closed, the VBIOS row says captured but truncated by the v1 helper and awaiting v2, register readback and RPM install/erase stay GAP with their closing commands."
+      - "README gains a short pointer to docs/LOGBOOK.md and docs/ROOT-ACTIONS.md without disturbing the install sections, and every docs path mentioned actually exists."
+      - "The new and edited files are staged and committed together with the message 'docs: add project logbook and root-action runbook'; the commit contains only those files, and `git show --stat` confirms it."
+    handoff:
+      constraints:
+        - "Do NOT touch src/, tests/, packaging/, Makefile, dkms.conf, build-package.sh, docs/DEFECTS.md, docs/RELEASE-NOTES.md or docs/evidence/EVIDENCE-GAPS.md - other tasks own those files concurrently."
+        - "Do not rewrite existing documents wholesale; add or correct only the sections named in the acceptance criteria."
+        - "ASCII only; no vendor binaries; scratch under /mega/tmp/sm750/t14/; nothing written to $HOME."
+        - "Commit only the files this task creates or edits; the worktree carries unrelated in-flight changes that must stay uncommitted."
+      relevant_context:
+        - "Plan of record: docs/plan/20261117-sm750-driver-prod/plan.yaml (revision 3, tasks T1..T14, decisions and assumptions hold the authoritative history)."
+        - "Root actions by the host owner, in order: installed /mega/tmp/sm750/10-sm750-debug.sudoers to /etc/sudoers.d/10-sm750-debug (0440 root:root); installed /mega/tmp/sm750/sm750-vbios-dump to /usr/local/sbin/sm750-vbios-dump (0755); installed /mega/tmp/sm750/99-sm750-coder-acl.rules to /etc/udev/rules.d/99-sm750-coder-acl.rules (0644). The sudoers file's sha256 is d2141159a99e65ba3c150e20daba915babbe907674a80bfbce1fce598ed35a3b."
+        - "A sudoers.d parse error is fatal for every user on the host. The recorded recovery path is pkexec install -m 0440 -o root -g root /mega/tmp/sm750/10-sm750-debug.sudoers /etc/sudoers.d/10-sm750-debug, or su - followed by the same install, then visudo -c."
+        - "Timeline anchors for the backfill: 2026-11-17 18:42 plan created and wave 1 dispatched; 20:36 T3 done; 21:33 T5 started; 2026-11-18 08:20 T6 accepted after rejection; 09:15 udev rule installed; 09:18 T7 done; 09:59 T9 done (0.6.0); 11:34 T13 dispatched; 11:37 helper installed, sudoers replaced, first VBIOS dump; 11:54 v1 truncation found and v2 staged."
+        - "Evidence directories to cite: docs/evidence/baseline/00..17, docs/evidence/builds/01..18, docs/evidence/packaging/01..07 plus 0.5.9/, docs/evidence/audit/, docs/evidence/runtime/ (in progress by T10)."
+      high_risk_signals: []
+      critic_signals: []
+
+  - id: T15
+    title: Fix the kms_addfb_basic size-max rejection
+    description: |
+      Rung: new defect, found by T10 in the first IGT run that could open the card.
+      DRM_IOCTL_MODE_ADDFB2 is rejected with EINVAL for the size-max subtest. This is the
+      only genuine driver FAIL in the suite, so it blocks a production claim on AC-3 and
+      must be diagnosed before it can be fixed: the rejection may be a legitimate
+      pitch/size limit or an off-by-one in the driver's fb_create path.
+    wave: 8
+    depends_on: [T10, T13]
+    agent: gem-debugger
+    status: pending
+    retries_used: 0
+    acceptance_criteria:
+      - "Root cause identified with evidence: the exact subtest parameters, the driver function that returns EINVAL, and the comparison against the DRM core expectation are all recorded in docs/evidence/runtime/ with file:line references."
+      - "The finding states whether the driver is wrong or the test exceeds a hardware limit, and cites the SM750 datasheet constraint (max pitch, max width/height, memory size) that decides it."
+      - "docs/DEFECTS.md gains a row for the defect or, if the behaviour is correct-by-hardware, a row recording why with the datasheet page."
+      - "A concrete fix or a concrete 'no fix needed, document the limit' recommendation is produced, with the code location named; implementation goes to a follow-up task, not here."
+    handoff:
+      constraints:
+        - "Diagnosis only; do not modify src/. Implementation is a separate task."
+        - "Do not edit docs/evidence/EVIDENCE-GAPS.md or docs/RELEASE-NOTES.md."
+        - "Scratch under /mega/tmp/sm750/t15/; ASCII only."
+      relevant_context:
+        - "Failure: kms_addfb_basic --run-subtest size-max --device /dev/dri/card0 exits 98, message at ../tests/kms_addfb_basic.c:594, DRM_IOCTL_MODE_ADDFB2 errno 22 EINVAL. Full transcript in docs/evidence/runtime/06-igt.txt."
+        - "The same binary passes every other subtest it reaches, so the fb creation path works for normal sizes."
+        - "dumb_buffer allocated 2147483648 bytes with 11206337 page allocations on this card, so the buffer-object path accepts a 2 GiB object; the failure is specific to the ADDFB2 size-max case."
+        - "The module under test was the stale pre-fix 0.5.9 build; re-verify against 0.6.0 after T11 if the code path differs."
+      high_risk_signals: []
+      critic_signals: []
+
+  - id: T16
+    title: Isolate the HDMI enable -110 / refcount underflow episode
+    description: |
+      Rung: new defect with an unisolated trigger. T10 captured one seven-line error
+      episode on the fbdev-restore path: HDMI mode enable returns -110 (ETIMEDOUT), the
+      commit times out three times, and a plane state is freed twice, producing a
+      refcount_t underflow and a use-after-free warning. It is the most severe observation
+      in the project so far, but ~25 controlled attempts did not reproduce it, so the
+      deliverable is an isolation attempt with a stated confidence, not a fix.
+    wave: 8
+    depends_on: [T10]
+    agent: gem-debugger
+    status: pending
+    retries_used: 0
+    acceptance_criteria:
+      - "The captured episode is reproduced from docs/evidence/runtime/07-kernel-log.txt with its full stack, exact timestamps and the sequence of client operations that preceded it."
+      - "Every candidate trigger is enumerated with the code location it would implicate: the -110 return path in src/sm750_drm.c:3116 (fail label of sm750_pipe_enable), the SiI9024A wait at src/sii902x.c:578, the DMA1 IRQ polling fallback at src/sm750_drm.c:1498, and the plane destroy-state path at __drm_atomic_helper_plane_destroy_state."
+      - "A reproduction matrix is recorded: at least 10 attempts per candidate trigger, each with its dmesg delta, so a negative result is evidence rather than an assertion."
+      - "docs/DEFECTS.md gains a row with severity, the trigger if found, and the reproduction rate measured; docs/evidence/EVIDENCE-GAPS.md keeps a row if it stays unreproducible."
+      - "The report states plainly whether this blocks a production claim, and what instrumentation would settle it (e.g. dynamic debug on the atomic commit path)."
+    handoff:
+      constraints:
+        - "Diagnosis only; do not modify src/."
+        - "Never leave the panel blanked or on a foreign mode: capture state first, restore by trap, re-verify after."
+        - "Scratch under /mega/tmp/sm750/t16/; ASCII only."
+      relevant_context:
+        - "Exact lines: 'sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI mode: -110', a drm_atomic_helper_commit_hw_done WARNING, three 'commit wait timed out' entries for CRTC:38, CONNECTOR:35 and PLANE:36, then 'refcount_t: underflow; use-after-free' at refcount_warn_saturate."
+        - "The episode happened at dmesg [8523..8586] on the fbdev-restore path when a client closed; ~25 controlled attempts afterwards (single commands with dmesg deltas, SIGTERM mid-render, 5x sequential kmscube, alternating modesets, foreign-DRM-master contention, 4x modeset+render+restore stress) produced no matching line."
+        - "src/sm750_drm.c:3116 is the fail label of sm750_pipe_enable; src/sii902x.c:578 is the 'SiI9024A receiver not ready after 2000 ms' path with HPD=1 RSEN=0 status=04 (KVM/RSEN case explained at src/sii902x.c:544); src/sm750_drm.c:1498 is the DMA1 IRQ fallback that logs 'DMA1 IRQ was not delivered; reverting to completion polling'."
+        - "The module under test was the stale pre-fix 0.5.9 build; note that fact in the report and repeat the attempts on 0.6.0 if T11 has landed."
+      high_risk_signals: []
+      critic_signals: []
+
+  - id: T8
+    title: Independent acceptance review against all seven criteria
+    description: |
+      Rung: reuse recorded evidence; review only, no fixes. Verify each criterion against
+      committed artifacts, confirm that no hardware or packaging result is simulated,
+      confirm the AC-6 rootless/root split is stated correctly, and issue a verdict with
+      remaining gaps.
+    wave: 8
+    depends_on: [T1, T2, T3, T4, T5, T6, T7, T9, T10, T11, T13, T14, T15, T16]
+    agent: gem-reviewer
+    status: pending
+    retries_used: 0
+    acceptance_criteria:
+      - "docs/ACCEPTANCE-REPORT.md issues PASS/FAIL/GAP per criterion 1-7, each citing the evidence path and verification command actually used."
+      - "Checksum reproduction, build matrix logs, test results table and packaging evidence are re-run or re-read and confirmed consistent; any mismatch is reported as a finding."
+      - "Report explicitly confirms or denies that every hardware and packaging claim has observed evidence, and for AC-6 states which parts were verified rootless (rpmbuild -ba, rpm -qp --scripts, rpm -qlp, rpm -qpR, dkms sandbox 'built') and which remain root-required gaps with closing commands."
+      - "Report confirms no task asserted a privilege that the host does not grant, and that the privilege-upgrade path is documented as inert."
+      - "Report lists residual risks for production use (untested kernels above 7.1, root-required verification gaps, absent IGT conformance, no /dev/dri runtime validation) with severity."
+    handoff:
+      constraints:
+        - "Review only; no edits outside docs/ACCEPTANCE-REPORT.md."
+        - "Do not accept a claim whose evidence file is missing."
+      high_risk_signals: []
+      critic_signals: [architecture, cross_domain_impact]
