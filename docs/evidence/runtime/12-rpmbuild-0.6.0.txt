@@ -1,0 +1,60 @@
+# utc: 2026-11-18T11:18:37Z
+T11 - RPM REBUILD FROM THE CURRENT TREE (pre-T13 staged RPM replaced)
+======================================================================
+Reason: the staged RPM at the allowlisted path was built before T13 and its
+src/sm750_drm.c contained 0 references to drm_plane_create_blend_mode_property
+(measured in docs/evidence/runtime/11-preconditions.txt section 4).
+
+## Command (rootless, explicit _topdir, no $HOME write)
+  work=/mega/tmp/sm750/t6; topdir=$work/rpmbuild
+  rm -rf -- "$topdir"; mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS}
+  git ls-files -z -- . ":(exclude)docs/images/*" > tracked
+  tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.0-source.tar.gz" \
+      --transform="s|^|sm750hdmifb-0.6.0/|" --null -T tracked
+  rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb.spec
+
+## Result
+tracked files in manifest : 80
+source tarball            : 195852 bytes
+rpmbuild exit             : 0
+artifacts:
+  /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/:
+  total 92
+  -rw-r--r-- 1 coder coder 90281 Nov 18 14:18 sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+  
+  /mega/tmp/sm750/t6/rpmbuild/SRPMS/:
+  total 216
+  -rw-r--r-- 1 coder coder 217510 Nov 18 14:18 sm750hdmifb-0.6.0-1.fc43.src.rpm
+
+## Payload verification (the acceptance gate before installing)
+$ sha256sum /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+265449aa59446feb580d3d0d68a7a7597e08c30c73331455d7a5cd4a864563c5  /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+$ rpm -qp --queryformat "%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n" /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+sm750hdmifb-0.6.0-1.fc43.noarch
+$ rpm -qp --qf "%{PAYLOADCOMPRESSOR}\n" /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+zstd
+
+$ rpm -qlp /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm | wc -l
+40
+$ rpm -qlp /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm | grep -c sm750_drm.c
+1
+
+## Blend-mode property check on the payload (must be >= 1)
+$ rpm2cpio <rpm> | cpio -i --to-stdout ./usr/src/sm750hdmifb-0.6.0/src/sm750_drm.c | grep -c drm_plane_create_blend_mode_property
+825 blocks
+1
+
+## The three T5/T9/T13 payload markers, straight out of the RPM
+$ ... | grep -n "drm_plane_create_blend_mode_property\|MODULE_VERSION\|debugfs_create_file"
+3343:	debugfs_create_file("regs", 0444, minor->debugfs_root, minor->dev,
+3491:		ret = drm_plane_create_blend_mode_property(&sdev->cursor_plane,
+3897:MODULE_VERSION(SM750_DRM_VERSION);
+
+## Payload src/sm750_drm.c sha256 (compare against the tree)
+$ sha256sum src/sm750_drm.c   (tree)
+026c31ac041ec9c05d0d0c933cff76093a841f54451ddfc69f790f3d3989382b  src/sm750_drm.c
+$ rpm2cpio ... | cpio -i --to-stdout .../src/sm750_drm.c | sha256sum   (payload)
+026c31ac041ec9c05d0d0c933cff76093a841f54451ddfc69f790f3d3989382b  -
+
+## Full build log
+  /mega/tmp/sm750/t11/rpmbuild.log (rpmbuild -ba, exit 0)

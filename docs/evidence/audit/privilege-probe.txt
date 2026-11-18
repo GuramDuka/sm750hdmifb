@@ -1,0 +1,69 @@
+PRIVILEGE PROBE - read-only, uid 1005 gid 1006
+Host locale messages are shown in English translation; exit codes and
+permission outcomes are verbatim.
+
+$ id
+uid=1005(coder) gid=1006(coder) groups=1006(coder)
+
+$ sudo -n -l
+Matching Defaults entries for coder on deneb:
+    !visiblepw, always_set_home, match_group_by_gid, always_query_group_plugin,
+    env_reset, env_keep="COLORS DISPLAY HOSTNAME HISTSIZE KDEDIR LS_COLORS", ...
+    secure_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+User coder may run the following commands on deneb:
+    (ALL : ALL) NOPASSWD: /usr/bin/dmidecode
+    (ALL : ALL) NOPASSWD: /usr/local/cuda/bin/ncu
+    (ALL : ALL) NOPASSWD: /usr/local/cuda/bin/nvprof
+(no other NOPASSWD entries; anything else requires a password)
+
+$ ls -l /dev/dri/card0
+crw-rw----+ 1 root video 226, 0 Nov 17 17:42 /dev/dri/card0
+
+$ getfacl /dev/dri/card0
+getfacl: Removing leading '/' from absolute path names
+# file: dev/dri/card0
+# owner: root
+# group: video
+user::rw-
+user:duka:rw-
+group::rw-
+mask::rw-
+other::---
+
+$ ./tests/check-vblank /dev/dri/card0 60
+open /dev/dri/card0: Permission denied
+exit=1
+
+$ modetest -c
+no device found
+trying to open device '/dev/dri/card3'... failed
+trying to open device '/dev/dri/card2'... failed
+trying to open device '/dev/dri/card1'... failed
+
+$ journalctl -k -b -n 3
+Hint: You are currently not seeing messages from other users and the system.
+      Pass -q to turn off this notice.
+-- No entries --
+
+$ head -c 16 /sys/bus/pci/devices/0000:01:00.0/rom
+head: cannot open '/sys/bus/pci/devices/0000:01:00.0/rom' for reading: Permission denied
+
+$ dmesg
+dmesg: read kernel buffer failed: Operation not permitted
+
+$ dkms install -m sm750hdmifb -v 0.5.9
+
+Error! You must be root to use this command.
+
+$ rpm -i --root=/tmp/opencode/rpmroot <pkg>
+error: Unable to change root directory: Operation not permitted
+
+$ modinfo src/sm750hdmidrm.ko
+(no version: field printed; no MODULE_VERSION in src/)
+
+READABLE WITHOUT ROOT: /sys/class/drm/card0*/, /dev/dri/by-path/*, lspci -nnk,
+lsmod, dkms status, modinfo, /lib/modules/*/build, /usr/src/sm750hdmifb-0.5.9
+
+BLOCKED BY KERNEL CONFIG: /dev/mem (CONFIG_STRICT_DEVMEM=y,
+CONFIG_IO_STRICT_DEVMEM=y), raw PCI config space beyond lspci output.

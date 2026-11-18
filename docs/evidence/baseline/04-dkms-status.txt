@@ -1,0 +1,7 @@
+# host: deneb
+# kernel: 7.3.3-100.fc43.x86_64
+# utc: 2026-11-17T18:31:29Z
+# command: dkms status
+# ---- output (stdout+stderr, LC_ALL=C) ----
+sm750hdmifb/0.5.9, 7.3.3-100.fc43.x86_64, x86_64: installed
+# ---- exit: 0 ----

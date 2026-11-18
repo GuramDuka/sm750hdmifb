@@ -1,0 +1,40 @@
+IDENTITY AND LAYOUT
+  HEAD: 27db03b2e9e7e0b0afef0a52ff4b2e8cd175fb1b
+  branch: main
+  remotes:
+    origin	https://polaris.root.sx/code/duka/sm750hdmifb.git (fetch)
+    origin	https://polaris.root.sx/code/duka/sm750hdmifb.git (push)
+    upstream	https://github.com/KodeMunkie/sm750hdmifb.git (fetch)
+    upstream	https://github.com/KodeMunkie/sm750hdmifb.git (push)
+  tracked files: 76
+  src files: 23  src .c LOC: 7427  src .h LOC: 2006
+  tests files: 20
+  packaging files: 8
+  docs md: 8
+  tags: v0.5.5 v0.5.6 v0.5.7 v0.5.9 
+
+MODULE VS PACKAGE IDENTITY
+  src/Makefile:2: obj-m += sm750hdmidrm.o
+2:obj-m += sm750hdmidrm.o
+3:sm750hdmidrm-y := sm750_drm.o sm750_drm_mode.o sm750_dither.o ddk750_chip.o \
+  dkms.conf:
+2:PACKAGE_NAME="sm750hdmifb"
+3:PACKAGE_VERSION="0.5.9"
+4:BUILT_MODULE_NAME[0]="sm750hdmidrm"
+7:AUTOINSTALL="yes"
+8:BUILD_EXCLUSIVE_KERNEL="^(6\\.(1[7-9]|[2-9][0-9])\\.|[7-9]\\.|[1-9][0-9]\\.)"
+  modinfo of installed module:
+    (no version field printed => no MODULE_VERSION)
+
+DECLARED KERNEL RANGE
+  dkms.conf:8 -> BUILD_EXCLUSIVE_KERNEL="^(6\\.(1[7-9]|[2-9][0-9])\\.|[7-9]\\.|[1-9][0-9]\\.)"
+  README.md:53 -> The driver is intended for **Linux 6.17 and newer**. DKMS deliberately refuses
+  docs/TESTING.md:44 -> | Ubuntu 6.17.0-42 | Minimum supported series |
+  tests/build-all-kernels.sh:23 -> 		6.1[7-9].*|6.[2-9][0-9].*|[7-9].*|[1-9][0-9].*) ;;
+  packaging/drm-postinst:59 -> 			6.1[7-9].*|6.[2-9][0-9].*|[7-9].*|[1-9][0-9].*) ;;
+  5.14 occurrences in tracked tree: 0
+
+WORKTREE
+?? docs/evidence/
+?? docs/plan/
+?? docs/specs/

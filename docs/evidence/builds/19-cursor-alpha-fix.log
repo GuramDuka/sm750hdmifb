@@ -1,0 +1,570 @@
+# utc: 2026-11-18T10:05:21Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# compiler: gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+# command: bash /mega/tmp/sm750/t13/mk-after.sh
+# env: rootless; libdrm from /mega/tmp/sm750/t3/libdrm (docs/ENVIRONMENT.md section 3)
+# workdir: /home/coder/sm750hdmifb
+# scope: T13 cursor-plane alpha/blend defect - AFTER side
+
+==============================================================
+## 1. What the kernel checks
+==============================================================
+
+The DRM core validates every plane at drm_dev_register(). Upstream
+drivers/gpu/drm/drm_mode_config.c:
+
+$ sed -n 867,885p /mega/tmp/kp_drm_mode_config.c
+static void validate_blend_mode_for_alpha_formats(struct drm_plane *plane)
+{
+	const struct drm_format_info *fmt;
+	u32 i;
+
+	/* blend mode property supported, no need to check anything */
+	if (plane->blend_mode_property)
+		return;
+
+	for (i = 0; i < plane->format_count; i++) {
+		fmt = drm_format_info(plane->format_types[i]);
+		if (fmt->has_alpha) {
+			drm_warn(plane->dev,
+				 "[PLANE:%d:%s] pixel format with alpha exposed but blend mode not setup. Please fix.\n",
+				 plane->base.id, plane->name);
+			break;
+		}
+	}
+}
+[exit 0]
+
+A plane that advertises an alpha format must carry blend_mode_property,
+otherwise this drm_warn fires. The driver exposed ARGB8888 on the cursor
+plane with no property at all, so the warning was correct and the fix is
+to describe the hardware truthfully, not to hide the format.
+
+==============================================================
+## 2. The change
+==============================================================
+
+$ bash -c git diff --stat -- src/sm750_drm.c tests/check-hardware-cursor.sh
+ src/sm750_drm.c                | 150 +++++++++++++++++++++++++++++++++++++++--
+ tests/check-hardware-cursor.sh |  14 +++-
+ 2 files changed, 158 insertions(+), 6 deletions(-)
+[exit 0]
+
+--- src/sm750_drm.c: the include
+$ sed -n 28,32p src/sm750_drm.c
+#include <drm/drm_atomic.h>
+#include <drm/drm_atomic_helper.h>
+#include <drm/drm_blend.h>
+#include <drm/drm_connector.h>
+#include <drm/drm_crtc_helper.h>
+[exit 0]
+
+--- src/sm750_drm.c: the cursor plane setup, with the justification comment
+$ sed -n 3460,3500p src/sm750_drm.c
+	sdev->pipe.crtc.funcs = &sm750_crtc_funcs;
+#endif
+	if (sdev->hardware_cursor) {
+		ret = drm_universal_plane_init(drm, &sdev->cursor_plane,
+				drm_crtc_mask(&sdev->pipe.crtc),
+				&sm750_cursor_plane_funcs, cursor_formats,
+				ARRAY_SIZE(cursor_formats), NULL,
+				DRM_PLANE_TYPE_CURSOR, "sm750-cursor");
+		if (ret)
+			return ret;
+		drm_plane_helper_add(&sdev->cursor_plane,
+				     &sm750_cursor_plane_helper_funcs);
+		/*
+		 * The cursor plane exposes DRM_FORMAT_ARGB8888, so the DRM core
+		 * requires a blend mode property: drm_mode_config_validate()
+		 * warns "pixel format with alpha exposed but blend mode not
+		 * setup" for a plane that advertises an alpha format without
+		 * one. The hardware still consumes per-pixel alpha - it becomes
+		 * a dithered transparent/opaque mask over three palette entries
+		 * (sm750_cursor_encode) - so hiding alpha by switching to
+		 * XRGB8888 would misdescribe the cursor and break compositors
+		 * that hand us ARGB8888. PREMULTI is the one mode that is true
+		 * here: ARGB8888 colour is premultiplied, and
+		 * sm750_cursor_unpremultiply() divides alpha back out before
+		 * quantising. COVERAGE is deliberately not offered because it
+		 * would claim the driver premultiplies colour it receives
+		 * unpremultiplied, which it does not. PREMULTI is also the only
+		 * mode every supported kernel accepts (6.17 rejects a mask
+		 * without it), so no version guard is needed. No plane alpha
+		 * property is created: the hardware has no plane-wide alpha.
+		 */
+		ret = drm_plane_create_blend_mode_property(&sdev->cursor_plane,
+				BIT(DRM_MODE_BLEND_PREMULTI));
+		if (ret)
+			return ret;
+		sdev->pipe.crtc.cursor = &sdev->cursor_plane;
+		drm->mode_config.cursor_width = SM750_DRM_CURSOR_WIDTH;
+		drm->mode_config.cursor_height = SM750_DRM_CURSOR_HEIGHT;
+	}
+	ret = drm_vblank_init(drm, 1);
+	if (ret)
+[exit 0]
+
+The format list is unchanged (cursor_formats[] at src/sm750_drm.c:3424 is
+still DRM_FORMAT_ARGB8888) and the palette conversion path is unchanged:
+sm750_cursor_unpremultiply() at src/sm750_drm.c:2618, alpha_dither[] at
+:2714, and the enable message at :3807 still says
+'64x64 hardware cursor plane enabled with ARGB palette conversion'.
+
+==============================================================
+## 3. The gate: the check is stronger, not weaker
+==============================================================
+
+$ sed -n 20,50p tests/check-hardware-cursor.sh
+	'sm750_cursor_unpremultiply' \
+	'sm750_cursor_palette' \
+	'sm750_cursor_encode' \
+	'bool cursor_image_valid;' \
+	'bool rebuild_image;' \
+	'state->fb != old_state->fb' \
+	'state->fb_damage_clips != old_state->fb_damage_clips' \
+	'output_width != sdev->cursor_encoded_width' \
+	'if (rebuild_image) {' \
+	'value << ((x & 3) * 2)' \
+	'SM750_DRM_HWC_ADDRESS_ENABLE |' \
+	'64x64 hardware cursor plane enabled with ARGB palette conversion' \
+	'#include <drm/drm_blend.h>' \
+	'drm_plane_create_blend_mode_property(&sdev->cursor_plane,' \
+	'BIT(DRM_MODE_BLEND_PREMULTI)'; do
+	grep -F "$requirement" "$source_file" >/dev/null || {
+		echo "Missing hardware-cursor requirement: $requirement" >&2
+		exit 1
+	}
+done
+
+# The cursor plane advertises ARGB8888, so the DRM core requires a blend mode
+# property (drm_mode_config_validate). The hardware has no plane-wide alpha, so
+# exposing drm_plane_create_alpha_property would promise a blend the driver
+# cannot perform - fail if it appears.
+if grep -F 'drm_plane_create_alpha_property' "$source_file" >/dev/null; then
+	echo "Cursor plane must not expose a plane alpha property" >&2
+	exit 1
+fi
+
+awk '
+[exit 0]
+
+$ ./tests/check-hardware-cursor.sh
+Hardware cursor plane checks passed
+[exit 0]
+
+Three requirements were added and one negative assertion: the blend
+property must be created, PREMULTI must be offered, and
+drm_plane_create_alpha_property must NOT appear (the hardware has no
+plane-wide alpha, so advertising one would be a second mismatch). The
+script failed red against the pre-fix driver.
+
+==============================================================
+## 4. The fix is in the built object
+==============================================================
+
+$ make -s KDIR=/lib/modules/7.3.4-100.fc43.x86_64/build CC=/usr/bin/gcc all
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+[exit 0]
+
+$ bash -c nm src/sm750_drm.o | grep blend
+                 U drm_plane_create_blend_mode_property
+[exit 0]
+
+$ bash -c nm src/sm750_drm.o | grep -c drm_plane_create_alpha_property || true
+0
+[exit 0]
+
+(0 occurrences; grep exits 1 when nothing matches, hence the || true)
+$ bash -c objdump -dr src/sm750_drm.o | grep -B3 -A3 'drm_plane_create_blend_mode_property'
+    2e05:	be 01 00 00 00       	mov    $0x1,%esi
+    2e0a:	48 89 ef             	mov    %rbp,%rdi
+    2e0d:	e8 00 00 00 00       	call   2e12 <sm750_modeset_init+0x172>
+			2e0e: R_X86_64_PLT32	drm_plane_create_blend_mode_property-0x4
+    2e12:	85 c0                	test   %eax,%eax
+    2e14:	75 39                	jne    2e4f <sm750_modeset_init+0x1af>
+    2e16:	48 b8 40 00 00 00 40 	movabs $0x4000000040,%rax
+[exit 0]
+
+$ bash -c modinfo src/sm750hdmidrm.ko | sed -n '1,4p'
+filename:       /home/coder/sm750hdmifb/src/sm750hdmidrm.ko
+version:        0.6.0
+license:        GPL v2
+description:    Atomic DRM/KMS driver for SM750G10 SiI9024A HDMI boards
+[exit 0]
+
+The mask in %esi is 1 = BIT(DRM_MODE_BLEND_PREMULTI); the return value is
+tested and the error path is taken. There is no reference to
+drm_plane_create_alpha_property anywhere in the object.
+
+==============================================================
+## 5. API compatibility across all four kernels (no version guard)
+==============================================================
+
+--- /lib/modules/7.2.15-100.fc43.x86_64/build
+$ bash -c grep -n 'DRM_MODE_BLEND_PREMULTI\|DRM_MODE_BLEND_COVERAGE\|int drm_plane_create_blend_mode_property' '/lib/modules/7.2.15-100.fc43.x86_64/build/include/drm/drm_blend.h'
+30:#define DRM_MODE_BLEND_PREMULTI		0
+31:#define DRM_MODE_BLEND_COVERAGE		1
+60:int drm_plane_create_blend_mode_property(struct drm_plane *plane,
+[exit 0]
+
+--- /lib/modules/7.3.3-100.fc43.x86_64/build
+$ bash -c grep -n 'DRM_MODE_BLEND_PREMULTI\|DRM_MODE_BLEND_COVERAGE\|int drm_plane_create_blend_mode_property' '/lib/modules/7.3.3-100.fc43.x86_64/build/include/drm/drm_blend.h'
+30:#define DRM_MODE_BLEND_PREMULTI		0
+31:#define DRM_MODE_BLEND_COVERAGE		1
+60:int drm_plane_create_blend_mode_property(struct drm_plane *plane,
+[exit 0]
+
+--- /lib/modules/7.3.4-100.fc43.x86_64/build
+$ bash -c grep -n 'DRM_MODE_BLEND_PREMULTI\|DRM_MODE_BLEND_COVERAGE\|int drm_plane_create_blend_mode_property' '/lib/modules/7.3.4-100.fc43.x86_64/build/include/drm/drm_blend.h'
+30:#define DRM_MODE_BLEND_PREMULTI		0
+31:#define DRM_MODE_BLEND_COVERAGE		1
+60:int drm_plane_create_blend_mode_property(struct drm_plane *plane,
+[exit 0]
+
+--- /mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64
+$ bash -c grep -n 'DRM_MODE_BLEND_PREMULTI\|DRM_MODE_BLEND_COVERAGE\|int drm_plane_create_blend_mode_property' '/mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64/include/drm/drm_blend.h'
+30:#define DRM_MODE_BLEND_PREMULTI		0
+31:#define DRM_MODE_BLEND_COVERAGE		1
+59:int drm_plane_create_blend_mode_property(struct drm_plane *plane,
+[exit 0]
+
+Same declaration and same enum values in every tree, so the call needs no
+LINUX_VERSION_CODE guard. 6.17 additionally rejects a mask without
+PREMULTI (WARN_ON in drivers/gpu/drm/drm_blend.c), which is why PREMULTI
+is in the mask rather than an empty one; the newer trees accept it too.
+
+==============================================================
+## 6. The running kernel really performs this check
+==============================================================
+
+The installed module cannot be replaced from this task (no root; T11
+installs the rebuilt 0.6.0). What can be shown is that the kernel now
+running contains the check and the property it looks for:
+
+$ bash -c dd if=/boot/vmlinuz-7.3.4-100.fc43.x86_64 bs=1 skip=21196 2>/dev/null | zstd -d -c 2>/dev/null | strings -a | grep -n 'pixel format with alpha exposed\|pixel blend mode\|Pre-multiplied\|^Coverage$'
+335187:[drm] [PLANE:%d:%s] pixel format with alpha exposed but blend mode not setup. Please fix.
+363102:pixel blend mode
+363103:Pre-multiplied
+363104:Coverage
+[exit 0]
+
+The warning string, the property name and both enum labels are in the
+image. With blend_mode_property set, validate_blend_mode_for_alpha_formats()
+returns at its first line and the warning cannot be emitted.
+
+==============================================================
+## 7. make check
+==============================================================
+
+$ make check KDIR=/lib/modules/7.3.4-100.fc43.x86_64/build CC=/usr/bin/gcc
+make -C /lib/modules/7.3.4-100.fc43.x86_64/build M=/home/coder/sm750hdmifb/src modules
+make[1]: Entering directory '/usr/src/kernels/7.3.4-100.fc43.x86_64'
+make[2]: вход в каталог «/home/coder/sm750hdmifb/src»
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+make[2]: выход из каталога «/home/coder/sm750hdmifb/src»
+make[1]: Leaving directory '/usr/src/kernels/7.3.4-100.fc43.x86_64'
+/usr/bin/gcc -O2 -Wall -Wextra -Werror $(pkg-config --cflags libdrm) \
+	-o tests/check-vblank tests/check-vblank.c $(pkg-config --libs libdrm) -lm
+/usr/bin/gcc -O3 -Wall -Wextra -Werror -Itools -o tests/test-bbdither-rgb565 tests/test-bbdither-rgb565.c tools/bbdither-rgb565.c
+/usr/bin/gcc -O3 -Wall -Wextra -Werror -o tests/test-scale-optimizations tests/test-scale-optimizations.c
+./tests/check-drm-module.sh src/sm750hdmidrm.ko
+Measured 60.48 DRM vblanks/s over 120 events (expected 60.00)
+DRM vblank ioctl checks passed: /dev/dri/card0
+DRM module metadata checks passed: src/sm750hdmidrm.ko
+./tests/check-drm-policy.sh
+DRM mode policy checks passed
+./tests/check-drm-xorg-config.sh
+DRM Xorg isolation checks passed
+./tests/check-drm-packaging.sh
+Unified DRM package checks passed
+./tests/check-release-version.sh
+Release version consistency checks passed: 0.6.0
+./tests/check-softscale-map.sh
+Softscale 2560/2464-to-2048 mapping checks passed
+./tests/check-softscale-sharpen.sh
+Softscale 8% contrast sharpening checks passed
+./tests/check-softscale-codegen.sh src/sm750_dither.o
+Softscale generated-code checks passed
+./tests/check-hardware-cursor.sh
+Hardware cursor plane checks passed
+./tests/check-shadow-dma.sh
+Shadow DMA safety checks passed
+./tests/check-backbuffer-staging.sh
+Full-frame backbuffer staging checks passed
+./tests/check-shadow-async.sh
+Asynchronous shadow mailbox checks passed
+./tests/check-shadow-source-damage.sh
+Shadow source-difference damage checks passed
+python3 tests/test-vblank-timer.py
+Vblank timer schedule passed: normal
+Vblank timer schedule passed: time-lock
+Vblank timer schedule passed: event-lock
+Vblank timer schedule passed: superseded
+Vblank timer schedule passed: cancel-enable
+Vblank timer schedule passed: sync-stop
+./tests/test-bbdither-rgb565
+bbdither RGB565 checks passed
+./tests/test-scale-optimizations
+Packed scaler, unrolled span and fixed-sharpen checks passed
+python3 tests/test-staging-results.py
+....
+----------------------------------------------------------------------
+Ran 4 tests in 0.205s
+
+OK
+[exit 0]
+
+==============================================================
+## 8. Matrix, three installed trees
+==============================================================
+
+$ env JOBS=12 CC=/usr/bin/gcc ./tests/build-all-kernels.sh /lib/modules/7.2.15-100.fc43.x86_64/build /lib/modules/7.3.3-100.fc43.x86_64/build /lib/modules/7.3.4-100.fc43.x86_64/build
+Building sm750hdmidrm for 7.2.15-100.fc43.x86_64 (rgb565-bbdither default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+Measured 60.14 DRM vblanks/s over 120 events (expected 60.00)
+DRM vblank ioctl checks passed: /dev/dri/card0
+DRM module metadata checks passed: src/sm750hdmidrm.ko
+DRM mode policy checks passed
+DRM Xorg isolation checks passed
+Unified DRM package checks passed
+Release version consistency checks passed: 0.6.0
+Softscale 2560/2464-to-2048 mapping checks passed
+Softscale 8% contrast sharpening checks passed
+Softscale generated-code checks passed
+Hardware cursor plane checks passed
+Shadow DMA safety checks passed
+Full-frame backbuffer staging checks passed
+Asynchronous shadow mailbox checks passed
+Shadow source-difference damage checks passed
+Vblank timer schedule passed: normal
+Vblank timer schedule passed: time-lock
+Vblank timer schedule passed: event-lock
+Vblank timer schedule passed: superseded
+Vblank timer schedule passed: cancel-enable
+Vblank timer schedule passed: sync-stop
+bbdither RGB565 checks passed
+Packed scaler, unrolled span and fixed-sharpen checks passed
+....
+----------------------------------------------------------------------
+Ran 4 tests in 0.191s
+
+OK
+Measured 60.32 DRM vblanks/s over 120 events (expected 60.00)
+DRM vblank ioctl checks passed: /dev/dri/card0
+DRM module metadata checks passed: /home/coder/sm750hdmifb/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 7.2.15-100.fc43.x86_64 (xrgb8888 default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+SKIP: tests/check-vblank is not built; run make check first. This is not a pass.
+DRM module metadata checks passed: /home/coder/sm750hdmifb/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 7.2.15-100.fc43.x86_64 (rgb565 default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+SKIP: tests/check-vblank is not built; run make check first. This is not a pass.
+DRM module metadata checks passed: /home/coder/sm750hdmifb/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 7.3.3-100.fc43.x86_64 (rgb565-bbdither default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+Measured 60.31 DRM vblanks/s over 120 events (expected 60.00)
+DRM vblank ioctl checks passed: /dev/dri/card0
+DRM module metadata checks passed: src/sm750hdmidrm.ko
+DRM mode policy checks passed
+DRM Xorg isolation checks passed
+Unified DRM package checks passed
+Release version consistency checks passed: 0.6.0
+Softscale 2560/2464-to-2048 mapping checks passed
+Softscale 8% contrast sharpening checks passed
+Softscale generated-code checks passed
+Hardware cursor plane checks passed
+Shadow DMA safety checks passed
+Full-frame backbuffer staging checks passed
+Asynchronous shadow mailbox checks passed
+Shadow source-difference damage checks passed
+Vblank timer schedule passed: normal
+Vblank timer schedule passed: time-lock
+Vblank timer schedule passed: event-lock
+Vblank timer schedule passed: superseded
+Vblank timer schedule passed: cancel-enable
+Vblank timer schedule passed: sync-stop
+bbdither RGB565 checks passed
+Packed scaler, unrolled span and fixed-sharpen checks passed
+....
+----------------------------------------------------------------------
+Ran 4 tests in 0.212s
+
+OK
+Measured 60.21 DRM vblanks/s over 120 events (expected 60.00)
+DRM vblank ioctl checks passed: /dev/dri/card0
+DRM module metadata checks passed: /home/coder/sm750hdmifb/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 7.3.3-100.fc43.x86_64 (xrgb8888 default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+SKIP: tests/check-vblank is not built; run make check first. This is not a pass.
+DRM module metadata checks passed: /home/coder/sm750hdmifb/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 7.3.3-100.fc43.x86_64 (rgb565 default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+SKIP: tests/check-vblank is not built; run make check first. This is not a pass.
+DRM module metadata checks passed: /home/coder/sm750hdmifb/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 7.3.4-100.fc43.x86_64 (rgb565-bbdither default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+Measured 60.25 DRM vblanks/s over 120 events (expected 60.00)
+DRM vblank ioctl checks passed: /dev/dri/card0
+DRM module metadata checks passed: src/sm750hdmidrm.ko
+DRM mode policy checks passed
+DRM Xorg isolation checks passed
+Unified DRM package checks passed
+Release version consistency checks passed: 0.6.0
+Softscale 2560/2464-to-2048 mapping checks passed
+Softscale 8% contrast sharpening checks passed
+Softscale generated-code checks passed
+Hardware cursor plane checks passed
+Shadow DMA safety checks passed
+Full-frame backbuffer staging checks passed
+Asynchronous shadow mailbox checks passed
+Shadow source-difference damage checks passed
+Vblank timer schedule passed: normal
+Vblank timer schedule passed: time-lock
+Vblank timer schedule passed: event-lock
+Vblank timer schedule passed: superseded
+Vblank timer schedule passed: cancel-enable
+Vblank timer schedule passed: sync-stop
+bbdither RGB565 checks passed
+Packed scaler, unrolled span and fixed-sharpen checks passed
+....
+----------------------------------------------------------------------
+Ran 4 tests in 0.210s
+
+OK
+Measured 60.39 DRM vblanks/s over 120 events (expected 60.00)
+DRM vblank ioctl checks passed: /dev/dri/card0
+DRM module metadata checks passed: /home/coder/sm750hdmifb/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 7.3.4-100.fc43.x86_64 (xrgb8888 default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+SKIP: tests/check-vblank is not built; run make check first. This is not a pass.
+DRM module metadata checks passed: /home/coder/sm750hdmifb/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 7.3.4-100.fc43.x86_64 (rgb565 default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+SKIP: tests/check-vblank is not built; run make check first. This is not a pass.
+DRM module metadata checks passed: /home/coder/sm750hdmifb/src/sm750hdmidrm.ko
+Built 9 sm750hdmidrm kernel/format combinations
+[exit 0]
+
+==============================================================
+## 9. Matrix, 6.17.1-300 floor tree
+==============================================================
+
+$ env JOBS=12 CC=/usr/bin/gcc ./tests/build-all-kernels.sh /mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64
+Building sm750hdmidrm for 6.17.1-300.fc43.x86_64 (rgb565-bbdither default)
+warning: the compiler differs from the one used to build the kernel
+  The kernel was built by: gcc (GCC) 15.2.1 20250924 (Red Hat 15.2.1-2)
+  You are using:           gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+Measured 60.37 DRM vblanks/s over 120 events (expected 60.00)
+DRM vblank ioctl checks passed: /dev/dri/card0
+DRM module metadata checks passed: src/sm750hdmidrm.ko
+DRM mode policy checks passed
+DRM Xorg isolation checks passed
+Unified DRM package checks passed
+Release version consistency checks passed: 0.6.0
+Softscale 2560/2464-to-2048 mapping checks passed
+Softscale 8% contrast sharpening checks passed
+Softscale generated-code checks passed
+Hardware cursor plane checks passed
+Shadow DMA safety checks passed
+Full-frame backbuffer staging checks passed
+Asynchronous shadow mailbox checks passed
+Shadow source-difference damage checks passed
+Vblank timer schedule passed: normal
+Vblank timer schedule passed: time-lock
+Vblank timer schedule passed: event-lock
+Vblank timer schedule passed: superseded
+Vblank timer schedule passed: cancel-enable
+Vblank timer schedule passed: sync-stop
+bbdither RGB565 checks passed
+Packed scaler, unrolled span and fixed-sharpen checks passed
+....
+----------------------------------------------------------------------
+Ran 4 tests in 0.219s
+
+OK
+Measured 60.34 DRM vblanks/s over 120 events (expected 60.00)
+DRM vblank ioctl checks passed: /dev/dri/card0
+DRM module metadata checks passed: /home/coder/sm750hdmifb/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 6.17.1-300.fc43.x86_64 (xrgb8888 default)
+warning: the compiler differs from the one used to build the kernel
+  The kernel was built by: gcc (GCC) 15.2.1 20250924 (Red Hat 15.2.1-2)
+  You are using:           gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+SKIP: tests/check-vblank is not built; run make check first. This is not a pass.
+DRM module metadata checks passed: /home/coder/sm750hdmifb/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 6.17.1-300.fc43.x86_64 (rgb565 default)
+warning: the compiler differs from the one used to build the kernel
+  The kernel was built by: gcc (GCC) 15.2.1 20250924 (Red Hat 15.2.1-2)
+  You are using:           gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+SKIP: tests/check-vblank is not built; run make check first. This is not a pass.
+DRM module metadata checks passed: /home/coder/sm750hdmifb/src/sm750hdmidrm.ko
+Built 3 sm750hdmidrm kernel/format combinations
+[exit 0]
+
+==============================================================
+## 10. Diagnostics from the matrix runs
+==============================================================
+
+Archived full logs of the same two runs:
+  /mega/tmp/sm750/t13/matrix-3.log    sha256 4d31f8d9602423fc677a6762c922bd77370ff9056600efd48cfb27ce39c6826e
+  /mega/tmp/sm750/t13/matrix-617.log  sha256 5c0a5967d83acd03b863317e9f5d02917a04bf62ee5467f77aa5e1fc674beb37
+
+$ bash -c grep -hE 'warning:|error:' /mega/tmp/sm750/t13/matrix-3.log /mega/tmp/sm750/t13/matrix-617.log | sort | uniq -c
+      9 warning: pahole version differs from the one used to build the kernel
+      3 warning: the compiler differs from the one used to build the kernel
+[exit 0]
+
+$ bash -c grep -hE 'src/.*(warning|error)' /mega/tmp/sm750/t13/matrix-3.log /mega/tmp/sm750/t13/matrix-617.log | wc -l
+0
+[exit 0]
+
+Every warning is host tooling (pahole or compiler version), none from src/.
+
+==============================================================
+## 11. What this does and does not prove
+==============================================================
+
+Proved here: the driver creates the property the core check keys on, the
+property offers the mode the hardware implements, the object and all four
+kernel builds carry it, and no check regressed.
+
+NOT proved here, because this task cannot load a module: the live warning
+disappears only when T11 installs the rebuilt 0.6.0 module and the host
+reboots or reloads it. The pre-fix capture is
+docs/evidence/runtime/cursor-alpha-01-warning-before.txt; the post-install
+capture belongs to T11 and must be taken with
+sudo -n /usr/bin/dmesg | grep -n 'sm750-cursor'.

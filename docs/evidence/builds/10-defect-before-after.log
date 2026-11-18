@@ -1,0 +1,360 @@
+# utc: 2026-11-18T04:51:14Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# compiler: /usr/bin/gcc (GCC) 15.3.1 20260722; CC=gcc resolves to the CUDA PATH toolchain (GCC 14.4.1)
+# command: bash /mega/tmp/sm750/t5/mk-before-after.sh
+# env: rootless; BEFORE = git show HEAD:<path>, AFTER = working tree
+# workdir: /home/coder/sm750hdmifb
+# exit: 0 (see per-section commands; A03 section intentionally fails)
+
+
+==============================================================
+## A02 (S1) source tarball ships untracked files
+==============================================================
+--- BEFORE (git show HEAD:build-package.sh | grep -n 'tar -C') ---
+79:tar -C "${project_dir}" -czf "${source_archive}" \
+--- AFTER (build-package.sh tracked-only manifest) ---
+98:	git -C "${project_dir}" ls-files -z -- . ':(exclude)docs/images/*' \
+114:		--exclude='docs/images/*' \
+--- AFTER artifact size and content tests ---
+-rw-r--r-- 1 coder coder 124212 ноя 18 07:48 dist/sm750hdmifb-0.5.9-source.tar.gz
+$ tar -tzf dist/sm750hdmifb-0.5.9-source.tar.gz | grep -cE 'docs/(plan|evidence|images)'
+0
+# (untracked docs/plan, docs/evidence, docs/AUDIT.md are present in the working tree)
+
+==============================================================
+## A22 (S4, same root cause as A02) tarball ships ~9 MB of screenshots
+==============================================================
+$ ls -l docs/images
+итого 6356
+-rw-r--r-- 1 coder coder 2960772 ноя 17 18:40 desktop-2048x1080-scanout.png
+-rw-r--r-- 1 coder coder 3310400 ноя 17 18:40 desktop-2464x1080-logical.png
+-rw-r--r-- 1 coder coder  232136 ноя 17 18:40 desktop-2560x1080-physical.jpg
+$ tar -tzf dist/sm750hdmifb-0.5.9-source.tar.gz | grep -c docs/images
+0
+# before this fix the tarball was 6.3 MB; it is now 122 KB (see docs/evidence/builds/07-build-package.log)
+
+==============================================================
+## A03 (S2) make check needs libdrm but only fails deep inside the compile
+==============================================================
+--- BEFORE (git show HEAD:Makefile | grep -c check-deps) ---
+0
+--- AFTER (Makefile check-deps target) ---
+17:check-deps:
+18-	@pkg-config --exists libdrm || { \
+19-		echo "libdrm development files are required by tests/check-vblank." >&2; \
+20-		echo "  Debian/Ubuntu: sudo apt install libdrm-dev" >&2; \
+21-		echo "  Fedora:        sudo dnf install libdrm-devel" >&2; \
+22-		echo "  Rootless alternative: see docs/ENVIRONMENT.md" >&2; \
+23-		exit 1; }
+24-	@command -v rg >/dev/null 2>&1 || { \
+25-		echo "ripgrep (rg) is required by the release checks." >&2; \
+--- AFTER behaviour without the libdrm env chain (expected failure with an install hint) ---
+$ env -u PKG_CONFIG_PATH make check-deps
+libdrm development files are required by tests/check-vblank.
+  Debian/Ubuntu: sudo apt install libdrm-dev
+  Fedora:        sudo dnf install libdrm-devel
+  Rootless alternative: see docs/ENVIRONMENT.md
+make: *** [Makefile:18: check-deps] Ошибка 1
+# exit: 2 (non-zero by design; this is the actionable preflight message)
+
+==============================================================
+## A04 (S2) tests/check-vblank was compiled but never executed
+==============================================================
+--- BEFORE (git show HEAD:tests/check-drm-module.sh | grep -c check-vblank) ---
+0
+--- AFTER (live-device probe in tests/check-drm-module.sh) ---
+8:device=${SM750_DRM_DEVICE:-/dev/dri/card0}
+83:if [[ ! -x $project_dir/tests/check-vblank ]]; then
+84:	echo "SKIP: tests/check-vblank is not built; run make check first. This is not a pass."
+86:	echo "SKIP: cannot open $device read-write as uid $(id -u); grant the video group or run tests/check-vblank $device ${SM750_DRM_EXPECTED_HZ:-60} as root. This is not a pass."
+88:	"$project_dir/tests/check-vblank" "$device" "${SM750_DRM_EXPECTED_HZ:-60}"
+--- AFTER observed probe output (from docs/evidence/builds/01-make-check.log) ---
+docs/evidence/builds/01-make-check.log:41:SKIP: cannot open /dev/dri/card0 read-write as uid 1005; grant the video group or run tests/check-vblank /dev/dri/card0 60 as root. This is not a pass.
+docs/evidence/builds/02-check-all-kernels.log:14:SKIP: cannot open /dev/dri/card0 read-write as uid 1005; grant the video group or run tests/check-vblank /dev/dri/card0 60 as root. This is not a pass.
+docs/evidence/builds/02-check-all-kernels.log:41:SKIP: cannot open /dev/dri/card0 read-write as uid 1005; grant the video group or run tests/check-vblank /dev/dri/card0 60 as root. This is not a pass.
+docs/evidence/builds/02-check-all-kernels.log:48:SKIP: tests/check-vblank is not built; run make check first. This is not a pass.
+
+==============================================================
+## A05 (S2) no unprivileged register dump
+==============================================================
+--- BEFORE (git show HEAD:src/sm750_drm.c | grep -c debugfs_create_file) ---
+0
+--- AFTER (register dump facility) ---
+70:#define SM750_DRM_VERSION "0.5.9"
+3312:static int sm750_regs_show(struct seq_file *m, void *unused)
+3333:DEFINE_SHOW_ATTRIBUTE(sm750_regs);
+3337:	debugfs_create_file("regs", 0444, minor->debugfs_root, minor->dev,
+3363:	.debugfs_init = sm750_vram_debugfs_init,
+3376:	.debugfs_init = sm750_debugfs_init,
+3866:MODULE_VERSION(SM750_DRM_VERSION);
+--- AFTER (read attempt (privilege gap; see 09-register-dump.log)) ---
+
+==============================================================
+## A06 (S2) no 6.17 header tree available
+==============================================================
+--- BEFORE (git show HEAD:docs/AUDIT.md >/dev/null; available trees) ---
+/lib/modules/7.2.15-100.fc43.x86_64/build
+/lib/modules/7.3.3-100.fc43.x86_64/build
+/lib/modules/7.3.4-100.fc43.x86_64/build
+--- AFTER (extracted 6.17.1-300.fc43 tree) ---
+/mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64
+https://kojipkgs.fedoraproject.org/packages/kernel/6.17.1/300.fc43/x86_64/kernel-devel-6.17.1-300.fc43.x86_64.rpm
+57:Built 3 sm750hdmidrm kernel/format combinations
+
+==============================================================
+## A07 (S2) compiler mismatch warning
+==============================================================
+--- BEFORE: bare gcc (CUDA PATH toolchain) ---
+$ make ... CC=gcc all   # output excerpt
+warning: the compiler differs from the one used to build the kernel
+  The kernel was built by: gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+  You are using:           gcc (GCC) 14.4.1 20260724 (Red Hat 14.4.1-2)
+warning: pahole version differs from the one used to build the kernel
+--- AFTER: CC=/usr/bin/gcc (GCC 15.3.1 == CONFIG_GCC_VERSION 150301) ---
+--- AFTER (no compiler-differs warning in any archived log) ---
+docs/evidence/builds/01-make-check.log:0
+docs/evidence/builds/02-check-all-kernels.log:0
+docs/evidence/builds/03-kernel-7.2.15-100.log:0
+docs/evidence/builds/04-kernel-7.3.3-100.log:0
+docs/evidence/builds/05-kernel-7.3.4-100.log:0
+# 06-kernel-6.17.1.log does warn: the archive kernel was built by GCC 15.2.1, which cannot be matched on this host (out of scope, see 11-warnings-scan.log)
+
+==============================================================
+## A08 (S2) drm-postinst calls Debian-only update-initramfs unconditionally
+==============================================================
+--- BEFORE (git show HEAD:packaging/drm-postinst | grep -n update-initramfs) ---
+68:		update-initramfs -u -k "$kernel_version"
+--- AFTER (guarded helper with dracut fallback) ---
+12-refresh_initramfs() {
+13-	kernel_version=$1
+14:	if command -v update-initramfs >/dev/null 2>&1; then
+15-		update-initramfs -u -k "$kernel_version"
+16-	elif command -v dracut >/dev/null 2>&1; then
+17-		dracut --force --kver "$kernel_version"
+18-	else
+19-		echo "No initramfs tool found; leaving the $kernel_version initramfs unchanged." >&2
+20-	fi
+--- AFTER (postrm guarded too) ---
+8:	if command -v update-initramfs >/dev/null 2>&1; then
+9-		update-initramfs -u || true
+10-	elif command -v dracut >/dev/null 2>&1; then
+11-		dracut --force || true
+12-	fi
+13-fi
+14-
+--- AFTER (Debian control Recommends) ---
+69:Recommends: initramfs-tools | dracut
+
+==============================================================
+## A09 (S2) maintenance scripts hardcode the version
+==============================================================
+--- BEFORE (git show HEAD:packaging/drm-postinst | grep -n '^version=') ---
+6:version=0.5.9
+--- AFTER (placeholder in the source) ---
+packaging/drm-postinst:8:version=@VERSION@
+packaging/drm-prerm:7:version=@VERSION@
+--- AFTER (substitution in build-package.sh) ---
+56:# Maintainer scripts carry @VERSION@ instead of a literal version so a release
+58:sed -i "s/@VERSION@/${version}/g" "${build_root}/DEBIAN/postinst" \
+--- AFTER (substituted value inside the built .deb) ---
+/mega/tmp/sm750/t5/ctrl-after/postinst:8:version=0.5.9
+/mega/tmp/sm750/t5/ctrl-after/prerm:7:version=0.5.9
+--- AFTER (release check now enforces it) ---
+15:module_version=$(sed -n \
+18:test "$module_version" = "$version"
+19:grep -F 's/@VERSION@/${version}/g' "$builder" >/dev/null
+21:	grep -F 'version=@VERSION@' "$project_dir/$script" >/dev/null
+
+==============================================================
+## A10 (S2) two different xorg snippets share the name 20-sm750hdmidrm.conf
+==============================================================
+--- BEFORE (git show HEAD:packaging/drm-postinst | grep -n '20-sm750hdmidrm') ---
+23:	/etc/X11/xorg.conf.d/20-sm750hdmidrm.conf; then
+--- AFTER (generated file renamed, shipped asset unchanged) ---
+packaging/drm-postinst:38:	/etc/X11/xorg.conf.d/20-sm750hdmidrm-device.conf; then
+packaging/drm-prerm:19:	rm -f /etc/X11/xorg.conf.d/20-sm750hdmidrm-device.conf
+build-package.sh:41:install -m 0644 "${project_dir}/packaging/20-sm750hdmidrm.conf" \
+build-package.sh:42:	"${build_root}/usr/share/X11/xorg.conf.d/20-sm750hdmidrm.conf"
+tests/check-drm-xorg-config.sh:21:		"$project_dir/packaging/20-sm750hdmidrm.conf" >/dev/null; then
+tests/check-drm-xorg-config.sh:28:grep -F '/etc/X11/xorg.conf.d/20-sm750hdmidrm-device.conf' \
+tests/check-drm-xorg-config.sh:30:if grep -F '/etc/X11/xorg.conf.d/20-sm750hdmidrm.conf' \
+$ dpkg-deb -c dist/sm750hdmifb_0.5.9_all.deb | grep xorg.conf.d
+drwxr-xr-x root/root         0 2026-11-18 07:48 ./usr/share/X11/xorg.conf.d/
+-rw-r--r-- root/root       252 2026-11-18 07:48 ./usr/share/X11/xorg.conf.d/20-sm750hdmidrm.conf
+
+==============================================================
+## A13 (S3) README dependency list omitted ripgrep
+==============================================================
+--- BEFORE (git show HEAD:README.md | sed -n '34p') ---
+sudo apt install build-essential dkms linux-headers-$(uname -r) libdrm-dev git
+--- AFTER (install lists and Fedora section) ---
+34:sudo apt install build-essential dkms linux-headers-$(uname -r) libdrm-dev ripgrep git
+44:on Debian and Ubuntu, `libdrm-devel` on Fedora) and `rg` from ripgrep. The
+51:sudo dnf install gcc make dkms kernel-devel libdrm-devel pkgconf-pkg-config ripgrep
+52:make KDIR=/lib/modules/$(uname -r)/build CC=/usr/bin/gcc check
+
+==============================================================
+## A14 (S3) .deb had no DEBIAN/md5sums
+==============================================================
+--- BEFORE (git show HEAD:build-package.sh | grep -c md5sums) ---
+0
+--- AFTER (md5sums generation) ---
+87:) >"${build_root}/DEBIAN/md5sums"
+88-dpkg-deb --root-owner-group --build "${build_root}" "${deb}"
+89-
+90-# Ship exactly the tracked tree. Packing the working tree leaked untracked
+91-# planning notes into the release and made the audit scan them (defect A02).
+--- AFTER (md5sums present and verified by the audit) ---
+-rw-r--r-- 1 coder coder 2573 ноя 18 07:48 /mega/tmp/sm750/t5/ctrl-after/md5sums
+7d4fbe76fd5d68234d714d8c6cc1ebdf  etc/modprobe.d/sm750hdmidrm.conf
+2f409f355b48059303d222ed25045726  etc/modules-load.d/sm750hdmidrm.conf
+e09faa64c458ce28a29974ab0db97344  usr/lib/sm750hdmifb/write-xorg-config
+107:(cd "$tmpdir/deb" && md5sum -c --quiet "$tmpdir/control/md5sums")
+
+==============================================================
+## A15 (S3) no MODULE_VERSION, so modinfo shows no version
+==============================================================
+--- BEFORE (git show HEAD:src/sm750_drm.c | grep -c MODULE_VERSION) ---
+0
+--- AFTER (define and MODULE_VERSION()) ---
+70:#define SM750_DRM_VERSION "0.5.9"
+3866:MODULE_VERSION(SM750_DRM_VERSION);
+--- AFTER (modinfo reflects it) ---
+0.5.9
+--- AFTER (check asserts equality with build-package.sh) ---
+15:test "$(modinfo -F version "$module")" = "$expected_version"
+17:grep -F 'MODULE_VERSION(SM750_DRM_VERSION)' "$driver_source" >/dev/null
+
+==============================================================
+## A16 (S3) stale-version gate only covered 0.5.0-0.5.5
+==============================================================
+--- BEFORE (git show HEAD:tests/audit-release.sh | sed -n '19,23p') ---
+if rg -n 'sm750hdmifb[-_]0\.5\.[0-5]' \
+	"$project_dir/.github/workflows/build.yml"; then
+	echo "Manual build workflow contains a stale release artifact version." >&2
+	exit 1
+fi
+--- AFTER (gate derives the current version) ---
+7:readonly version=$(sed -n 's/^readonly version=//p' "$project_dir/build-package.sh")
+24:stale_artifacts=$(rg -o 'sm750hdmifb[-_][0-9]+\.[0-9]+\.[0-9]+' \
+27:if [[ -n $stale_artifacts ]]; then
+29:	echo "$stale_artifacts" >&2
+
+==============================================================
+## A17 (S3) PARAMETERS.md claimed all parameters are load-time only
+==============================================================
+--- BEFORE (git show HEAD:docs/PARAMETERS.md | sed -n '4p') ---
+Parameters are read when `sm750hdmidrm` loads and cannot be changed at runtime.
+--- AFTER (runtime-writable parameters documented) ---
+Most parameters are read when `sm750hdmidrm` loads and cannot be changed at
+runtime. Use `sm750hdmidrm.name=value` on the kernel command line or an
+`options sm750hdmidrm ...` line in `/etc/modprobe.d/`. Runtime parameters
+override build-time defaults.
+
+Two diagnostic parameters are deliberately writable after load:
+`dma_batch_rows` and `staging_timing` are exposed with mode `0644`, so they can
+be changed through `/sys/module/sm750hdmidrm/parameters/` to compare upload
+batching and timing on a live system. Every other parameter is `0444` and is
+fixed once the module is loaded.
+
+==============================================================
+## A18 (S3) workflow only ran on workflow_dispatch
+==============================================================
+--- BEFORE (git show HEAD:.github/workflows/build.yml | sed -n '4,6p') ---
+on:
+  workflow_dispatch:
+    inputs:
+--- AFTER (push and pull_request triggers) ---
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+
+==============================================================
+## A19 (S3) make check never built or audited a package
+==============================================================
+--- BEFORE (git show HEAD:Makefile | grep -c check-package) ---
+0
+--- AFTER (check-package target) ---
+71:check-package: check-deps all
+72-	./build-package.sh
+73-	./tests/audit-release.sh
+74-
+75-staging-benchmark: tools/staging-pattern
+--- AFTER (CI uses it) ---
+48:        run: make KDIR="${{ steps.headers.outputs.path }}" check-package
+
+==============================================================
+## A20 (S3) DKMS AUTOINSTALL=yes versus untested kernels >= 7.1 (DEFERRED)
+==============================================================
+7:AUTOINSTALL="yes"
+- DKMS keeps `AUTOINSTALL="yes"` so a kernel update rebuilds the module
+  automatically. This is deliberate: without it a kernel upgrade silently
+  drops the display driver. It also means kernels above the last offline-tested
+# Deferred: dropping AUTOINSTALL would stop automatic rebuilds on kernel updates.
+
+==============================================================
+## A21 (S3) no committed evidence for the build matrix
+==============================================================
+$ ls docs/evidence/builds
+итого 56
+-rw-r--r-- 1 coder coder  3883 ноя 18 07:42 01-make-check.log
+-rw-r--r-- 1 coder coder  8106 ноя 18 07:45 02-check-all-kernels.log
+-rw-r--r-- 1 coder coder  3106 ноя 18 07:46 03-kernel-7.2.15-100.log
+-rw-r--r-- 1 coder coder  3102 ноя 18 07:46 04-kernel-7.3.3-100.log
+-rw-r--r-- 1 coder coder  3102 ноя 18 07:46 05-kernel-7.3.4-100.log
+-rw-r--r-- 1 coder coder  3361 ноя 18 07:48 06-kernel-6.17.1.log
+-rw-r--r-- 1 coder coder   630 ноя 18 07:48 07-build-package.log
+-rw-r--r-- 1 coder coder   434 ноя 18 07:48 08-audit-release.log
+-rw-r--r-- 1 coder coder  2473 ноя 18 07:49 09-register-dump.log
+-rw-r--r-- 1 coder coder 15949 ноя 18 07:51 10-defect-before-after.log
+
+==============================================================
+## A23 (S4) plan claimed 18 make check recipe commands
+==============================================================
+1:plan_id: 20261117-sm750-driver-prod
+7:  DKMS-installed for 7.3.3-100.fc43), the declared kernel floor is 6.17 (not 5.14), and
+21:created_at: 2026-11-17T18:56:00Z
+$ check target command count
+17
+
+==============================================================
+## A24 (S4) fbdev compiled but no /dev/fb0
+==============================================================
+$ ls -l /dev/fb0
+ls: невозможно получить доступ к '/dev/fb0': Нет такого файла или каталога
+27:#include <drm/clients/drm_client_setup.h>
+3366:	DRM_FBDEV_TTM_DRIVER_OPS,
+3753:	drm_client_setup(&sdev->drm, drm_format_info(DRM_FORMAT_XRGB8888));
+--- AFTER (documented in README) ---
+307:### Framebuffer console
+308-
+309-The driver sets up fbdev emulation through `DRM_FBDEV_TTM_DRIVER_OPS` and
+310-`drm_client_setup()`. A `/dev/fb0` node appears only when the kernel is built
+311-with fbdev emulation and no other framebuffer driver already owns the device.
+
+==============================================================
+## A11 (S3) no tracked datasheet / register reference (DEFERRED in part)
+==============================================================
+$ ls -l docs/REGISTERS.md
+-rw-r--r-- 1 coder coder 4292 ноя 17 22:19 docs/REGISTERS.md
+# The vendor datasheet PDF cannot be redistributed; docs/REGISTERS.md tracks the register table instead.
+
+==============================================================
+## A12 (S3) no igt or kmscube, modetest denied (DEFERRED)
+==============================================================
+$ command -v modetest kmscube igt-gpu-tools 2>&1
+/usr/bin/modetest
+$ modetest -c
+no device found
+trying to open device '/dev/dri/card3'... failed
+# Deferred: requires /dev/dri access this host does not grant.
+
+==============================================================
+## A01 (S1) no RPM spec (DEFERRED to T6)
+==============================================================
+$ ls packaging/sm750hdmifb.spec
+ls: невозможно получить доступ к 'packaging/sm750hdmifb.spec': Нет такого файла или каталога
+# T5 must not create it; T6 owns packaging.

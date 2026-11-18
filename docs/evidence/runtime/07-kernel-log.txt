@@ -1,0 +1,218 @@
+T10 - RUNTIME TIER 7: KERNEL LOG DURING THE RUNTIME RUNS - BEFORE / PRE-FIX BASELINE
+======================================================================
+Module under test: sm750hdmidrm as currently loaded = STALE PRE-FIX 0.5.9 BUILD.
+Proof: /sys/module/sm750hdmidrm/version and /srcversion do not exist; no `regs` entry
+under /sys/module/sm750hdmidrm/; dkms status reports
+`sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: installed`; git HEAD 27db03b
+"Release 0.5.9 with newer kernel support". PRE-FIX BASELINE, not a 0.6.0 result.
+
+LOG SOURCES (both work here, contradicting an earlier note in the evidence set)
+  sudo -n dmesg                                -> exit 0, 2017 lines
+  sudo -n journalctl -k -b -q --no-pager       -> exit 0, 2017 lines (identical content)
+  Raw captures: /mega/tmp/sm750/t10/dmesg-t10-final.txt, /mega/tmp/sm750/t10/journal-t10.txt
+  NOTE FOR THE PLAN: docs/evidence/EVIDENCE-GAPS.md:87-89 states that journalctl -k -b
+  produced 0 lines on this host. That is NOT what was measured during this task: it
+  returned the full 2017-line boot log with exit 0, repeatedly. The contradiction is
+  recorded here; EVIDENCE-GAPS.md was NOT edited (out of scope for T10).
+  Also note: an empty kernel log would not have been evidence of a clean run, so no
+  conclusion in this file rests on absence of messages alone - every tier was also
+  verified through modetest -p / sysfs / dmesg deltas per command.
+
+CAPTURE POINT: uptime 17581 s, 2026-11-18T12:19:39+03:00, host deneb,
+kernel 7.3.4-100.fc43.x86_64. The T10 run window inside this log spans roughly
+[7319 .. 16261] s of boot-relative time.
+
+======================================================================
+1. PRE-EXISTING CONDITION (present since boot, before any T10 command)
+======================================================================
+  [    3.448893] sm750hdmidrm: module verification failed: signature and/or required
+               key missing - tainting kernel
+  [    3.448878] loading out-of-tree module taints kernel
+  Consequence: the kernel is tainted P (proprietary module), O (out-of-tree),
+  E (unsigned). Every subsequent warning prints "Tainted: P W OE" or similar. This is
+  an artefact of the DKMS/out-of-tree build, not a runtime defect, and it must be
+  stated whenever a taint flag is quoted below.
+
+  Normal boot-time driver lines (for the record, no errors):
+  [    3.473927] [drm] DMA1 IRQ was not delivered; reverting to completion polling
+  [    3.474176] DMA1 shadow uploads enabled after off-screen transfer verification
+               (minimum 4096 bytes)
+  [    3.638007] [PLANE:40:sm750-cursor] pixel format with alpha exposed but blend mode
+               not setup. Please fix.
+  [    3.646057] [drm] Initialized sm750hdmidrm 0.1.0 for 0000:01:00.0 on minor 0
+  [    6.297629] [drm] fb0: sm750hdmidrmdrm frame buffer device
+  [    6.297638] registered SM750 HDMI DRM device with 16 MiB VRAM (RGB565 bbdither,
+               primary controller)
+  [    6.297643] 64x64 hardware cursor plane enabled with ARGB palette conversion
+  [    6.297646] coalesced asynchronous shadow updates enabled
+
+======================================================================
+2. THE ONE REAL ERROR EPISODE - [8523 .. 8586]
+======================================================================
+All 7 lines in the whole log that contain "sm750hdmidrm" together with ERROR/WARNING
+belong to this single episode. Nothing else in the run window produced a driver error.
+
+  [ 8523.870475] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI mode: -110
+  [ 8523.870514] ------------[ cut here ]------------
+  [ 8523.870516] WARNING: drivers/gpu/drm/drm_atomic_helper.c:2758 at
+                drm_atomic_helper_commit_hw_done+0x102/0x130, CPU#11: kmscube/4041209
+  [ 8523.870599] CPU: 11 UID: 1005 PID: 4041209 Comm: kmscube Tainted: P           OE
+  [ 8523.870603] Tainted: [P]=PROPRIETARY_MODULE, [O]=OOT_MODULE, [E]=UNSIGNED_MODULE
+  [ 8523.870607] RIP: 0010:drm_atomic_helper_commit_hw_done+0x102/0x130
+
+  Call trace (verbatim, trimmed to the DRM frames):
+    drm_atomic_helper_commit_hw_done+0x102/0x130
+    drm_atomic_helper_commit_tail+0x9a/0xc0
+    commit_tail+0xf1/0x150
+    drm_atomic_helper_commit+0x13c/0x180
+    drm_atomic_commit+0xb1/0xe0
+    drm_client_modeset_commit_atomic+0x1e9/0x230
+    drm_client_modeset_commit_locked+0x58/0x160
+    drm_client_modeset_commit+0x25/0x40
+    __drm_fb_helper_restore_fbdev_mode_unlocked.part.0+0x80/0x90
+    drm_fbdev_client_restore+0x20/0x30
+    drm_client_dev_restore+0xa1/0xd0
+    drm_release+0xc9/0xe0
+    __fput+0xe6/0x2b0
+    task_work_run+0x5d/0x90
+    do_exit+0x1fe/0x440
+  => This fires on kmscube EXIT (drm_release -> fbdev restore). The restore commit
+     failed to program the HDMI mode with -110 (ETIMEDOUT), and
+     drm_atomic_helper_commit_hw_done then warned because the commit state was not
+     what the helper expected.
+
+  Then three 10-second commit-wait timeouts, one per atomic object:
+  [ 8534.326665] *ERROR* flip_done timed out
+  [ 8534.326674] *ERROR* [CRTC:38:crtc-0] commit wait timed out
+  [ 8544.561985] *ERROR* flip_done timed out
+  [ 8544.561993] *ERROR* [CONNECTOR:35:HDMI-A-1] commit wait timed out
+  [ 8554.801899] *ERROR* flip_done timed out
+  [ 8554.801983] *ERROR* [PLANE:36:plane-0] commit wait timed out
+
+  And ~42 s later, a refcount underflow during the same restore path:
+  [ 8586.308230] refcount_t: underflow; use-after-free.
+  [ 8586.308232] WARNING: lib/refcount.c:28 at refcount_warn_saturate+0x59/0x90,
+                CPU#29: modetest/4155171
+  [ 8586.308323] CPU: 29 UID: 1005 PID: 4155171 Comm: modetest Tainted: P        W  OE
+  [ 8586.308332] RIP: 0010:refcount_warn_saturate+0x59/0x90
+  Call trace:
+    refcount_warn_saturate+0x59/0x90
+    __drm_atomic_helper_plane_destroy_state+0x98/0xa0
+    drm_gem_simple_kms_destroy_shadow_plane_state+0x21/0x30
+    drm_atomic_commit_default_clear+0x1be/0x350
+    __drm_atomic_commit_free+0x71/0xc0
+    drm_client_modeset_commit_atomic+0x1f9/0x230
+    drm_client_modeset_commit_locked+0x58/0x160
+    drm_client_modeset_commit+0x25/0x40
+    __drm_fb_helper_restore_fbdev_mode_unlocked.part.0+0x80/0x90
+    drm_fbdev_client_restore+0x20/0x30
+    drm_client_dev_restore+0xa1/0xd0
+    drm_release+0xc9/0xe0
+    __x64_sys_close+0x3d/0x80
+  => An unbalanced refcount in the shadow-plane state teardown
+     (drm_gem_simple_kms_destroy_shadow_plane_state) reached from the fbdev restore on
+     close(). "use-after-free" is the kernel's own wording for the underflow case.
+
+WHERE -110 COMES FROM IN THE SOURCE (observation only, no source was modified)
+  Message site: src/sm750_drm.c:3116
+      drm_err(&sdev->drm, "failed to enable HDMI mode: %d\n", ret);
+  This is the `fail:` label of sm750_pipe_enable(); the success path immediately above
+  logs `full-frame backbuffer staging enabled (%u bytes per buffer)` at
+  src/sm750_drm.c:3098.
+  Candidate -ETIMEDOUT producers reachable from there:
+      src/sm750_drm.c:1477    ret = completed ? 0 : -ETIMEDOUT;
+      src/ddk750_mode.c:298   return -ETIMEDOUT;
+      src/ddk750_display.c:26 / :85 / :95   return -ETIMEDOUT;
+      src/sii902x.c:1017      ret = -ETIMEDOUT;
+  The task did not isolate which one fired, because the episode did not reproduce
+  (next section). The synchronous I2C/SiI9024A path (sii902x.c) and the DMA completion
+  wait (sm750_drm.c:1477) are the two plausible ones; DMA1 IRQ is already known not to
+  be delivered on this host, so that wait runs in polling mode.
+
+======================================================================
+3. REPRODUCTION STATUS - NOT REPRODUCIBLE ON DEMAND
+======================================================================
+Roughly 20 controlled attempts were made to re-trigger [8523..8586]. NONE reproduced
+it. Every attempt re-verified the panel state afterwards.
+
+  /mega/tmp/sm750/t10/attrib.sh (log attrib.log) - single commands, exact deltas:
+    A modetest -s 35@38:1920x1080        exit 0  +2 lines, no error
+    B modetest -s 35@38:1024x768-60      exit 0  +4 lines (1572864 then 4147200), no error
+    C kmscube -c 60 (stdin held)         exit 0  +2 lines, no error
+    D core_getversion                    exit 0  +0 lines
+    E kms_addfb_basic size-max           exit 98 +0 lines
+
+  /mega/tmp/sm750/t10/repro.sh (log repro.log):
+    1 modetest -s 35@38:9999x9999 (invalid mode)  exit 0  +0 lines
+    2 modetest -a -s 35@38:1024x768-60            exit 0  +0 lines, state unchanged
+    3 modetest -o                                 exit 1
+    4 kmscube -A                                  exit 255 +0 lines
+    5 kmscube with stdin EOF                      exit 0  +2 lines
+    6 modetest -f                                 exit 0  +0 lines
+    7 modetest -e                                 exit 0  +0 lines
+
+  /mega/tmp/sm750/t10/repro2.sh (log repro2.log):
+    A kmscube killed with SIGTERM mid-render (pending page flips at release)  +2 lines
+    B 5x kmscube -c 30 sequential                                            10 lines, all normal
+    C 3x alternating 1024x768 / 1920x1080 modeset pairs                      18 lines, all normal
+
+  /mega/tmp/sm750/t10/repro3.sh (log repro3.log) - foreign-master hypothesis:
+    a holder process opened card0 and slept 45 s; kmscube then exited 243 with
+    `failed to set mode: Permission denied`; modetest -p still exit 0; after the master
+    was released kmscube ran again: exit 0, "Rendered 29 frames in 0.499949 sec
+    (58.005864 fps)". Total dmesg delta 2 lines, NO kernel error.
+    => master contention is NOT the trigger.
+
+  Extra stress: 4x (modeset to 1024x768 -> kmscube -c 5 -> restore) -> 32 dmesg lines,
+  NO DRIVER ERRORS.
+
+  STATUS TO CARRY FORWARD: the episode is REAL (it is in the log with a full trace and
+  it happened at least once, during the first kmscube/modetest batch), but it could NOT
+  be reproduced in ~20 subsequent controlled attempts and the trigger was NOT isolated.
+  It must be re-tested against the fixed 0.6.0 build; the "after" half of this
+  before/after pair is the run that decides whether the fix removed it.
+
+======================================================================
+4. NO ERRORS FROM THE MODESET / IGT TIERS
+======================================================================
+  - Every modetest -s run produced exactly the two expected informational lines
+    (SiI9024A not-ready + backbuffer staging) and nothing else.
+  - No IGT run produced any kernel message: kms_addfb_basic (including the size-max
+    FAIL) added 0 dmesg lines, so that FAIL is ioctl-level only.
+  - kmscube with stdin held produced 2 lines and no error.
+  - The only recurring non-error oddity is the SiI9024A message, emitted on every mode
+    program:
+      SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for
+      compatibility
+    Source: src/sii902x.c:578, in
+      static int sii902x_wait_receiver_ready(struct device *dev, unsigned char *status)
+    which loops for 2000 ms waiting for RSEN to be stable for 100 ms. RSEN=0 means the
+    TMDS receiver reports no sense, yet the driver enables the output anyway "for
+    compatibility". This costs 2 s per mode program and means the driver cannot confirm
+    the panel's receiver is actually ready. Recorded as a finding, not an error.
+
+======================================================================
+5. BACKBUFFER STAGING HISTOGRAM (whole boot, after all T10 runs)
+======================================================================
+  grep -oE "staging enabled \([0-9]+ bytes" dmesg-t10-final.txt | sort | uniq -c
+       89 staging enabled (4147200 bytes      = 1920*1080*2  (original mode)
+       20 staging enabled (1572864 bytes      = 1024*768*2   (alternate mode)
+        1 staging enabled (1843200 bytes      = 1280*720*2   (second alternate mode)
+  This is the quantitative trace of every mode program performed in T10 and is the
+  independent proof that both the re-apply and the alternate modesets really happened.
+
+======================================================================
+6. FINAL STATE AT THE END OF T10
+======================================================================
+  Last driver line: [16261.519507] full-frame backbuffer staging enabled (4147200 bytes)
+  crtc 38 -> fb 43 (0,0) (1920x1080), mode #0 1920x1080 60.00 preferred
+  sysfs card0-HDMI-A-1: status=connected enabled=enabled dpms=On
+  => the panel was left on its original mode, as required.
+
+  VERDICT FOR S7 (kernel log tier)
+  Errors observed     : 1 episode, 7 ERROR/WARN lines, all in [8523..8586]
+  Reproducible        : no (~20 attempts, trigger not isolated)
+  Attributed to       : the stale pre-fix 0.5.9 build's fbdev-restore path on client
+                        teardown (HDMI mode program -110 -> hw_done warning -> three
+                        10 s commit-wait timeouts -> refcount underflow)
+  Clean otherwise     : yes - no error from any modeset or IGT command

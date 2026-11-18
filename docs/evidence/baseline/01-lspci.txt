@@ -1,0 +1,21 @@
+# host: deneb
+# kernel: 7.3.3-100.fc43.x86_64
+# utc: 2026-11-17T18:31:29Z
+# command: lspci -vvv -d 126f:0750 -s 01:00.0
+# ---- output (stdout+stderr, LC_ALL=C) ----
+01:00.0 VGA compatible controller: Silicon Motion, Inc. SM750 (rev a1) (prog-if 00 [VGA controller])
+	Subsystem: Silicon Motion, Inc. SM750
+	Physical Slot: 1
+	Control: I/O- Mem+ BusMaster+ SpecCycle- MemWINV- VGASnoop- ParErr+ Stepping- SERR+ FastB2B- DisINTx-
+	Status: Cap+ 66MHz- UDF- FastB2B- ParErr- DEVSEL=fast >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
+	Latency: 0, Cache Line Size: 32 bytes
+	Interrupts: pin B routed to IRQ 25
+	NUMA node: 0
+	Region 0: Memory at c0000000 (32-bit, prefetchable) [size=64M]
+	Region 1: Memory at c7200000 (32-bit, non-prefetchable) [size=2M]
+	Expansion ROM at c7400000 [disabled] [size=64K]
+	Capabilities: <access denied>
+	Kernel driver in use: sm750hdmidrm
+	Kernel modules: sm750hdmidrm
+
+# ---- exit: 0 ----

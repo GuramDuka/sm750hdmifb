@@ -1,0 +1,11 @@
+# utc: 2026-11-18T04:48:48Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# compiler: cc -> cc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+# command: ./tests/audit-release.sh
+# env: PKG_CONFIG_PATH=unset PKG_CONFIG_SYSROOT_DIR=unset LD_LIBRARY_PATH=/usr/local/cuda/lib64 C_INCLUDE_PATH=unset JOBS=unset CC=unset
+# workdir: /home/coder/sm750hdmifb
+
+--- output ---
+Release audit passed: /home/coder/sm750hdmifb/dist/RELEASE-AUDIT.txt
+
+# exit: 0

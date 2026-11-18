@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/aperture.h>
 #include <linux/completion.h>
+#include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
 #include <linux/fb.h>
@@ -13,6 +14,7 @@
 #include <linux/mutex.h>
 #include <linux/pci.h>
 #include <linux/pm.h>
+#include <linux/seq_file.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
 #include <linux/version.h>
@@ -25,6 +27,7 @@
 #include <drm/clients/drm_client_setup.h>
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
+#include <drm/drm_blend.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_damage_helper.h>
@@ -63,6 +66,14 @@ typedef struct drm_atomic_state sm750_atomic_commit;
 #endif
 
 #define SM750_DRM_NAME "sm750hdmidrm"
+/* Keep in step with the package version in build-package.sh and dkms.conf;
+ * tests/check-release-version.sh fails when the three disagree. */
+#define SM750_DRM_VERSION "0.6.0"
+/* modetest reports these as the driver version, so they must track the release
+ * number above; tests/check-release-version.sh fails when they drift. */
+#define DRIVER_MAJOR 0
+#define DRIVER_MINOR 6
+#define DRIVER_PATCHLEVEL 0
 #define SM750_DRM_MAX_WIDTH 2560
 #define SM750_DRM_PHYSICAL_MAX_WIDTH 2048
 #define SM750_DRM_PLL PRIMARY_PLL
@@ -3243,6 +3254,108 @@ static const struct drm_mode_config_funcs sm750_shadow_mode_config_funcs = {
 
 DEFINE_DRM_GEM_FOPS(sm750_drm_fops);
 
+/*
+ * MMIO snapshot for bring-up reports. Interrupt status and raw interrupt
+ * registers are deliberately omitted: reading them can acknowledge or clear
+ * state, which would make dumps taken around a single modeset incomparable.
+ * The file is inert until read and never writes to the device.
+ */
+static const struct sm750_reg_dump {
+	const char *name;
+	u32 offset;
+} sm750_reg_dump_registers[] = {
+	{ "SYSTEM_CTRL", SYSTEM_CTRL },
+	{ "MISC_CTRL", MISC_CTRL },
+	{ "GPIO_MUX", GPIO_MUX },
+	{ "CURRENT_GATE", CURRENT_GATE },
+	{ "MODE0_GATE", MODE0_GATE },
+	{ "MODE1_GATE", MODE1_GATE },
+	{ "POWER_MODE_CTRL", POWER_MODE_CTRL },
+	{ "DEVICE_ID", DEVICE_ID },
+	{ "PANEL_PLL_CTRL", PANEL_PLL_CTRL },
+	{ "CRT_PLL_CTRL", CRT_PLL_CTRL },
+	{ "MXCLK_PLL_CTRL", MXCLK_PLL_CTRL },
+	{ "VGA_CONFIGURATION", VGA_CONFIGURATION },
+	{ "GPIO_DATA", GPIO_DATA },
+	{ "GPIO_DATA_DIRECTION", GPIO_DATA_DIRECTION },
+	{ "GPIO_INTERRUPT_SETUP", GPIO_INTERRUPT_SETUP },
+	{ "PANEL_DISPLAY_CTRL", PANEL_DISPLAY_CTRL },
+	{ "PANEL_PAN_CTRL", PANEL_PAN_CTRL },
+	{ "PANEL_COLOR_KEY", PANEL_COLOR_KEY },
+	{ "PANEL_FB_ADDRESS", PANEL_FB_ADDRESS },
+	{ "PANEL_FB_WIDTH", PANEL_FB_WIDTH },
+	{ "PANEL_WINDOW_WIDTH", PANEL_WINDOW_WIDTH },
+	{ "PANEL_WINDOW_HEIGHT", PANEL_WINDOW_HEIGHT },
+	{ "PANEL_PLANE_TL", PANEL_PLANE_TL },
+	{ "PANEL_PLANE_BR", PANEL_PLANE_BR },
+	{ "PANEL_HORIZONTAL_TOTAL", PANEL_HORIZONTAL_TOTAL },
+	{ "PANEL_HORIZONTAL_SYNC", PANEL_HORIZONTAL_SYNC },
+	{ "PANEL_VERTICAL_TOTAL", PANEL_VERTICAL_TOTAL },
+	{ "PANEL_VERTICAL_SYNC", PANEL_VERTICAL_SYNC },
+	{ "PANEL_CURRENT_LINE", PANEL_CURRENT_LINE },
+	{ "PANEL_HWC_ADDRESS", PANEL_HWC_ADDRESS },
+	{ "PANEL_HWC_LOCATION", PANEL_HWC_LOCATION },
+	{ "PANEL_HWC_COLOR_12", PANEL_HWC_COLOR_12 },
+	{ "PANEL_HWC_COLOR_3", PANEL_HWC_COLOR_3 },
+	{ "VIDEO_DISPLAY_CTRL", VIDEO_DISPLAY_CTRL },
+	{ "VIDEO_FB_0_ADDRESS", VIDEO_FB_0_ADDRESS },
+	{ "VIDEO_FB_WIDTH", VIDEO_FB_WIDTH },
+	{ "VIDEO_FB_0_LAST_ADDRESS", VIDEO_FB_0_LAST_ADDRESS },
+	{ "VIDEO_PLANE_TL", VIDEO_PLANE_TL },
+	{ "VIDEO_PLANE_BR", VIDEO_PLANE_BR },
+	{ "ALPHA_DISPLAY_CTRL", ALPHA_DISPLAY_CTRL },
+	{ "ALPHA_FB_ADDRESS", ALPHA_FB_ADDRESS },
+	{ "CRT_DISPLAY_CTRL", CRT_DISPLAY_CTRL },
+	{ "CRT_FB_ADDRESS", CRT_FB_ADDRESS },
+	{ "CRT_FB_WIDTH", CRT_FB_WIDTH },
+	{ "CRT_HORIZONTAL_TOTAL", CRT_HORIZONTAL_TOTAL },
+	{ "CRT_CURRENT_LINE", CRT_CURRENT_LINE },
+	{ "CRT_MONITOR_DETECT", CRT_MONITOR_DETECT },
+	{ "DE_STATE1", DE_STATE1 },
+	{ "DE_STATE2", DE_STATE2 },
+};
+
+static int sm750_regs_show(struct seq_file *m, void *unused)
+{
+	struct drm_device *drm = m->private;
+	struct sm750_drm_device *sdev = to_sm750_drm(drm);
+	size_t i;
+	int idx;
+
+	if (!drm_dev_enter(drm, &idx))
+		return -ENODEV;
+
+	seq_printf(m, "# %s register dump, %zu registers, read-only\n",
+		   SM750_DRM_NAME, ARRAY_SIZE(sm750_reg_dump_registers));
+	for (i = 0; i < ARRAY_SIZE(sm750_reg_dump_registers); i++)
+		seq_printf(m, "0x%06x %-28s 0x%08x\n",
+			   sm750_reg_dump_registers[i].offset,
+			   sm750_reg_dump_registers[i].name,
+			   readl(sdev->regs + sm750_reg_dump_registers[i].offset));
+
+	drm_dev_exit(idx);
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(sm750_regs);
+
+static void sm750_regs_debugfs_add(struct drm_minor *minor)
+{
+	debugfs_create_file("regs", 0444, minor->debugfs_root, minor->dev,
+			    &sm750_regs_fops);
+}
+
+/* Shadow driver: no vram_mm helper, so only the register snapshot is added. */
+static void sm750_debugfs_init(struct drm_minor *minor)
+{
+	sm750_regs_debugfs_add(minor);
+}
+
+static void sm750_vram_debugfs_init(struct drm_minor *minor)
+{
+	drm_vram_mm_debugfs_init(minor);
+	sm750_regs_debugfs_add(minor);
+}
+
 static int sm750_dumb_create(struct drm_file *file, struct drm_device *drm,
 			     struct drm_mode_create_dumb *args)
 {
@@ -3253,25 +3366,28 @@ static int sm750_dumb_create(struct drm_file *file, struct drm_device *drm,
 static const struct drm_driver sm750_drm_driver = {
 	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 	.fops = &sm750_drm_fops,
-	.debugfs_init = drm_vram_mm_debugfs_init,
+	.debugfs_init = sm750_vram_debugfs_init,
 	.dumb_create = sm750_dumb_create,
 	.dumb_map_offset = drm_gem_ttm_dumb_map_offset,
 	DRM_FBDEV_TTM_DRIVER_OPS,
 	.name = SM750_DRM_NAME,
 	.desc = "SM750G10 SiI9024A HDMI DRM driver",
-	.major = 0,
-	.minor = 1,
+	.major = DRIVER_MAJOR,
+	.minor = DRIVER_MINOR,
+	.patchlevel = DRIVER_PATCHLEVEL,
 };
 
 static const struct drm_driver sm750_shadow_drm_driver = {
 	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
 	.fops = &sm750_drm_fops,
+	.debugfs_init = sm750_debugfs_init,
 	DRM_GEM_SHMEM_DRIVER_OPS,
 	DRM_FBDEV_SHMEM_DRIVER_OPS,
 	.name = SM750_DRM_NAME,
 	.desc = "SM750G10 SiI9024A HDMI DRM shadow driver",
-	.major = 0,
-	.minor = 1,
+	.major = DRIVER_MAJOR,
+	.minor = DRIVER_MINOR,
+	.patchlevel = DRIVER_PATCHLEVEL,
 };
 
 static int sm750_hw_init(struct sm750_drm_device *sdev, bool reset_memory)
@@ -3353,6 +3469,29 @@ static int sm750_modeset_init(struct sm750_drm_device *sdev)
 			return ret;
 		drm_plane_helper_add(&sdev->cursor_plane,
 				     &sm750_cursor_plane_helper_funcs);
+		/*
+		 * The cursor plane exposes DRM_FORMAT_ARGB8888, so the DRM core
+		 * requires a blend mode property: drm_mode_config_validate()
+		 * warns "pixel format with alpha exposed but blend mode not
+		 * setup" for a plane that advertises an alpha format without
+		 * one. The hardware still consumes per-pixel alpha - it becomes
+		 * a dithered transparent/opaque mask over three palette entries
+		 * (sm750_cursor_encode) - so hiding alpha by switching to
+		 * XRGB8888 would misdescribe the cursor and break compositors
+		 * that hand us ARGB8888. PREMULTI is the one mode that is true
+		 * here: ARGB8888 colour is premultiplied, and
+		 * sm750_cursor_unpremultiply() divides alpha back out before
+		 * quantising. COVERAGE is deliberately not offered because it
+		 * would claim the driver premultiplies colour it receives
+		 * unpremultiplied, which it does not. PREMULTI is also the only
+		 * mode every supported kernel accepts (6.17 rejects a mask
+		 * without it), so no version guard is needed. No plane alpha
+		 * property is created: the hardware has no plane-wide alpha.
+		 */
+		ret = drm_plane_create_blend_mode_property(&sdev->cursor_plane,
+				BIT(DRM_MODE_BLEND_PREMULTI));
+		if (ret)
+			return ret;
 		sdev->pipe.crtc.cursor = &sdev->cursor_plane;
 		drm->mode_config.cursor_width = SM750_DRM_CURSOR_WIDTH;
 		drm->mode_config.cursor_height = SM750_DRM_CURSOR_HEIGHT;
@@ -3755,3 +3894,4 @@ module_pci_driver(sm750_pci_driver);
 MODULE_AUTHOR("Benjamin Brown");
 MODULE_DESCRIPTION("Atomic DRM/KMS driver for SM750G10 SiI9024A HDMI boards");
 MODULE_LICENSE("GPL v2");
+MODULE_VERSION(SM750_DRM_VERSION);

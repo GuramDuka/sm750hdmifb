@@ -1,0 +1,22 @@
+# host: deneb
+# utc: 2026-11-17T18:31:45Z
+# command: awk NR>=16 && NR<=32 && /^\t/ Makefile | wc -l
+# ---- output ----
+     1		./tests/check-drm-module.sh src/sm750hdmidrm.ko
+     2		./tests/check-drm-policy.sh
+     3		./tests/check-drm-xorg-config.sh
+     4		./tests/check-drm-packaging.sh
+     5		./tests/check-release-version.sh
+     6		./tests/check-softscale-map.sh
+     7		./tests/check-softscale-sharpen.sh
+     8		./tests/check-softscale-codegen.sh src/sm750_dither.o
+     9		./tests/check-hardware-cursor.sh
+    10		./tests/check-shadow-dma.sh
+    11		./tests/check-backbuffer-staging.sh
+    12		./tests/check-shadow-async.sh
+    13		./tests/check-shadow-source-damage.sh
+    14		python3 tests/test-vblank-timer.py
+    15		./tests/test-bbdither-rgb565
+    16		./tests/test-scale-optimizations
+    17		python3 tests/test-staging-results.py
+# ---- count: 17 ----

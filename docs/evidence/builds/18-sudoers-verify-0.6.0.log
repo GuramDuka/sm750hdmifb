@@ -1,0 +1,35 @@
+# utc: 2026-11-18T06:54:35Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# command: visudo -c -f <staged allowlist>; visudo -c -f <stock sudoers + allowlist>
+# env: LC_ALL=C; rootless (visudo -c only parses, it does not install)
+# workdir: /mega/tmp/sm750/t9
+
+# The stock /etc/sudoers is mode 0440 root:root and unreadable as coder, so the
+# append test uses the sudo RPM payload instead. It is the same 4375 B file:
+$ rpm2cpio /mega/tmp/sm750/t9/dl/sudo-1.9.17-7.p2.fc43.x86_64.rpm | cpio -idm
+$ cp dl/etc/sudoers sudoers-combined.test; chmod u+w sudoers-combined.test
+$ cat /mega/tmp/sm750/10-sm750-debug.sudoers >> sudoers-combined.test
+$ wc -l sudoers-combined.test
+188 sudoers-combined.test
+
+=== colon audit: no ':' anywhere in a command line except the NOPASSWD: tag ===
+$ grep -vE "^[[:space:]]*(#|$)" 10-sm750-debug.sudoers | sed "s/NOPASSWD://" | grep -c ":"
+0   # grep exits 1 on zero matches; that is the pass condition here
+
+=== version lines in the regenerated allowlist ===
+$ grep -n "0.6.0" /mega/tmp/sm750/10-sm750-debug.sudoers
+46:coder ALL=(root) NOPASSWD: /usr/bin/dkms install -m sm750hdmifb -v 0.6.0
+47:coder ALL=(root) NOPASSWD: /usr/bin/dkms uninstall -m sm750hdmifb -v 0.6.0
+48:coder ALL=(root) NOPASSWD: /usr/bin/dkms build -m sm750hdmifb -v 0.6.0
+49:coder ALL=(root) NOPASSWD: /usr/bin/dkms remove -m sm750hdmifb -v 0.6.0 --all
+58:coder ALL=(root) NOPASSWD: /usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+
+=== visudo, standalone ===
+$ visudo -c -f /mega/tmp/sm750/10-sm750-debug.sudoers
+/mega/tmp/sm750/10-sm750-debug.sudoers: parsed OK
+[standalone exit 0]
+
+=== visudo, appended to the stock /etc/sudoers ===
+$ visudo -c -f sudoers-combined.test
+sudoers-combined.test: parsed OK
+[combined exit 0]

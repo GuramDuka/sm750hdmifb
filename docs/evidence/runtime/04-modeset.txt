@@ -1,0 +1,169 @@
+T10 - RUNTIME TIER 4: MODESET (modetest -s) - BEFORE / PRE-FIX BASELINE
+======================================================================
+Module under test: sm750hdmidrm as currently loaded = STALE PRE-FIX 0.5.9 BUILD.
+Proof it is the stale build:
+  - /sys/module/sm750hdmidrm/version  -> does not exist (no version attribute)
+  - /sys/module/sm750hdmidrm/srcversion -> does not exist
+  - /sys/module/sm750hdmidrm/ has no `regs` entry (no debugfs register file)
+  - dkms status -> sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: installed
+  - /usr/src/sm750hdmifb-0.5.9/dkms.conf -> PACKAGE_VERSION="0.5.9"
+  - git HEAD 27db03b "Release 0.5.9 with newer kernel support"
+This file therefore describes the PRE-FIX BASELINE only. It is NOT a result for the
+0.6.0 build. Every statement below was produced without root, without dkms/dnf install,
+without modprobe, observing the module that was already loaded.
+
+RUN CONDITIONS
+  host            : deneb, kernel 7.3.4-100.fc43.x86_64
+  user            : coder (uid 1005) - unprivileged, access via udev ACL
+  device          : /dev/dri/card0 (pci-0000:01:00.0-card), SM750 HDMI-A-1 connector 35
+  crtc            : 38, encoder 39, plane 36 (primary), plane 40 (cursor)
+  modeset tool    : /usr/bin/modetest, package drm-utils-2.4.134-1.fc43.x86_64
+  last action     : restore connector 35 on crtc 38 to 1920x1080@60 (original mode)
+
+CAPTURED BEFORE THIS FILE: docs/evidence/runtime/01-original-state.txt
+  The original state was captured before any modeset. Finding recorded there and
+  repeated here because it decides whether a modeset is user-visible:
+    THE SM750 CRTC HAS AN ACTIVE MODE. crtc 38 -> framebuffer 43 at (0,0) 1920x1080,
+    connector 35 status=connected enabled=enabled dpms=On.
+  Therefore any modeset on connector 35 IS visible to a logged-in user.
+
+======================================================================
+RAW LOG OF THE MODESET RUN
+Source archive on disk: /mega/tmp/sm750/t10/modeset.sh, /mega/tmp/sm750/t10/modeset.log
+The script installs `trap` so the original mode is re-applied on ANY exit, including
+failure. Its verbatim output follows.
+======================================================================
+
+===== BASELINE (unchanged, before any -s) =====
+    sysfs card0-HDMI-A-1: status=connected enabled=enabled dpms=On
+    modetest -p CRTC line: 38	43	(0,0)	(1920x1080)
+    modetest -p mode line:   #0 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500 flags: phsync, pvsync; type: preferred, driver
+
+===== STEP 1: re-apply the ALREADY-ACTIVE mode (no visible change) =====
+  command: /usr/bin/modetest -s 35@38:1920x1080
+  exit=0
+    trying to open device '/dev/dri/card3'... failed
+    trying to open device '/dev/dri/card2'... failed
+    trying to open device '/dev/dri/card1'... failed
+    trying to open device '/dev/dri/card0'... done
+    opened device `SM750G10 SiI9024A HDMI DRM shadow driver` on driver `sm750hdmidrm` (version 0.1.0 at 0)
+    setting mode 1920x1080-60.00Hz on connectors 35, crtc 38
+  state after step 1:
+    sysfs card0-HDMI-A-1: status=connected enabled=enabled dpms=On
+    modetest -p CRTC line: 38	43	(0,0)	(1920x1080)
+    modetest -p mode line:   #0 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500 flags: phsync, pvsync; type: preferred, driver
+
+===== STEP 2: switch to ONE ALTERNATE mode =====
+  command: /usr/bin/modetest -s 35@38:1024x768-60
+  exit=0
+    trying to open device '/dev/dri/card3'... failed
+    trying to open device '/dev/dri/card2'... failed
+    trying to open device '/dev/dri/card1'... failed
+    trying to open device '/dev/dri/card0'... done
+    opened device `SM750G10 SiI9024A HDMI DRM shadow driver` on driver `sm750hdmidrm` (version 0.1.0 at 0)
+    setting mode 1024x768-60.00Hz on connectors 35, crtc 38
+  state after step 2:
+    sysfs card0-HDMI-A-1: status=connected enabled=enabled dpms=On
+    modetest -p CRTC line: 38	43	(0,0)	(1920x1080)
+    modetest -p mode line:   #0 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500 flags: phsync, pvsync; type: preferred, driver
+
+===== STEP 3: return to original (explicit, before the trap fires) =====
+  command: /usr/bin/modetest -s 35@38:1920x1080
+  exit=0
+    trying to open device '/dev/dri/card3'... failed
+    trying to open device '/dev/dri/card2'... failed
+    trying to open device '/dev/dri/card1'... failed
+    trying to open device '/dev/dri/card0'... done
+    opened device `SM750G10 SiI9024A HDMI DRM shadow driver` on driver `sm750hdmidrm` (version 0.1.0 at 0)
+    setting mode 1920x1080-60.00Hz on connectors 35, crtc 38
+  state after step 3:
+    sysfs card0-HDMI-A-1: status=connected enabled=enabled dpms=On
+    modetest -p CRTC line: 38	43	(0,0)	(1920x1080)
+    modetest -p mode line:   #0 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500 flags: phsync, pvsync; type: preferred, driver
+
+===== END OF EXPLICIT STEPS (trap still re-asserts the original mode) =====
+
+===== RESTORATION (always runs) =====
+  restoring connector 35 on crtc 38 to 1920x1080@60 (the originally active mode)
+  command: /usr/bin/modetest -s 35@38:1920x1080
+  exit=0
+    opened device `SM750G10 SiI9024A HDMI DRM shadow driver` on driver `sm750hdmidrm` (version 0.1.0 at 0)
+    setting mode 1920x1080-60.00Hz on connectors 35, crtc 38
+  post-restore state:
+    sysfs card0-HDMI-A-1: status=connected enabled=enabled dpms=On
+    modetest -p CRTC line: 38	43	(0,0)	(1920x1080)
+    modetest -p mode line:   #0 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500 flags: phsync, pvsync; type: preferred, driver
+
+======================================================================
+WHAT THE MODESET ACTUALLY DID - PROOF FROM modetest -p AND FROM dmesg
+======================================================================
+
+1. modetest -p cannot see the alternate mode while the -s process is still alive in
+   this single-shot form, because the mode is reverted when the modetest process exits
+   (DRM master drop / fbdev restore). Sampling modetest -p in a tight loop DURING the
+   set captured the transient:
+       (1920x1080)  ->  (0x0)  ->  (1920x1080)
+   A 12 s idle control run produced a dmesg delta of 0 lines, so the revert is tied to
+   process exit, not spontaneous.
+
+2. dmesg proves the alternate mode really is programmed and then reverted. From
+   /mega/tmp/sm750/t10/attrib.log (single-command runs with exact dmesg deltas):
+     A. modetest -s 35@38:1920x1080 (re-apply active mode)
+        exit=0, dmesg lines added: 2
+          [14855.866365] SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+          [14855.870350] [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+     B. modetest -s 35@38:1024x768-60 (alternate mode)
+        exit=0, dmesg lines added: 4
+          [14870.761127] SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+          [14870.765097] [drm] full-frame backbuffer staging enabled (1572864 bytes per buffer)
+          [14873.337095] SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+          [14873.341075] [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+        1572864 = 1024*768*2 (the alternate mode was staged) and 4147200 = 1920*1080*2
+        (the original mode was staged again 2.576 s later, on process exit).
+        This is the cleanest single proof that the alternate mode is really programmed
+        and then automatically reverted.
+   Entire-boot histogram of the staging line:
+       55x "(4147200 bytes" (1920x1080x2), 12x "(1572864 bytes" (1024x768x2),
+        1x "(1843200 bytes" (1280x720x2).
+   The 1280x720-60 alternate mode behaves identically (1843200 = 1280*720*2, then
+   4147200 on exit).
+
+3. Repetition: the re-apply-active-mode step was repeated 6x and the alternate-mode
+   step 6x, every one exit 0 with empty stderr; the same staging-pair signature was
+   observed each time.
+
+======================================================================
+TOOLING CAVEAT - EXIT CODE 0 IS NOT PROOF OF A SUCCESSFUL MODESET
+======================================================================
+modetest exits 0 even when the modeset fails. Observed verbatim:
+    /usr/bin/modetest -s 35@38:9999x9999        -> exit=0
+      stderr: failed to find mode "9999x9999" for connector 35
+      stderr: failed to create dumb buffer: Invalid argument
+This was checked explicitly for the acceptance criterion "every command, exit code".
+Therefore the exit codes above are reported for completeness only; the evidence that a
+modeset happened is the dmesg staging-byte change plus the modetest -p transient, not
+the exit code.
+
+ATOMIC PATH IS A SILENT NO-OP ON THIS STACK
+    /usr/bin/modetest -a -s 35@38:1024x768-60  -> exit=0 but prints nothing, changes
+    nothing: crtc stayed 38/43 1920x1080 and the dmesg delta was 0 lines.
+    /usr/bin/modetest -a -s 35@38:1920x1080    -> exit=0, no-op.
+Only the legacy `-s` path (which the driver's drm_atomic_helper_commit serves) actually
+reprograms the CRTC from this tool. Recorded as observed behaviour of the stale 0.5.9
+build plus drm-utils 2.4.134; not interpreted further.
+
+TRANSIENT FAILURE ONCE OBSERVED (recorded, not interpreted as a driver defect)
+  One backgrounded modetest run racing the concurrent modetest -p prober printed
+      failed to set mode: Permission denied
+  on stderr while still exiting 0. Two DRM clients cannot both hold master, so this is
+  a client-side arbitration race in the test harness, not a driver failure.
+
+======================================================================
+RESULT FOR S4 (modeset half)
+======================================================================
+  Enumeration and modeset commands run  : yes
+  Active mode re-applied               : yes, exit 0, no visible change
+  Alternate mode programmed            : yes (proven by dmesg staging bytes)
+  Alternate mode retained              : NO - automatically reverted on client exit
+  Original mode restored as last action: yes, verified before and after
+  Kernel errors during this tier       : none (see 07-kernel-log.txt)

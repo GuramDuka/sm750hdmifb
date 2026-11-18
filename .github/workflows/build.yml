@@ -2,6 +2,9 @@
 name: Manual DKMS build
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
     inputs:
       publish_release:
@@ -42,17 +45,15 @@ jobs:
         run: make KDIR="${{ steps.headers.outputs.path }}" check
 
       - name: Build and audit package
-        run: |
-          ./build-package.sh
-          ./tests/audit-release.sh
+        run: make KDIR="${{ steps.headers.outputs.path }}" check-package
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sm750hdmifb-0.5.9
+          name: sm750hdmifb-0.6.0
           path: |
-            dist/sm750hdmifb_0.5.9_all.deb
-            dist/sm750hdmifb-0.5.9-source.tar.gz
+            dist/sm750hdmifb_0.6.0_all.deb
+            dist/sm750hdmifb-0.6.0-source.tar.gz
             dist/SHA256SUMS
             dist/RELEASE-AUDIT.txt
 
@@ -65,7 +66,7 @@ jobs:
           test -n "$RELEASE_TAG"
           gh release view "$RELEASE_TAG"
           gh release upload "$RELEASE_TAG" --clobber \
-            dist/sm750hdmifb_0.5.9_all.deb \
-            dist/sm750hdmifb-0.5.9-source.tar.gz \
+            dist/sm750hdmifb_0.6.0_all.deb \
+            dist/sm750hdmifb-0.6.0-source.tar.gz \
             dist/SHA256SUMS \
             dist/RELEASE-AUDIT.txt

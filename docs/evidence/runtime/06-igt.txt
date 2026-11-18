@@ -1,0 +1,185 @@
+T10 - RUNTIME TIER 6: IGT GPU TOOLS - BEFORE / PRE-FIX BASELINE
+======================================================================
+Module under test: sm750hdmidrm as currently loaded = STALE PRE-FIX 0.5.9 BUILD.
+Proof: /sys/module/sm750hdmidrm/version and /srcversion do not exist; there is no
+`regs` entry under /sys/module/sm750hdmidrm/; dkms status reports
+`sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: installed`; git HEAD 27db03b
+"Release 0.5.9 with newer kernel support". This file is the PRE-FIX BASELINE, not a
+result for the 0.6.0 build.
+
+TOOL PROVENANCE (no root install performed, no dnf install, no dkms)
+  payload  : /mega/tmp/sm750/t10/x/igt-gpu-tools-2.4-1.fc43.x86_64
+             (from igt-gpu-tools-2.4-1.fc43.x86_64.rpm, unpacked with
+              `rpm2cpio <rpm> | cpio -idmv`)
+  binaries : <payload>/usr/libexec/igt-gpu-tools/*   (359 binaries; NOT in /usr/bin)
+  libraries: <payload>/usr/lib64 (libigt.so.0)
+  extra libs required and supplied rootlessly:
+             libgsl.so.28 and libgslcblas.so.0 from gsl-2.8-2.fc43.x86_64.rpm,
+             downloaded with `dnf download` and extracted to
+             /mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/
+  environment used for every run:
+    IGT=/mega/tmp/sm750/t10/x/igt-gpu-tools-2.4-1.fc43.x86_64
+    LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr/lib64
+    B=$IGT/usr/libexec/igt-gpu-tools
+  IGT version banner: IGT-Version: 2.4-NO-GIT (x86_64) (Linux: 7.3.4-100.fc43.x86_64 x86_64)
+  The previously blocking dependency chain (exit 127, libgsl.so.28 missing) is SOLVED
+  this way without installing anything.
+
+ALL COMMANDS USED --device /dev/dri/card0. Exit codes archived verbatim in
+/mega/tmp/sm750/t10/igt_exitcodes.txt.
+
+======================================================================
+RUN 1: TESTS THAT DO WORK UNPRIVILEGED
+======================================================================
+core_getversion  -> exit=0    2 SUCCESS / 0 SKIP / 0 FAIL
+  Verbatim device line:
+    0: sm750hdmidrm v0.1 0 SM750G10 SiI9024A HDMI DRM shadow driver
+  Subtest basic: SUCCESS (0.000s); Subtest all-cards: SUCCESS (0.020s).
+  This is IGT itself confirming it opened the SM750 through sm750hdmidrm and reading
+  the driver name/version from the ioctl, i.e. the same "0.1.0" the driver reports in
+  its own open message.
+
+dumb_buffer     -> exit=0    6 SUCCESS / 0 SKIP / 0 FAIL
+  Subtests: invalid-bpp, create-valid-dumb, map-valid, map-uaf, map-invalid-size,
+            create-clear.
+  create-clear verbatim:
+    Largest dumb buffer sucessfully created: 2147483648 bytes
+    Checked 11206337 page allocations
+  (36.273 s - the test walks the whole allocation.) 2 GiB dumb-buffer creation and full
+  page-allocation verification pass on 16 MiB VRAM hardware because the object is a
+  shmem/GEM object until it is bound; the pass is real IGT SUCCESS.
+
+kms_addfb_basic -> exit=98   26 SUCCESS / 14 SKIP / 1 FAIL
+  SUCCESS: unused-handle, unused-pitches, unused-offsets, unused-modifier,
+           legacy-format (fuzzed 10000 bpp/depth variations), no-handle, basic,
+           bad-pitch-0, bad-pitch-32, bad-pitch-63, bad-pitch-128, bad-pitch-256,
+           bad-pitch-1024, bad-pitch-999, bad-pitch-65536, invalid-get-prop,
+           invalid-get-prop-any, invalid-set-prop, invalid-set-prop-any, master-rmfb,
+           too-wide, too-high, bo-too-small, small-bo, addfb25-modifier-no-flag,
+           addfb25-bad-modifier.
+  SKIP (14): all Intel-only - the requirement is
+           `Test requirement: is_i915_device(fd)` / `is_intel_device(fd)`
+           (addfb25-x-tiled-mismatch-legacy, addfb25-x-tiled-legacy,
+            addfb25-framebuffer-vs-set-tiling, addfb25-y-tiled-legacy,
+            addfb25-yf-tiled-legacy, addfb25-y-tiled-small-legacy, addfb25-4-tiled,
+            bo-too-small-due-to-tiling and the remaining tilings). Not applicable to a
+           non-Intel driver.
+  FAIL (1) - THIS IS A GENUINE OBSERVED DRIVER BEHAVIOUR, not a tooling gap:
+    Starting subtest: size-max
+    (kms_addfb_basic:879865) CRITICAL: Test assertion failure function size_tests,
+      file ../tests/kms_addfb_basic.c:594:
+    (kms_addfb_basic:879865) CRITICAL: Failed assertion: igt_ioctl((fd),
+      ((((2U|1U) << (((0+8)+8)+14)) | ((('d')) << (0+8)) | (((0xB8)) << 0) |
+      ((((sizeof(struct drm_mode_fb_cmd2)))) << ((0+8)+8)))), (&f_16)) == 0
+    (kms_addfb_basic:879865) CRITICAL: Last errno: 22, Invalid argument
+    (kms_addfb_basic:879865) CRITICAL: error: -1 != 0
+    Subtest size-max failed.
+  The ioctl is DRM_IOCTL_MODE_ADDFB2. The driver returns -EINVAL when asked for the
+  maximum legal framebuffer size. The test does not emit any kernel message (dmesg
+  delta 0 lines), so this is a pure ioctl-level rejection. Recorded as a FAIL.
+
+kms_getfb      -> exit=98   10 SUCCESS / 2 SKIP / 2 FAIL
+  FAIL: getfb-handle-protection, getfb2-handle-protection.
+  These two fail BEFORE touching the driver:
+    (kms_getfb:...) igt_aux-CRITICAL: Test assertion failure function igt_drop_root,
+      file ../lib/igt_aux.c:1123:
+    (kms_getfb:...) igt_aux-CRITICAL: Failed assertion: getuid() == 0
+    (kms_getfb:...) igt_aux-CRITICAL: error: 1005 != 0
+  Root cause: the test needs uid 0 to drop privileges. coder is uid 1005.
+  => TOOLING failure (privilege requirement), NOT a driver defect. Must be read as
+     such; do not count it against the driver.
+
+======================================================================
+RUN 2: TESTS THAT CANNOT START UNPRIVILEGED - ONE SHARED BLOCKER
+======================================================================
+kms_setmode --run-subtest basic          -> exit=98   Subtest basic: FAIL (0.000s)
+kms_atomic  --run-subtest atomic-invalid-params -> exit=98  Subtest atomic-invalid-params: FAIL (0.000s)
+kms_flip    --run-subtest basic-flip-vblank     -> exit=79  (fails before any subtest line)
+kms_pipe_crc_basic --run-subtest read-crc-pipe-A -> exit=79 (fails before any subtest line)
+kms_rmfb                                  -> exit=98   0 SUCCESS / 0 SKIP / 2 FAIL
+                             FAIL: rmfb-ioctl, close-fd
+
+All of them fail at the SAME point, before any KMS operation on the driver:
+  (kms_setmode:879888) igt_kms-CRITICAL: Test assertion failure function
+    kmstest_set_vt_graphics_mode, file ../lib/igt_kms.c:1558:
+  (kms_setmode:879888) igt_kms-CRITICAL: Failed assertion: ret >= 0
+  (kms_setmode:879888) igt_kms-CRITICAL: Last errno: 13, Permission denied
+  Stack: #1 [kmstest_set_vt_graphics_mode+0x66]
+  (identical text from kms_atomic, kms_flip, kms_pipe_crc_basic, kms_rmfb)
+
+  BLOCKING DEPENDENCY CHAIN, verbatim and complete:
+    1. IGT test calls kmstest_set_vt_graphics_mode() as part of its standard test loop.
+    2. That function opens /dev/tty0 to issue KDSETMODE / VT_ACTIVATE.
+    3. /dev/tty0 is crw------- root tty; coder (uid 1005) is not root and is not in a
+       group with access, so open() / the ioctl returns EACCES.
+    4. igt_kms asserts ret >= 0 and aborts the subtest with errno 13.
+  Consequence: on this host, unprivileged, no IGT test that switches VT graphics mode
+  can reach the driver. That covers kms_setmode, kms_atomic, kms_flip,
+  kms_pipe_crc_basic and kms_rmfb.
+  The fix would require either running IGT as root or an ACL on /dev/tty0 - both
+  outside this task's constraints (no root, no sudo beyond the allowlist).
+
+======================================================================
+RUN 3: TESTS IGT SKIPS BECAUSE IT CANNOT CLASSIFY THIS DRIVER
+======================================================================
+kms_fb_coherency -> exit=77, 0 SUCCESS / 1 SKIP / 0 FAIL  (only subtest: memset-crc)
+kms_dirtyfb      -> exit=77, 0 SUCCESS / 4 SKIP / 0 FAIL
+  Verbatim skip header (both tests):
+    Test requirement not met in function drm_open_driver, file ../lib/drmtest.c:754:
+    No known gpu found for chipset flags 0x129 (other)
+    Last errno: 2, No such file or directory
+  IGT's device filter has no entry for sm750hdmidrm, so opening with those flags fails.
+  Setting IGT_FORCE_DRIVER=sm750hdmidrm did NOT change the outcome.
+  => TOOLING/IGT-capability gap (IGT does not know this driver), NOT a driver defect.
+
+======================================================================
+HARMLESS IGT NOISE (recorded so it is not mistaken for failures)
+======================================================================
+  (process) igt_device_scan-WARNING: No filter class matching [/dev/dri/card0]
+  (process) igt_device_scan-WARNING: Warning on condition !is_valid in function
+            igt_device_filter_add, file ../lib/igt_aux.../igt_device_scan.c:2088
+  Cause: --device <path> is parsed by the device-filter grammar, which expects a class
+  keyword. The device is still opened correctly ("Opened device: /dev/dri/card0").
+
+======================================================================
+SUMMARY TABLE (this run, unprivileged, stale 0.5.9)
+======================================================================
+  test                                   exit  SUCCESS  SKIP  FAIL   verdict
+  core_getversion                          0      2       0     0    PASS
+  dumb_buffer                              0      6       0     0    PASS
+  kms_addfb_basic                         98     26      14     1    FAIL (size-max: EINVAL on ADDFB2)
+  kms_getfb                               98     10       2     2    FAIL (both = needs root, tooling)
+  kms_rmfb                                98      0       0     2    FAIL (VT blocker, tooling)
+  kms_setmode basic                       98      0       0     1    FAIL (VT blocker, tooling)
+  kms_atomic atomic-invalid-params        98      0       0     1    FAIL (VT blocker, tooling)
+  kms_flip basic-flip-vblank              79      0       0     0    FAIL (VT blocker, tooling)
+  kms_pipe_crc_basic read-crc-pipe-A      79      0       0     0    FAIL (VT blocker, tooling)
+  kms_fb_coherency                        77      0       1     0    SKIP (IGT cannot classify driver)
+  kms_dirtyfb                             77      0       4     0    SKIP (IGT cannot classify driver)
+
+  HALF THE FAILS ARE TOOLING, ONE IS REAL.
+  Real driver-behaviour failures observed: 1 (kms_addfb_basic / size-max, EINVAL).
+  Tests that never reached the driver            : 6 (VT blocker or root requirement).
+  Tests that reached the driver and passed      : 2 binaries, 34 subtests SUCCESS.
+
+  Exit code meaning in IGT: 0 = all pass/skip, 77 = all skip, 79 = failure with no
+  subtest results, 98 = failure with at least one subtest result.
+
+======================================================================
+RAW OUTPUT LOCATIONS (all on disk)
+======================================================================
+  /mega/tmp/sm750/t10/f_core_getversion.out|.err
+  /mega/tmp/sm750/t10/f_dumb_buffer.out|.err
+  /mega/tmp/sm750/t10/f_kms_addfb_basic.out|.err
+  /mega/tmp/sm750/t10/f_kms_getfb.out|.err
+  /mega/tmp/sm750/t10/f_kms_rmfb.out|.err
+  /mega/tmp/sm750/t10/f_kms_setmode.out|.err
+  /mega/tmp/sm750/t10/f_kms_atomic.out|.err
+  /mega/tmp/sm750/t10/f_kms_flip.out|.err
+  /mega/tmp/sm750/t10/f_kms_pipe_crc_basic.out|.err
+  /mega/tmp/sm750/t10/f_kms_fb_coherency.out|.err
+  /mega/tmp/sm750/t10/f_kms_dirtyfb.out|.err
+  /mega/tmp/sm750/t10/igt_exitcodes.txt
+
+Panel state after every IGT run: crtc 38 fb 43 (0,0) (1920x1080), connector 35
+connected enabled=On - the original mode was never left changed.

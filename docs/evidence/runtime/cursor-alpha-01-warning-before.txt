@@ -1,0 +1,133 @@
+T13 - SM750 CURSOR PLANE ALPHA/BLEND WARNING - BEFORE FIX
+=========================================================
+Captured at : 2026-11-18T12:56:12+03:00
+Host        : deneb, kernel 7.3.4-100.fc43.x86_64
+User        : coder (uid 1005) - unprivileged; the kernel log is reachable only
+              through the sudoers allowlist (sudo -n /usr/bin/dmesg).
+Note        : this file is a transcript, so the non-ASCII bytes below are the
+              host's localized command output (the host locale is Russian), not
+              authored text; no prose written for this file is non-ASCII.
+
+WHICH BUILD PRODUCED THIS LOG
+-----------------------------
+The module loaded at capture time is the PRE-FIX 0.5.9 build. The 0.6.0 build
+that carries the fix cannot be loaded from this task: installing it is T11.
+
+  $ ls -l /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+  -rw-r--r-- 1 root root 60360 ноя 17 22:17 /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+  $ ls /sys/module/sm750hdmidrm/version
+  ls: невозможно получить доступ к '/sys/module/sm750hdmidrm/version': Нет такого файла или каталога
+  $ dkms status
+  sm750hdmifb/0.5.9, 7.3.3-100.fc43.x86_64, x86_64: installed
+  sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: installed
+
+CAPTURE COMMANDS
+----------------
+  $ sudo -n /usr/bin/dmesg > dmesg-before-fix.txt
+  [exit 0]
+  $ wc -l dmesg-before-fix.txt
+  2096 dmesg-before-fix.txt
+  $ grep -c sm750 dmesg-before-fix.txt
+  240
+  $ sha256sum dmesg-before-fix.txt
+  eed1f7c9d2c5567846fa6a91c88cec6c2501ab6ce6be8a656162157800ab330a  dmesg-before-fix.txt
+
+  $ sudo -n /usr/bin/journalctl -k -b -q --no-pager > journal-before-fix.txt
+  [exit 0]
+  $ wc -l journal-before-fix.txt
+  2097 journal-before-fix.txt
+  $ grep -c sm750 journal-before-fix.txt
+  240
+  $ sha256sum journal-before-fix.txt
+  8e614642555d55cd4cc1b4247a7a2e18d6546bf53a1793f20e9e722828b1b667  journal-before-fix.txt
+
+THE WARNING, VERBATIM (dmesg-before-fix.txt lines 1244-1247)
+-----------------------------------------------------------
+[    3.523584] BTRFS: device label mega devid 3 transid 173780 /dev/nvme1n1 (259:0) scanned by (udev-worker) (645)
+[    3.638007] sm750hdmidrm 0000:01:00.0: [drm] [PLANE:40:sm750-cursor] pixel format with alpha exposed but blend mode not setup. Please fix.
+[    3.646057] [drm] Initialized sm750hdmidrm 0.1.0 for 0000:01:00.0 on minor 0
+[    6.218023] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+
+Line 1245 is the defect. It is emitted by the DRM core, not by this driver:
+drm_mode_config_validate() runs at drm_dev_register() and calls
+validate_blend_mode_for_alpha_formats() for every plane. That function returns
+immediately when plane->blend_mode_property is set and otherwise walks the
+plane's format list, warning for the first format whose drm_format_info has
+has_alpha. The cursor plane advertises DRM_FORMAT_ARGB8888 and had no blend
+property, so the check fired.
+
+SAME LINE FROM THE JOURNAL (journal-before-fix.txt line 1245)
+-------------------------------------------------------------
+ноя 18 10:26:41 deneb kernel: sm750hdmidrm 0000:01:00.0: [drm] [PLANE:40:sm750-cursor] pixel format with alpha exposed but blend mode not setup. Please fix.
+
+UNPRIVILEGED ACCESS IS STILL DENIED (the GAP-B2 statement stays true for coder)
+-----------------------------------------------------------------------------
+  $ dmesg
+  dmesg: read kernel buffer failed: Операция не позволена
+  $ journalctl -k -b -q --no-pager | wc -l
+  0
+  $ id -nG
+  coder vtune
+
+PRE-FIX UAPI SURFACE (modetest -M sm750hdmidrm -p)
+-----------------------------------------------
+Plane 40 is the cursor plane; its property list is type and IN_FORMATS only,
+with no "pixel blend mode" property. This is the state the fix changes.
+
+VERBATIM PRE-FIX PROPERTY DUMP (modetest -M sm750hdmidrm -p, plane 36 and 40)
+------------------------------------------------------------------------------
+opened device `SM750G10 SiI9024A HDMI DRM shadow driver` on driver `sm750hdmidrm` (version 0.1.0 at 0)
+CRTCs:
+id	fb	pos	size
+38	43	(0,0)	(1920x1080)
+  #0 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500 flags: phsync, pvsync; type: preferred, driver
+  props:
+	25 VRR_ENABLED:
+		flags: range
+		values: 0 1
+		value: 0
+
+Planes:
+id	crtc	fb	CRTC x,y	x,y	gamma size	possible crtcs
+36	38	43	0,0		0,0	0       	0x00000001
+  formats: XR24
+  props:
+	9 type:
+		flags: immutable enum
+		enums: Overlay=0 Primary=1 Cursor=2
+		value: 1
+	32 IN_FORMATS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000100000018000000
+			01000000200000005852323400000000
+			01000000000000000000000000000000
+			0000000000000000
+		in_formats blob decoded:
+			 XR24:  LINEAR(0x0)
+40	0	0	0,0		0,0	0       	0x00000001
+  formats: AR24
+  props:
+	9 type:
+		flags: immutable enum
+		enums: Overlay=0 Primary=1 Cursor=2
+		value: 2
+	32 IN_FORMATS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000100000018000000
+			01000000200000004152323400000000
+			01000000000000000000000000000000
+			0000000000000000
+		in_formats blob decoded:
+			 AR24:  LINEAR(0x0)
+
+
+Plane 40 is the cursor plane: formats AR24, props type=2 and IN_FORMATS only.
+There is no "pixel blend mode" property, which is exactly what the DRM core
+check keys on. sha256 of the captured dump:
+  74b9b102eaa496e7934dfc8ad6e397825d11bb4775efb491a42c2a6daa0678fa  modetest-props-before.txt

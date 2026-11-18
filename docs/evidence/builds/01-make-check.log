@@ -1,0 +1,85 @@
+# utc: 2026-11-18T04:42:22Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# build KDIR: /lib/modules/7.3.3-100.fc43.x86_64/build
+# compiler: gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1) (matches CONFIG_GCC_VERSION=150301)
+# command: env PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm LD_LIBRARY_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64 C_INCLUDE_PATH=/mega/tmp/sm750/t3/libdrm/usr/include make check KDIR=/lib/modules/7.3.3-100.fc43.x86_64/build CC=/usr/bin/gcc
+# env: rootless libdrm chain at /mega/tmp/sm750/t3/libdrm, no root privileges used
+# workdir: /home/coder/sm750hdmifb
+# check target recipe commands: 17 (Makefile check target; see docs/evidence/baseline/13-make-check-count.txt)
+
+--- output ---
+make -C /lib/modules/7.3.3-100.fc43.x86_64/build M=/home/coder/sm750hdmifb/src modules
+make[1]: вход в каталог «/usr/src/kernels/7.3.3-100.fc43.x86_64»
+make[2]: вход в каталог «/home/coder/sm750hdmifb/src»
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+  CC [M]  sm750_drm.o
+  CC [M]  sm750_drm_mode.o
+  CC [M]  sm750_dither.o
+  CC [M]  ddk750_chip.o
+  CC [M]  ddk750_mode.o
+  CC [M]  ddk750_power.o
+  CC [M]  ddk750_display.o
+  CC [M]  ddk750_swi2c.o
+  CC [M]  ddk750_hwi2c.o
+  CC [M]  sii902x.o
+  LD [M]  sm750hdmidrm.o
+  MODPOST Module.symvers
+  CC [M]  sm750hdmidrm.mod.o
+  CC [M]  .module-common.o
+  LD [M]  sm750hdmidrm.ko
+  BTF [M] sm750hdmidrm.ko
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+make[2]: выход из каталога «/home/coder/sm750hdmifb/src»
+make[1]: выход из каталога «/usr/src/kernels/7.3.3-100.fc43.x86_64»
+/usr/bin/gcc -O2 -Wall -Wextra -Werror $(pkg-config --cflags libdrm) \
+	-o tests/check-vblank tests/check-vblank.c $(pkg-config --libs libdrm) -lm
+/usr/bin/gcc -O3 -Wall -Wextra -Werror -Itools -o tests/test-bbdither-rgb565 tests/test-bbdither-rgb565.c tools/bbdither-rgb565.c
+/usr/bin/gcc -O3 -Wall -Wextra -Werror -o tests/test-scale-optimizations tests/test-scale-optimizations.c
+./tests/check-drm-module.sh src/sm750hdmidrm.ko
+SKIP: cannot open /dev/dri/card0 read-write as uid 1005; grant the video group or run tests/check-vblank /dev/dri/card0 60 as root. This is not a pass.
+DRM module metadata checks passed: src/sm750hdmidrm.ko
+./tests/check-drm-policy.sh
+DRM mode policy checks passed
+./tests/check-drm-xorg-config.sh
+DRM Xorg isolation checks passed
+./tests/check-drm-packaging.sh
+Unified DRM package checks passed
+./tests/check-release-version.sh
+Release version consistency checks passed: 0.5.9
+./tests/check-softscale-map.sh
+Softscale 2560/2464-to-2048 mapping checks passed
+./tests/check-softscale-sharpen.sh
+Softscale 8% contrast sharpening checks passed
+./tests/check-softscale-codegen.sh src/sm750_dither.o
+Softscale generated-code checks passed
+./tests/check-hardware-cursor.sh
+Hardware cursor plane checks passed
+./tests/check-shadow-dma.sh
+Shadow DMA safety checks passed
+./tests/check-backbuffer-staging.sh
+Full-frame backbuffer staging checks passed
+./tests/check-shadow-async.sh
+Asynchronous shadow mailbox checks passed
+./tests/check-shadow-source-damage.sh
+Shadow source-difference damage checks passed
+python3 tests/test-vblank-timer.py
+Vblank timer schedule passed: normal
+Vblank timer schedule passed: time-lock
+Vblank timer schedule passed: event-lock
+Vblank timer schedule passed: superseded
+Vblank timer schedule passed: cancel-enable
+Vblank timer schedule passed: sync-stop
+./tests/test-bbdither-rgb565
+bbdither RGB565 checks passed
+./tests/test-scale-optimizations
+Packed scaler, unrolled span and fixed-sharpen checks passed
+python3 tests/test-staging-results.py
+....
+----------------------------------------------------------------------
+Ran 4 tests in 0.208s
+
+OK
+
+# exit: 0

@@ -1,0 +1,13 @@
+# host: deneb
+# utc: 2026-11-17T18:31:31Z
+# command: dnf -q --color=never list --available <pkg>
+# ---- output ----
+igt-gpu-tools.i686   2.4-1.fc43                    updates
+igt-gpu-tools.x86_64 2.4-1.fc43                    updates
+kmscube.x86_64       0-11.20241006.git311eaaa.fc43 fedora
+libdrm.i686          2.4.134-1.fc43                updates
+libdrm.x86_64        2.4.134-1.fc43                updates
+libdrm-devel.i686    2.4.134-1.fc43                updates
+libdrm-devel.x86_64  2.4.134-1.fc43                updates
+v4l-utils.x86_64     1.32.0-1.fc43                 updates
+[exit 0]

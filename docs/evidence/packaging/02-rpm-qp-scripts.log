@@ -1,0 +1,86 @@
+# utc: 2026-11-18T06:55:27Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# uid: 1005
+# command: rpm -qp --scripts /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+# workdir: 
+
+--- output ---
+postinstall scriptlet (using /bin/sh):
+# --rpm_safe_upgrade semantics: register with DKMS only on first install
+# ($1 == 1). On an upgrade ($1 == 2) /usr/src/sm750hdmifb-0.6.0 is already
+# registered, and a second "dkms add" on a populated tree is an error that
+# would abort the transaction. The same guard keeps "rpm -U --replacepkgs"
+# from re-adding.
+#
+# A warning, never a non-zero exit: an exiting scriptlet aborts the RPM
+# transaction, which for a driver package is worse than an unregistered tree
+# (the %posttrans build then warns and the admin can run dkms add by hand).
+if [ "$1" -eq 1 ]; then
+	dkms add -m sm750hdmifb -v 0.6.0 >/dev/null || \
+		echo "warning: dkms add sm750hdmifb/0.6.0 failed; run it manually" >&2
+fi
+exit 0
+preuninstall scriptlet (using /bin/sh):
+# --rpm_safe_upgrade semantics: unregister only when the last installed version
+# is erased ($1 == 0). On an upgrade ($1 == 1) the new version still needs the
+# DKMS registration, so removing it here would uninstall the module mid-upgrade.
+#
+# %preun, not %postun: dkms needs /usr/src/sm750hdmifb-0.6.0 to still exist
+# when it removes the registration.
+if [ "$1" -eq 0 ]; then
+	dkms remove -m sm750hdmifb -v 0.6.0 --all || \
+		echo "warning: dkms remove sm750hdmifb/0.6.0 failed; run it manually" >&2
+fi
+exit 0
+posttrans scriptlet (using /bin/sh):
+# Build and install only after the whole transaction: kernel-devel packages
+# installed in the same transaction are unpacked by %posttrans but not by
+# %post, and building before headers exist would fail the install.
+#
+# Divergence from packaging/drm-postinst (Debian), recorded deliberately:
+#   - packaging/drm-postinst:66-73 calls update-initramfs; this driver is not
+#     needed to mount the root filesystem, so dkms install plus depmod -a is
+#     the Fedora path and no initramfs is regenerated here.
+#   - packaging/drm-postinst:86-89 exits 1 when no supported kernel has usable
+#     headers; here that case prints warnings and exits 0 (see the final block).
+#
+# modules_root is overridable so tests/check-rpm-dkms.sh can exercise the
+# missing-headers branch without writing to /lib/modules. rpm never sets the
+# variable, so the installed default is always /lib/modules.
+modules_root=${SM750_RPM_MODULES_ROOT:-/lib/modules}
+built_count=0
+for kernel_dir in "$modules_root"/*; do
+	[ -d "$kernel_dir" ] || continue
+	kernel_version=${kernel_dir##*/}
+	# Same supported floor as BUILD_EXCLUSIVE_KERNEL in dkms.conf. The pattern
+	# is byte-identical to packaging/drm-postinst:73-76; tests/check-rpm-dkms.sh
+	# fails if the three ever diverge.
+	case "$kernel_version" in
+		6.1[7-9].*|6.[2-9][0-9].*|[7-9].*|[1-9][0-9].*) ;;
+		*) continue ;;
+	esac
+	if [ ! -f "$kernel_dir/build/Makefile" ]; then
+		echo "warning: skipping $kernel_version: matching kernel headers are absent" >&2
+		continue
+	fi
+	dkms build -m sm750hdmifb -v 0.6.0 -k "$kernel_version" || {
+		echo "warning: dkms build failed for $kernel_version; run it manually" >&2
+		continue
+	}
+	dkms install -m sm750hdmifb -v 0.6.0 -k "$kernel_version" --force || {
+		echo "warning: dkms install failed for $kernel_version; run it manually" >&2
+		continue
+	}
+	depmod -a "$kernel_version" || \
+		echo "warning: depmod -a $kernel_version failed" >&2
+	built_count=$((built_count + 1))
+done
+if [ "$built_count" -eq 0 ]; then
+	echo "warning: no supported installed kernel has usable headers; the module was not built" >&2
+	echo "warning: install kernel-devel for a supported kernel, then run: dkms install -m sm750hdmifb -v 0.6.0 -k <kernel>" >&2
+fi
+exit 0
+
+# No %postun scriptlet is defined on purpose. dkms remove must run while
+# /usr/src/sm750hdmifb-0.6.0 is still present (%preun), and no initramfs
+# rebuild is required after an erase.

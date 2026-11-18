@@ -1,0 +1,14 @@
+# utc: 2026-11-18T04:48:48Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# compiler: cc -> cc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+# command: ./build-package.sh
+# env: PKG_CONFIG_PATH=unset PKG_CONFIG_SYSROOT_DIR=unset LD_LIBRARY_PATH=/usr/local/cuda/lib64 C_INCLUDE_PATH=unset JOBS=unset CC=unset
+# workdir: /home/coder/sm750hdmifb
+
+--- output ---
+dpkg-deb: сборка пакета «sm750hdmifb» в «/home/coder/sm750hdmifb/dist/sm750hdmifb_0.5.9_all.deb».
+/home/coder/sm750hdmifb/dist/sm750hdmifb_0.5.9_all.deb
+/home/coder/sm750hdmifb/dist/sm750hdmifb-0.5.9-source.tar.gz
+/home/coder/sm750hdmifb/dist/SHA256SUMS
+
+# exit: 0

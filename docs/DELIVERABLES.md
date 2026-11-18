@@ -22,9 +22,9 @@ Three labels are used throughout:
 | AC | Subject | Deliverable paths | Verification command | Root |
 | --- | --- | --- | --- | --- |
 | AC-1 | Device specifications archived with checksums | `docs/specs/INDEX.md`, `docs/specs/SHA256SUMS`, `docs/specs/GAPS.md`, `docs/specs/REGISTER-MAP.md` | `ls docs/specs` (four text files, no binary) and the checksum re-download in section 2.1 | no |
-| AC-2 | Audit and defect inventory | `docs/AUDIT.md`, `docs/DEFECTS.md`, `docs/evidence/audit/identity-and-range.txt`, `docs/evidence/audit/privilege-probe.txt`, `docs/evidence/audit/release-gate-and-environment.txt`, `docs/evidence/audit/rootless-libdrm-check.txt` | `grep -cE '^.[[:space:]]A[0-9]' docs/AUDIT.md docs/DEFECTS.md` -> 24 and 24 | no |
+| AC-2 | Audit and defect inventory | `docs/AUDIT.md`, `docs/DEFECTS.md`, `docs/evidence/audit/identity-and-range.txt`, `docs/evidence/audit/privilege-probe.txt`, `docs/evidence/audit/release-gate-and-environment.txt`, `docs/evidence/audit/rootless-libdrm-check.txt` | `grep -cE '^.[[:space:]]A[0-9]' docs/AUDIT.md docs/DEFECTS.md` -> 24 and 25 (A25 was found post-audit in the kernel log and is recorded only in `docs/DEFECTS.md`; `docs/AUDIT.md` keeps the 24 it audited) | no |
 | AC-3 | Runtime and hardware validation ladder | `docs/TEST-STRATEGY.md` sections 5 and 9, `docs/evidence/baseline/03-connector.txt`, `docs/evidence/builds/09-register-dump.log`, `docs/evidence/EVIDENCE-GAPS.md` GAP-B3/B4 | `grep -n 'GAP-B[34]' docs/evidence/EVIDENCE-GAPS.md` | partly; see section 3 |
-| AC-4 | Test strategy and recorded results | `docs/TEST-STRATEGY.md`, `docs/evidence/builds/01-make-check.log` .. `docs/evidence/builds/18-sudoers-verify-0.6.0.log` | evidence-existence loop in section 2.4 | no |
+| AC-4 | Test strategy and recorded results | `docs/TEST-STRATEGY.md`, `docs/evidence/builds/01-make-check.log` .. `docs/evidence/builds/19-cursor-alpha-fix.log` | evidence-existence loop in section 2.4 | no |
 | AC-5 | Build integrity | `Makefile` (`check` at `Makefile:30-48`, `check-deps` at `Makefile:17-28`, `check-all-kernels` at `Makefile:50-51`), `tests/build-all-kernels.sh`, `docs/evidence/builds/01-make-check.log`, `docs/evidence/builds/02-check-all-kernels.log`, `docs/evidence/builds/03-kernel-7.2.15-100.log`, `docs/evidence/builds/04-kernel-7.3.3-100.log`, `docs/evidence/builds/05-kernel-7.3.4-100.log`, `docs/evidence/builds/06-kernel-6.17.1.log`, `docs/evidence/builds/11-warnings-scan.log` | `make check` and `./tests/build-all-kernels.sh`; section 2.5 | no |
 | AC-6 | RPM/DKMS packaging | `packaging/sm750hdmifb.spec`, `docs/PACKAGING-RPM.md`, `tests/check-rpm-dkms.sh`, `docs/evidence/packaging/01-rpmbuild.log` .. `docs/evidence/packaging/07-check-rpm-dkms.log` | `./tests/check-rpm-dkms.sh`; section 2.6 | no (build), yes (install) |
 | AC-7 | Deliverable index and reproduction | `docs/DELIVERABLES.md` (this file), `README.md`, `docs/ENVIRONMENT.md` | unreferenced-file check in section 2.7 | no |
@@ -137,7 +137,7 @@ bodies and the recovery recipe for a broken allowlist are in
 | Step | `ROOT-REQUIRED` command | Observed state |
 | --- | --- | --- |
 | Register readback | `sudo /usr/local/sbin/sm750-regs > /mega/tmp/sm750/regs-before.txt` (resolves the `dri/<N>` index from the by-path link) | **GAP-B4** until the 0.6.0 module is installed (T11). The debugfs facility exists and the grant works, but the loaded module is still 0.5.9 and has no `regs` file. |
-| VBIOS image | `sudo /usr/local/sbin/sm750-vbios-dump /mega/tmp/sm750/vbios-01-00-0.bin` | **GAP-B1, captured but truncated.** The v1 helper wrote 4096 bytes of 65536; v2 is staged and awaits a root install. Signature, `PCIR`, vendor/device, version and build date are legible in the 4096 bytes. |
+| VBIOS image | `sudo /usr/local/sbin/sm750-vbios-dump /mega/tmp/sm750/vbios-01-00-0.bin` | **CLOSED, GAP-B1.** Captured 2026-11-18T10:11Z: 49152 bytes, sha256 `16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551`. The image is complete at 48 KiB (header size 0x60, PCIR image length 0x0060, whole-image checksum 0), so the helper's exit 2 and its `expected 65536` warning are a stale constant, not a short read. Signature `55 aa`, PCIR at 0x1c, 126f:0750, VBE 2.0, version 1.00.59-, build 05/14/19 16:25. Binary stays in `/mega/tmp/sm750/`, not committed; transcript `docs/evidence/baseline/18-vbios-dump.txt`. |
 | Kernel log | `sudo -n dmesg` (also `sudo -n journalctl -k -b -q --no-pager`) | **CLOSED, GAP-B2.** Exit 0; 169860 bytes with 240 `sm750` lines measured 2026-11-18T09:36Z (154236 bytes / 150 lines at the earlier capture). |
 | PCI config space > 0x40 | `sudo /usr/local/sbin/sm750-lspci` | **CLOSED, GAP-B5.** Exit 0, 9465 bytes, capability list above 0x40 present. |
 | KMS clients | `modetest -c -M sm750hdmidrm`, `kmscube -D /dev/dri/card0 -c 60`, IGT `kms_setmode` | **PARTIAL, GAP-B3.** The card node opens unprivileged through the udev ACL; `modetest` and `kmscube` pass as pre-fix baselines (`docs/evidence/runtime/04-modeset.txt`, `05-kmscube.txt`), IGT fails (`06-igt.txt`). No scanout CRC or external capture. |
@@ -373,6 +373,7 @@ list.
 | `docs/evidence/baseline/15-edid-decode.txt` | `edid-decode` of the panel EDID |
 | `docs/evidence/baseline/16-kernel-devmem-policy.txt` | strict-devmem settings, module-parameter count |
 | `docs/evidence/baseline/17-kernel-headers.txt` | `build` link resolution, kernel packages |
+| `docs/evidence/baseline/18-vbios-dump.txt` | VBIOS capture through the allowlisted helper: size, sha256, `PCIR`, VBE block, ROM-restore check |
 | `docs/evidence/builds/01-make-check.log` | `make check`, exit 0, 17 commands |
 | `docs/evidence/builds/02-check-all-kernels.log` | matrix over three installed trees, Built 9 |
 | `docs/evidence/builds/03-kernel-7.2.15-100.log` | matrix on 7.2.15-100, Built 3 |
@@ -391,6 +392,7 @@ list.
 | `docs/evidence/builds/16-build-package-0.6.0.log` | `.deb` + source tarball at 0.6.0 and release audit, exit 0 |
 | `docs/evidence/builds/17-check-rpm-dkms-0.6.0.log` | full `tests/check-rpm-dkms.sh` run at 0.6.0 |
 | `docs/evidence/builds/18-sudoers-verify-0.6.0.log` | regenerated allowlist: zero colons, `visudo -c -f` twice |
+| `docs/evidence/builds/19-cursor-alpha-fix.log` | T13: the blend-mode property, the object proof, `make check` and both kernel matrices after the fix |
 | `docs/evidence/packaging/01-rpmbuild.log` | `rpmbuild -ba`, exit 0 (0.6.0; the 0.5.9 run is archived in `docs/evidence/packaging/0.5.9/`) |
 | `docs/evidence/packaging/02-rpm-qp-scripts.log` | scriptlet assertions |
 | `docs/evidence/packaging/03-rpm-qlp.log` | `%files` list, 36 files |

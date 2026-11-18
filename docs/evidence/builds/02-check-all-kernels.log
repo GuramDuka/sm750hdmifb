@@ -1,0 +1,155 @@
+# utc: 2026-11-18T04:44:36Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# compiler: /usr/bin/gcc -> gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+# command: ./tests/build-all-kernels.sh
+# env: PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm LD_LIBRARY_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64 C_INCLUDE_PATH=/mega/tmp/sm750/t3/libdrm/usr/include JOBS=12 CC=/usr/bin/gcc
+# workdir: /mega/tmp/sm750/t5/matrix
+
+--- output ---
+Building sm750hdmidrm for 7.2.15-100.fc43.x86_64 (rgb565-bbdither default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+SKIP: cannot open /dev/dri/card0 read-write as uid 1005; grant the video group or run tests/check-vblank /dev/dri/card0 60 as root. This is not a pass.
+DRM module metadata checks passed: src/sm750hdmidrm.ko
+DRM mode policy checks passed
+DRM Xorg isolation checks passed
+Unified DRM package checks passed
+Release version consistency checks passed: 0.5.9
+Softscale 2560/2464-to-2048 mapping checks passed
+Softscale 8% contrast sharpening checks passed
+Softscale generated-code checks passed
+Hardware cursor plane checks passed
+Shadow DMA safety checks passed
+Full-frame backbuffer staging checks passed
+Asynchronous shadow mailbox checks passed
+Shadow source-difference damage checks passed
+Vblank timer schedule passed: normal
+Vblank timer schedule passed: time-lock
+Vblank timer schedule passed: event-lock
+Vblank timer schedule passed: superseded
+Vblank timer schedule passed: cancel-enable
+Vblank timer schedule passed: sync-stop
+bbdither RGB565 checks passed
+Packed scaler, unrolled span and fixed-sharpen checks passed
+....
+----------------------------------------------------------------------
+Ran 4 tests in 0.294s
+
+OK
+SKIP: cannot open /dev/dri/card0 read-write as uid 1005; grant the video group or run tests/check-vblank /dev/dri/card0 60 as root. This is not a pass.
+DRM module metadata checks passed: /mega/tmp/sm750/t5/matrix/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 7.2.15-100.fc43.x86_64 (xrgb8888 default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+SKIP: tests/check-vblank is not built; run make check first. This is not a pass.
+DRM module metadata checks passed: /mega/tmp/sm750/t5/matrix/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 7.2.15-100.fc43.x86_64 (rgb565 default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+SKIP: tests/check-vblank is not built; run make check first. This is not a pass.
+DRM module metadata checks passed: /mega/tmp/sm750/t5/matrix/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 7.3.3-100.fc43.x86_64 (rgb565-bbdither default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+SKIP: cannot open /dev/dri/card0 read-write as uid 1005; grant the video group or run tests/check-vblank /dev/dri/card0 60 as root. This is not a pass.
+DRM module metadata checks passed: src/sm750hdmidrm.ko
+DRM mode policy checks passed
+DRM Xorg isolation checks passed
+Unified DRM package checks passed
+Release version consistency checks passed: 0.5.9
+Softscale 2560/2464-to-2048 mapping checks passed
+Softscale 8% contrast sharpening checks passed
+Softscale generated-code checks passed
+Hardware cursor plane checks passed
+Shadow DMA safety checks passed
+Full-frame backbuffer staging checks passed
+Asynchronous shadow mailbox checks passed
+Shadow source-difference damage checks passed
+Vblank timer schedule passed: normal
+Vblank timer schedule passed: time-lock
+Vblank timer schedule passed: event-lock
+Vblank timer schedule passed: superseded
+Vblank timer schedule passed: cancel-enable
+Vblank timer schedule passed: sync-stop
+bbdither RGB565 checks passed
+Packed scaler, unrolled span and fixed-sharpen checks passed
+....
+----------------------------------------------------------------------
+Ran 4 tests in 0.215s
+
+OK
+SKIP: cannot open /dev/dri/card0 read-write as uid 1005; grant the video group or run tests/check-vblank /dev/dri/card0 60 as root. This is not a pass.
+DRM module metadata checks passed: /mega/tmp/sm750/t5/matrix/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 7.3.3-100.fc43.x86_64 (xrgb8888 default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+SKIP: tests/check-vblank is not built; run make check first. This is not a pass.
+DRM module metadata checks passed: /mega/tmp/sm750/t5/matrix/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 7.3.3-100.fc43.x86_64 (rgb565 default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+SKIP: tests/check-vblank is not built; run make check first. This is not a pass.
+DRM module metadata checks passed: /mega/tmp/sm750/t5/matrix/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 7.3.4-100.fc43.x86_64 (rgb565-bbdither default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+SKIP: cannot open /dev/dri/card0 read-write as uid 1005; grant the video group or run tests/check-vblank /dev/dri/card0 60 as root. This is not a pass.
+DRM module metadata checks passed: src/sm750hdmidrm.ko
+DRM mode policy checks passed
+DRM Xorg isolation checks passed
+Unified DRM package checks passed
+Release version consistency checks passed: 0.5.9
+Softscale 2560/2464-to-2048 mapping checks passed
+Softscale 8% contrast sharpening checks passed
+Softscale generated-code checks passed
+Hardware cursor plane checks passed
+Shadow DMA safety checks passed
+Full-frame backbuffer staging checks passed
+Asynchronous shadow mailbox checks passed
+Shadow source-difference damage checks passed
+Vblank timer schedule passed: normal
+Vblank timer schedule passed: time-lock
+Vblank timer schedule passed: event-lock
+Vblank timer schedule passed: superseded
+Vblank timer schedule passed: cancel-enable
+Vblank timer schedule passed: sync-stop
+bbdither RGB565 checks passed
+Packed scaler, unrolled span and fixed-sharpen checks passed
+....
+----------------------------------------------------------------------
+Ran 4 tests in 0.230s
+
+OK
+SKIP: cannot open /dev/dri/card0 read-write as uid 1005; grant the video group or run tests/check-vblank /dev/dri/card0 60 as root. This is not a pass.
+DRM module metadata checks passed: /mega/tmp/sm750/t5/matrix/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 7.3.4-100.fc43.x86_64 (xrgb8888 default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+SKIP: tests/check-vblank is not built; run make check first. This is not a pass.
+DRM module metadata checks passed: /mega/tmp/sm750/t5/matrix/src/sm750hdmidrm.ko
+Building sm750hdmidrm for 7.3.4-100.fc43.x86_64 (rgb565 default)
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 132
+  You are using:             0
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+SKIP: tests/check-vblank is not built; run make check first. This is not a pass.
+DRM module metadata checks passed: /mega/tmp/sm750/t5/matrix/src/sm750hdmidrm.ko
+Built 9 sm750hdmidrm kernel/format combinations
+
+# exit: 0

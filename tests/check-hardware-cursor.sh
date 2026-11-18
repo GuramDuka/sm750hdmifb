@@ -28,12 +28,24 @@ for requirement in \
 	'if (rebuild_image) {' \
 	'value << ((x & 3) * 2)' \
 	'SM750_DRM_HWC_ADDRESS_ENABLE |' \
-	'64x64 hardware cursor plane enabled with ARGB palette conversion'; do
+	'64x64 hardware cursor plane enabled with ARGB palette conversion' \
+	'#include <drm/drm_blend.h>' \
+	'drm_plane_create_blend_mode_property(&sdev->cursor_plane,' \
+	'BIT(DRM_MODE_BLEND_PREMULTI)'; do
 	grep -F "$requirement" "$source_file" >/dev/null || {
 		echo "Missing hardware-cursor requirement: $requirement" >&2
 		exit 1
 	}
 done
+
+# The cursor plane advertises ARGB8888, so the DRM core requires a blend mode
+# property (drm_mode_config_validate). The hardware has no plane-wide alpha, so
+# exposing drm_plane_create_alpha_property would promise a blend the driver
+# cannot perform - fail if it appears.
+if grep -F 'drm_plane_create_alpha_property' "$source_file" >/dev/null; then
+	echo "Cursor plane must not expose a plane alpha property" >&2
+	exit 1
+fi
 
 awk '
 function div_up(value, divisor) {

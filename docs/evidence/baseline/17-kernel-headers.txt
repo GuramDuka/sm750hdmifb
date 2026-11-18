@@ -1,0 +1,132 @@
+# host: deneb
+# kernel: 7.3.3-100.fc43.x86_64
+# utc: 2026-11-17T18:31:46Z
+# command: readlink of every /lib/modules/*/build plus rpm -q of the
+#          kernel packages and available kernel-devel candidates
+# ---- output ----
+
+$ readlink -f /lib/modules/7.2.13-100.fc43.x86_64/build
+/usr/src/kernels/7.2.13-100.fc43.x86_64
+
+$ readlink -f /lib/modules/7.2.15-100.fc43.x86_64/build
+/usr/src/kernels/7.2.15-100.fc43.x86_64
+
+$ readlink -f /lib/modules/7.3.3-100.fc43.x86_64/build
+/usr/src/kernels/7.3.3-100.fc43.x86_64
+
+$ for d in /lib/modules/*/; do echo $d; ls $d; done
+/lib/modules/6.18.13-200.fc43.x86_64/
+extra
+/lib/modules/7.2.13-100.fc43.x86_64/
+System.map
+build
+config
+extra
+internal
+kernel
+modules.alias
+modules.alias.bin
+modules.block
+modules.builtin
+modules.builtin.alias.bin
+modules.builtin.bin
+modules.builtin.modinfo
+modules.dep
+modules.dep.bin
+modules.devname
+modules.drm
+modules.modesetting
+modules.networking
+modules.order
+modules.softdep
+modules.symbols
+modules.symbols.bin
+modules.weakdep
+source
+symvers.xz
+systemtap
+updates
+vdso
+vmlinuz
+weak-updates
+/lib/modules/7.2.15-100.fc43.x86_64/
+System.map
+build
+config
+extra
+internal
+kernel
+modules.alias
+modules.alias.bin
+modules.block
+modules.builtin
+modules.builtin.alias.bin
+modules.builtin.bin
+modules.builtin.modinfo
+modules.dep
+modules.dep.bin
+modules.devname
+modules.drm
+modules.modesetting
+modules.networking
+modules.order
+modules.softdep
+modules.symbols
+modules.symbols.bin
+modules.weakdep
+source
+symvers.xz
+systemtap
+updates
+vdso
+vmlinuz
+weak-updates
+/lib/modules/7.3.3-100.fc43.x86_64/
+System.map
+build
+config
+extra
+internal
+kernel
+modules.alias
+modules.alias.bin
+modules.block
+modules.builtin
+modules.builtin.alias.bin
+modules.builtin.bin
+modules.builtin.modinfo
+modules.dep
+modules.dep.bin
+modules.devname
+modules.drm
+modules.modesetting
+modules.networking
+modules.order
+modules.softdep
+modules.symbols
+modules.symbols.bin
+modules.weakdep
+source
+symvers.xz
+systemtap
+updates
+vdso
+vmlinuz
+weak-updates
+
+$ rpm -q kernel-core kernel-devel
+kernel-core-7.2.13-100.fc43.x86_64
+kernel-core-7.2.15-100.fc43.x86_64
+kernel-core-7.3.3-100.fc43.x86_64
+kernel-devel-7.2.13-100.fc43.x86_64
+kernel-devel-7.2.15-100.fc43.x86_64
+kernel-devel-7.3.3-100.fc43.x86_64
+[exit 0]
+
+$ rpm -q kernel-core-6.18.13-200.fc43.x86_64
+package kernel-core-6.18.13-200.fc43.x86_64 is not installed
+[exit 1]
+
+$ dnf list --available kernel-devel
+Available packages
+kernel-devel.x86_64 7.3.4-100.fc43 updates

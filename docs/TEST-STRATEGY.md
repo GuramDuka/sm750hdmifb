@@ -1,0 +1,645 @@
+<!-- SPDX-License-Identifier: GPL-2.0-only -->
+# Test strategy and recorded results
+
+Scope: the driver and packaging artifacts at version 0.5.9, tested after the
+fixes recorded in [DEFECTS.md](DEFECTS.md). Every result row below is a run
+performed on 2026-11-18 after T5 completed, or a blocked probe whose denial was
+observed on the same day. Baseline captures taken on 2026-11-17 (connector
+state, EDID, tool matrix) are cited only as state description, never as a test
+result.
+
+The runtime rows R13-R17 and suites S4-S6 were added by T10 on 2026-11-18,
+after a udev ACL made `/dev/dri/card0` openable by `uid=1005(coder)`. They are
+labelled **pre-fix baseline**: the module loaded on the host during that run was
+the previously installed 0.5.9 build (no `/sys/module/sm750hdmidrm/version`, no
+`regs` debugfs node, `dkms status` reports `sm750hdmifb/0.5.9`), so they are the
+BEFORE half of a before/after pair and not results for the fixed build.
+
+Two rules govern this document:
+
+1. A PASS requires an evidence file that exists in this repository. A suite
+   that cannot touch the hardware is a GAP, not a PASS and not a FAIL.
+2. "Suite passes" and "hardware proven" are different claims. `make check`
+   passing proves the software checks and the compile, not that a modeset
+   produced the expected pixels on the panel.
+
+## 1. Environment and constraints
+
+The normative test path is rootless: `uid=1005(coder)`, no `video` group. A
+sudoers allowlist (`/etc/sudoers.d/10-sm750-debug`) covers the debugfs read,
+`dmesg`, `journalctl -k`, DKMS, module load and RPM install/erase; it is not a
+general sudo grant, and its two `lspci` lines are rejected for unescaped colons,
+so PCI config space beyond 0x40 stays out of reach.
+
+`/dev/dri/card0` is `0660 root:video` **with a udev ACL for `coder`**
+(`getfacl` shows `user:coder:rw-`, and `/dev/dri/by-path/pci-0000:01:00.0-card`
+resolves to `../card0`). KMS clients therefore open it as uid 1005; this is what
+unblocked S4-S6 in T10. Two device nodes remain out of reach unprivileged and
+are the current blockers: `/dev/tty0` is `crw------- root tty` (blocks any IGT
+test that switches VT graphics mode) and `/sys/kernel/debug` is `drwx------
+root` (blocks the register dump, GAP-B4).
+Full detail: [ENVIRONMENT.md](ENVIRONMENT.md) section 5,
+[EVIDENCE-GAPS.md](evidence/EVIDENCE-GAPS.md) GAP-B3, and
+`docs/evidence/runtime/01-original-state.txt`.
+
+Environment chain used by every build and check run:
+
+```sh
+export PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig
+export PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm
+export LD_LIBRARY_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64
+export C_INCLUDE_PATH=/mega/tmp/sm750/t3/libdrm/usr/include
+```
+
+| Item | Value used in the recorded runs |
+| --- | --- |
+| Running kernel | `7.3.4-100.fc43.x86_64` |
+| Compiler | `/usr/bin/gcc`, GCC 15.3.1 20260722 (matches `CONFIG_GCC_VERSION=150301`) |
+| libdrm headers and library | 2.4.134, extracted from `libdrm-2.4.134-1.fc43` into `/mega/tmp/sm750/t3/libdrm` |
+| Header trees built | `/usr/src/kernels/{7.2.15,7.3.3,7.3.4}-100.fc43.x86_64`; `6.17.1-300.fc43.x86_64` extracted from Fedora koji into `/mega/tmp/sm750/t5/k617` |
+| `make check` build KDIR | `/lib/modules/7.3.3-100.fc43.x86_64/build` (recorded in `01-make-check.log`) |
+
+No run installs, loads, or replaces the running module. The DKMS module loaded
+on the host is the previously installed 0.5.9 build, not the binaries produced
+by these runs. That is also true of the T10 runtime tiers: they exercise the
+0.5.9 build and are the before-fix baseline.
+
+## 2. Suite selection
+
+Selection rule: use the in-repo suite first. Add an external suite only where
+it proves something the in-repo suite cannot, and record it as blocked when the
+device node is denied. Exclude tools that cannot produce a result on this board.
+
+Status wording: "pre-fix baseline" marks a row produced on 2026-11-18 by T10
+against the stale 0.5.9 module that was loaded on the host. Such a row is real
+evidence about that build, but it is the BEFORE half of a before/after pair and
+must not be read as a result for the fixed build.
+
+| ID | Suite | Role | Status |
+| --- | --- | --- | --- |
+| S1 | In-repo `make check` (17 recipe commands) | Primary software regression gate | PASS |
+| S2 | In-repo build matrix (`tests/build-all-kernels.sh`) | Kernel-range and scanout-format gate | PASS |
+| S3 | Package build and release audit | Release-artifact gate | PASS |
+| S4 | `modetest` (libdrm) | Minimal KMS enumeration and modeset client | PASS (pre-fix baseline) |
+| S5 | `kmscube` | Independent KMS rendering client | PASS (pre-fix baseline) |
+| S6 | IGT GPU Tools KMS subset | Independent conformance, stretch artifact | FAIL (pre-fix baseline, 1 real) + GAP (VT-blocked subset) |
+| S7 | `v4l-utils` | Excluded: no capture path on this board | Not run by design |
+| S8 | `edid-decode` | EDID decoder, baseline diagnostic only | Reference only |
+
+### S1: in-repo `make check`
+
+- Package/version: the repository itself at 0.5.9; no external package. The
+  `check` target is `Makefile:30-48` and contains 17 command lines.
+- Command (exactly as archived in `01-make-check.log:5`):
+
+```sh
+make check KDIR=/lib/modules/7.3.3-100.fc43.x86_64/build CC=/usr/bin/gcc
+```
+
+- Pass criterion: exit 0, all 17 recipe commands execute, and no command
+  reports an error. The live vblank probe inside
+  `tests/check-drm-module.sh:80-90` is allowed to print `SKIP` only because
+  `/dev/dri/card0` was denied at the time of that run (before the T10 udev ACL);
+  that SKIP is not a pass, and it has not been re-run since the ACL was added.
+- Evidence: `docs/evidence/builds/01-make-check.log` (exit 0).
+
+### S2: in-repo build matrix
+
+- Package/version: `kernel-devel` trees 7.2.15-100.fc43, 7.3.3-100.fc43 and
+  7.3.4-100.fc43 installed on the host; `kernel-devel-6.17.1-300.fc43`
+  extracted with `rpm2cpio` from Fedora koji into `/mega/tmp/sm750/t5/k617`
+  (not installed). Script: `tests/build-all-kernels.sh`.
+- Command (as archived in `02-check-all-kernels.log:5`):
+
+```sh
+JOBS=12 CC=/usr/bin/gcc ./tests/build-all-kernels.sh
+```
+
+Per-tree form:
+
+```sh
+JOBS=12 CC=/usr/bin/gcc ./tests/build-all-kernels.sh \
+    /lib/modules/7.2.15-100.fc43.x86_64/build
+```
+
+- Pass criterion: exit 0 and the script's final line
+  `Built <N> sm750hdmidrm kernel/format combinations`, with N=9 for the three
+  installed trees and N=3 for the extracted 6.17.1 tree. The
+  `rgb565-bbdither` build of each tree runs the full `check` suite
+  (`tests/build-all-kernels.sh:33-34,46-54`); the other two formats are
+  required to compile and pass the metadata/compile-flag checks only.
+- Evidence: `02-check-all-kernels.log` (Built 9, exit 0),
+  `03-kernel-7.2.15-100.log`, `04-kernel-7.3.3-100.log`,
+  `05-kernel-7.3.4-100.log`, `06-kernel-6.17.1.log` (each Built 3, exit 0).
+
+### S3: package build and release audit
+
+- Package/version: repository `build-package.sh` at 0.5.9; host `dpkg-deb`;
+  audit script `tests/audit-release.sh`.
+- Commands (as archived in `07-build-package.log:4` and
+  `08-audit-release.log:4`):
+
+```sh
+./build-package.sh
+./tests/audit-release.sh
+```
+
+- Pass criterion: `build-package.sh` exits 0 and prints the `.deb` and source
+  tarball paths; `audit-release.sh` exits 0 and writes
+  `dist/RELEASE-AUDIT.txt` after checking the shipped archive against the
+  tracked tree (`tests/audit-release.sh:61-107`).
+- Evidence: `07-build-package.log`, `08-audit-release.log` (both exit 0).
+
+### S4: libdrm `modetest`
+
+- Package/version: `drm-utils-2.4.134-1.fc43.x86_64` (installed; provides
+  `modetest`, which has no `--version` flag), with libdrm 2.4.134.
+- Command:
+
+```sh
+modetest -c
+modetest -p
+modetest -s 35@38:1920x1080        # re-apply the already-active mode
+modetest -s 35@38:1024x768-60      # one alternate mode
+modetest -s 35@38:1920x1080        # restore (also run from a trap on any exit)
+```
+
+- Pass criterion: `modetest -c` exits 0 and lists connector 35
+  (`card0-HDMI-A-1`) with its modes and CRTC/plane properties; the `-s`
+  modeset exits 0 and the connector remains `connected`/`enabled` with
+  `dpms: On`.
+- Evidence/status: **PASS for the pre-fix baseline** (T10, 2026-11-18, uid 1005
+  `coder`, udev ACL on `/dev/dri/card0`). Files:
+  `docs/evidence/runtime/01-original-state.txt` (state captured before any
+  modeset), `02-modetest-connector.txt`, `03-modetest-properties.txt` (verbatim
+  `-c` and `-p`, both exit 0), `04-modeset.txt` (every command, exit code and
+  the restore). Connector 35 has **28** modes, not 36 as this section
+  previously stated; `#0 1920x1080 60.00` is preferred.
+- The CRTC had an active mode before the run (crtc 38 -> fb 43 at `(0,0)`
+  1920x1080, `connected`/`enabled`/`dpms: On`), so a modeset on this connector
+  is visible to the logged-in Plasma session. The original state was captured
+  first and the original mode was restored as the last action.
+- Modeset outcome: the alternate mode (1024x768-60) IS programmed and then
+  reverted when the client exits. Proof is in dmesg, not in the exit code:
+  `full-frame backbuffer staging enabled (1572864 bytes per buffer)` at the
+  set, then `(4147200 bytes)` 2.576 s later on process exit. The alternate mode
+  is therefore not retained by a one-shot `modetest -s`.
+- Tooling caveat that matters for reading any `modetest` result: **exit 0 is
+  not proof of a modeset.** `modetest -s 35@38:9999x9999` also exits 0 while
+  printing `failed to find mode "9999x9999"` and `failed to create dumb buffer:
+  Invalid argument`. The `-a` atomic form is a silent no-op on this stack
+  (exit 0, no output, no state change, zero dmesg lines); only the legacy `-s`
+  path reprograms the CRTC.
+- Note: `modetest -c -M sm750hdmidrm` is not a useful denied-state probe on
+  this libdrm: it fails at `failed to open device 'sm750hdmidrm'` before it
+  enumerates cards. `modetest -c` is the command that reaches the permission
+  error.
+- Scope limit: the module under test is the **stale pre-fix 0.5.9 build**
+  (no `/sys/module/sm750hdmidrm/version`, no `regs` debugfs node, `dkms status`
+  reports 0.5.9). This row is the BEFORE half of the before/after pair, not a
+  result for 0.6.0.
+
+### S5: `kmscube`
+
+- Package/version: `kmscube-0-11.20241006.git311eaaa.fc43.x86_64`, available
+  in the `fedora` repository; downloaded to `/mega/tmp/sm750/t3-tools`, not
+  installed. T10 ran it straight from the extracted payload
+  (`/mega/tmp/sm750/t10/x/kmscube-0-11.20241006.git311eaaa.fc43.x86_64/usr/bin/kmscube`);
+  `ldd` was fully satisfied, so no install was needed.
+- Command (flags verified against the extracted binary's usage output):
+
+```sh
+tail -f /dev/null | kmscube -D /dev/dri/card0 -c 60
+```
+
+- Pass criterion: exit 0 after rendering 60 frames on `card0-HDMI-A-1` at a
+  mode the connector advertises.
+- Evidence/status: **PASS for the pre-fix baseline** (T10, 2026-11-18). File:
+  `docs/evidence/runtime/05-kmscube.txt`. `-c 300` exits 0 with
+  `Rendered 299 frames in 5.066709 sec (59.012665 fps)`; `-c 120` exits 0 with
+  `Rendered 119 frames in 2.100066 sec (56.664892 fps)`. strace confirms the
+  real KMS path: `DRM_IOCTL_MODE_SETCRTC`, `ADDFB2` and `PAGE_FLIP` all return 0
+  with no failing syscalls, and a second client saw crtc 38's `fb_id` switch
+  from 43 to kmscube's own 42/44 while it rendered.
+- The stdin redirect is mandatory. kmscube polls stdin for the interrupt key;
+  with stdin at EOF (`/dev/null`) it prints `user interrupted!` and exits 0
+  **before** printing its frame counter. That behaviour, not a driver fault,
+  caused the old GAP. It is recorded as a tooling gap in `05-kmscube.txt`.
+- Renderer is `llvmpipe (LLVM 21.1.8, 256 bits)` - Mesa software rasterization,
+  not SM750 acceleration. The fps figure therefore measures the KMS/vblank
+  path, not GPU throughput.
+- Not proven by this tier: panel pixel content. `-A` (atomic) exits 255 with
+  `no eglDupNativeFenceFDANDROID`, and `-n 35` exits 255 because kmscube's
+  `-n` is a connector index, not the DRM connector id.
+- Scope limit: same **stale pre-fix 0.5.9** module as S4; BEFORE half only.
+
+### S6: IGT GPU Tools KMS subset
+
+- Package/version: `igt-gpu-tools-2.4-1.fc43.x86_64`, available in `updates`;
+  downloaded to `/mega/tmp/sm750/t3-tools`, not installed. The KMS binaries
+  live under `/usr/libexec/igt-gpu-tools/`, not `/usr/bin` (the package ships
+  63 `/usr/bin` programs and no `igt-info`). T10 extracted the payload to
+  `/mega/tmp/sm750/t10/x/igt-gpu-tools-2.4-1.fc43.x86_64` and found 359
+  binaries under `usr/libexec/igt-gpu-tools`.
+- Proposed subset, all generic KMS tests that do not require Intel ioctls:
+  `kms_setmode`, `kms_atomic`, `kms_flip`, `kms_pipe_crc_basic`, plus
+  `kms_addfb_basic`, `kms_rmfb`, `kms_getfb`, `dumb_buffer`, `core_getversion`.
+- Command (after extraction; `libgsl.so.28` and `libgslcblas.so.0` come from
+  `gsl-2.8-2.fc43.x86_64`, which is not installed):
+
+```sh
+IGT=/mega/tmp/sm750/t10/x/igt-gpu-tools-2.4-1.fc43.x86_64
+LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr/lib64 \
+  "$IGT/usr/libexec/igt-gpu-tools/kms_setmode" --device /dev/dri/card0 --run-subtest basic
+```
+
+- Pass criterion: the test exits 0 with `SUCCESS` (a SKIP is not a pass,
+  because the only acceptable skip reason is absent CRC support, not absent
+  device access).
+- Evidence/status: **FAIL for the pre-fix baseline, with one genuine driver
+  failure and a separate tooling blocker.** File:
+  `docs/evidence/runtime/06-igt.txt`; raw output and exit codes in
+  `/mega/tmp/sm750/t10/f_<test>.out|.err` and `igt_exitcodes.txt`. The GSL
+  dependency chain is now solved rootlessly (nested path
+  `gsl/gsl-2.8-2.fc43.x86_64/usr/lib64`), so IGT binaries start.
+- Exit codes: `core_getversion` 0, `dumb_buffer` 0, `kms_addfb_basic` 98,
+  `kms_getfb` 98, `kms_rmfb` 98, `kms_fb_coherency` 77, `kms_dirtyfb` 77,
+  `kms_setmode` 98, `kms_flip` 79, `kms_atomic` 98, `kms_pipe_crc_basic` 79.
+- The one real driver failure: `kms_addfb_basic` subtest `size-max` fails at
+  `../tests/kms_addfb_basic.c:594` with `Last errno: 22, Invalid argument` on
+  `DRM_IOCTL_MODE_ADDFB2` - the driver rejects the maximum-size framebuffer.
+  It emits no kernel message. The other 26 subtests pass and 14 skip as
+  Intel-only (`is_i915_device` / `is_intel_device`).
+- `kms_setmode`, `kms_atomic`, `kms_flip`, `kms_pipe_crc_basic` and `kms_rmfb`
+  never reach the driver: they abort in `kmstest_set_vt_graphics_mode`
+  (`../lib/igt_kms.c:1558`, `Failed assertion: ret >= 0`,
+  `Last errno: 13, Permission denied`) because IGT opens `/dev/tty0`, which is
+  `crw------- root tty`. Closing that needs root or an ACL on `/dev/tty0`,
+  neither of which is in scope. Recorded as the blocker, not as a driver
+  failure.
+- `kms_getfb`'s two failures (`getfb-handle-protection`,
+  `getfb2-handle-protection`) are `igt_aux-CRITICAL: ... igt_drop_root ...
+  Failed assertion: getuid() == 0 / error: 1005 != 0` - the test needs uid 0 to
+  drop privileges. Tooling, not driver.
+- `kms_fb_coherency` and `kms_dirtyfb` SKIP (exit 77) with
+  `No known gpu found for chipset flags 0x129 (other)`; IGT has no device-filter
+  entry for `sm750hdmidrm`, and `IGT_FORCE_DRIVER=sm750hdmidrm` did not change
+  it. Tooling/capability gap.
+- Caveat: `kms_pipe_crc_basic` cannot prove pixels on this driver. `src/` has
+  no CRC or writeback implementation, so IGT reports SKIP rather than a CRC
+  result.
+- Scope limit: same **stale pre-fix 0.5.9** module as S4; BEFORE half only.
+
+### S7: `v4l-utils` (excluded)
+
+- Package/version: `v4l-utils-1.32.0-1.fc43.x86_64`, available in `updates`;
+  downloaded to `/mega/tmp/sm750/t3-tools`, not installed.
+- Reason for exclusion: the `SE-DP750A-HDMI` board has one HDMI output driven
+  by the SM750/SiI9024A and no V4L2 capture device. `v4l2-ctl --list-devices`
+  could only enumerate unrelated host devices, so it cannot prove any driver
+  claim. There is no capture node to exercise and no pass criterion that maps
+  to this product.
+- What is retained: `edid-decode` from the same RPM payload was used once on
+  the world-readable sysfs EDID (S8). That is an EDID decode, not a V4L2
+  capture test.
+
+### S8: `edid-decode` (baseline reference only)
+
+- Package/version: `edid-decode` from `v4l-utils-1.32.0-1.fc43.x86_64`,
+  extracted into `/mega/tmp/sm750/t3/v4l`.
+- Evidence: `docs/evidence/baseline/15-edid-decode.txt`.
+- Status: reference capture from 2026-11-17, before T5. It is not a result row
+  and is not used to claim a post-fix pass. It records the panel identity and
+  extension-block checksum so later EDID comparisons have a baseline.
+
+## 3. `make check`: the 17 recipe commands
+
+Exact environment for this run:
+
+```sh
+export PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig
+export PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm
+export LD_LIBRARY_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64
+export C_INCLUDE_PATH=/mega/tmp/sm750/t3/libdrm/usr/include
+make check KDIR=/lib/modules/7.3.3-100.fc43.x86_64/build CC=/usr/bin/gcc
+```
+
+The `check` prerequisites (`Makefile:30-31`) first build the module and three
+test binaries (`Makefile:56-64`); the `check-deps` preflight (`Makefile:17-28`)
+runs before them. Those are prerequisites, not recipe commands. The 17
+commands below are `Makefile:32-48` and their observed results in
+`01-make-check.log`:
+
+| # | Command (Makefile line) | Observed result in `01-make-check.log` | Verdict |
+| --- | --- | --- | --- |
+| 1 | `./tests/check-drm-module.sh src/sm750hdmidrm.ko` (:32) | `SKIP` for the live probe (uid 1005, `/dev/dri/card0`); metadata checks passed | PASS (probe GAP) |
+| 2 | `./tests/check-drm-policy.sh` (:33) | `DRM mode policy checks passed` | PASS |
+| 3 | `./tests/check-drm-xorg-config.sh` (:34) | `DRM Xorg isolation checks passed` | PASS |
+| 4 | `./tests/check-drm-packaging.sh` (:35) | `Unified DRM package checks passed` | PASS |
+| 5 | `./tests/check-release-version.sh` (:36) | `Release version consistency checks passed: 0.5.9` | PASS |
+| 6 | `./tests/check-softscale-map.sh` (:37) | `Softscale 2560/2464-to-2048 mapping checks passed` | PASS |
+| 7 | `./tests/check-softscale-sharpen.sh` (:38) | `Softscale 8% contrast sharpening checks passed` | PASS |
+| 8 | `./tests/check-softscale-codegen.sh src/sm750_dither.o` (:39) | `Softscale generated-code checks passed` | PASS |
+| 9 | `./tests/check-hardware-cursor.sh` (:40) | `Hardware cursor plane checks passed` | PASS |
+| 10 | `./tests/check-shadow-dma.sh` (:41) | `Shadow DMA safety checks passed` | PASS |
+| 11 | `./tests/check-backbuffer-staging.sh` (:42) | `Full-frame backbuffer staging checks passed` | PASS |
+| 12 | `./tests/check-shadow-async.sh` (:43) | `Asynchronous shadow mailbox checks passed` | PASS |
+| 13 | `./tests/check-shadow-source-damage.sh` (:44) | `Shadow source-difference damage checks passed` | PASS |
+| 14 | `python3 tests/test-vblank-timer.py` (:45) | Six schedules passed: normal, time-lock, event-lock, superseded, cancel-enable, sync-stop | PASS |
+| 15 | `./tests/test-bbdither-rgb565` (:46) | `bbdither RGB565 checks passed` | PASS |
+| 16 | `./tests/test-scale-optimizations` (:47) | `Packed scaler, unrolled span and fixed-sharpen checks passed` | PASS |
+| 17 | `python3 tests/test-staging-results.py` (:48) | `Ran 4 tests ... OK` | PASS |
+
+No command is excluded. Command 1's live probe was skipped in the recorded run
+for one documented reason: `tests/check-drm-module.sh:85` requires a read-write
+`card0`, and the node was denied to this user at the time. The script prints
+that the skip is not a pass. The skipped probe is tracked as GAP row R12 in
+section 4, not hidden inside the PASS row. Since T10 added the udev ACL for
+`coder`, that probe could now be re-run; T10 did not re-run `make check`, so
+R12 stays GAP until it is.
+
+Without the libdrm chain, `check-deps` (`Makefile:18-23`) exits 1 with the
+install hint; the pre-fix failure at `tests/check-vblank.c:11` is recorded in
+`10-defect-before-after.log` (A03 section).
+
+## 4. Recorded results
+
+All rows are post-T5 runs or post-T5 probes on 2026-11-18. PASS rows point at
+an existing file under `docs/evidence/builds/`. GAP rows point at the archived
+denial or at the probe transcript in section 9.
+
+| # | Run | Kernel | Tool version | Command | Evidence | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| R1 | `make check`, 17 commands | 7.3.4 running, KDIR 7.3.3 | GCC 15.3.1, libdrm 2.4.134 | `make check KDIR=/lib/modules/7.3.3-100.fc43.x86_64/build CC=/usr/bin/gcc` | `docs/evidence/builds/01-make-check.log` | PASS |
+| R2 | Build matrix, 9 combinations | 7.3.4 running; headers 7.2.15/7.3.3/7.3.4 | GCC 15.3.1 | `JOBS=12 CC=/usr/bin/gcc ./tests/build-all-kernels.sh` | `docs/evidence/builds/02-check-all-kernels.log` | PASS |
+| R3 | Build matrix, 3 combinations | headers 7.2.15 | GCC 15.3.1 | `./tests/build-all-kernels.sh /lib/modules/7.2.15-100.fc43.x86_64/build` | `docs/evidence/builds/03-kernel-7.2.15-100.log` | PASS |
+| R4 | Build matrix, 3 combinations | headers 7.3.3 | GCC 15.3.1 | `./tests/build-all-kernels.sh /lib/modules/7.3.3-100.fc43.x86_64/build` | `docs/evidence/builds/04-kernel-7.3.3-100.log` | PASS |
+| R5 | Build matrix, 3 combinations | headers 7.3.4 | GCC 15.3.1 | `./tests/build-all-kernels.sh /lib/modules/7.3.4-100.fc43.x86_64/build` | `docs/evidence/builds/05-kernel-7.3.4-100.log` | PASS |
+| R6 | Build matrix, 3 combinations | headers 6.17.1-300 (extracted) | GCC 15.3.1 | `./tests/build-all-kernels.sh /mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64` | `docs/evidence/builds/06-kernel-6.17.1.log` | PASS |
+| R7 | Package build | 7.3.4 | `dpkg-deb` (host) | `./build-package.sh` | `docs/evidence/builds/07-build-package.log` | PASS |
+| R8 | Release audit | 7.3.4 | `tests/audit-release.sh` | `./tests/audit-release.sh` | `docs/evidence/builds/08-audit-release.log` | PASS |
+| R9 | Warning scan of all build logs | 7.3.4 | GCC 15.3.1 | `grep -nE '(warning\|error):' docs/evidence/builds/*.log` | `docs/evidence/builds/11-warnings-scan.log` | PASS |
+| R10 | Defect before/after verification | 7.3.4 | GCC 15.3.1 | `bash /mega/tmp/sm750/t5/mk-before-after.sh` | `docs/evidence/builds/10-defect-before-after.log` | PASS |
+| R11 | Register-dump read attempt | 7.3.4 | module 0.5.9 built for 7.3.3 | `cat /sys/kernel/debug/dri/0/regs` | `docs/evidence/builds/09-register-dump.log` | GAP |
+| R12 | Live vblank probe (`check-vblank`) | 7.3.4 | libdrm 2.4.134 client | `tests/check-vblank /dev/dri/card0 60` (skipped by `check-drm-module.sh`) | `docs/evidence/builds/01-make-check.log:41` | GAP |
+| R13 | `modetest` connector dump and modeset | 7.3.4 | drm-utils 2.4.134-1 | `modetest -c`, `modetest -p`, `modetest -s 35@38:1920x1080`, `modetest -s 35@38:1024x768-60` | `docs/evidence/runtime/01`-`04` | PASS (pre-fix baseline) |
+| R14 | `kmscube` render | 7.3.4 | kmscube 0-11.20241006.git311eaaa | `tail -f /dev/null \| kmscube -D /dev/dri/card0 -c 300` | `docs/evidence/runtime/05-kmscube.txt` | PASS (pre-fix baseline) |
+| R15 | IGT KMS subset | 7.3.4 | igt-gpu-tools 2.4-1 | 11 binaries, `--device /dev/dri/card0` | `docs/evidence/runtime/06-igt.txt` | FAIL (1 real) + GAP (VT-blocked) |
+| R16 | Modeset before/after state capture | 7.3.4 | drm-utils 2.4.134-1 | `modetest -p` before, during and after each `-s` | `docs/evidence/runtime/01`, `04` | PASS (pre-fix baseline) |
+| R17 | Kernel-log capture during runtime tiers | 7.3.4 | `dmesg`, `journalctl -k` | `sudo -n dmesg`, `sudo -n journalctl -k -b -q --no-pager` | `docs/evidence/runtime/07-kernel-log.txt` | FAIL (1 error episode, not reproducible) |
+
+Counts: 13 PASS, 2 FAIL, 3 GAP. The PASS rows are backed by
+`01-make-check.log`, `02-check-all-kernels.log`,
+`03-kernel-7.2.15-100.log`, `04-kernel-7.3.3-100.log`,
+`05-kernel-7.3.4-100.log`, `06-kernel-6.17.1.log`,
+`07-build-package.log`, `08-audit-release.log`, `11-warnings-scan.log`,
+`10-defect-before-after.log` and, for R13/R14/R16, the `docs/evidence/runtime/`
+files. The FAIL rows are R15 (`kms_addfb_basic` `size-max`, errno 22 on
+`ADDFB2`) and R17 (one kernel error episode at `[8523..8586]`); both are
+backed by `06-igt.txt` and `07-kernel-log.txt`.
+
+The two FAIL rows are the first failures recorded in this document. Both belong
+to the **stale pre-fix 0.5.9** module and are the BEFORE half of the
+before/after pair; neither is a 0.6.0 result.
+
+A GAP is recorded when the operation was denied or a required device node was
+absent; it is not a driver failure and is not upgraded to PASS by inference.
+R11 (debugfs `regs`, `/sys/kernel/debug` is 0700) and R12 (live vblank probe
+skipped by `check-drm-module.sh`) remain GAP; the third GAP is the VT-blocked
+IGT subset inside R15, which never reached the driver.
+
+## 5. Acceptance criterion 3: display behaviour on the panel
+
+Claim under test: this driver drives the connected `card0-HDMI-A-1` panel at a
+requested mode and outputs the expected pixels.
+
+Evidence ladder, strongest last. The first three rungs now exist for the
+pre-fix baseline; the pixel rungs do not.
+
+| Evidence | What it proves | Recorded? |
+| --- | --- | --- |
+| Sysfs connector state and EDID | The driver registered the connector, read a 256-byte EDID, reports `connected`/`enabled`/`dpms: On` and 28 modes with 1920x1080 preferred. This is state description, not a modeset test: it is the state left by whatever configured the display before the test and does not prove this build produced it. | Yes, `docs/evidence/baseline/03-connector.txt`, `02-edid.txt`, `15-edid-decode.txt` (pre-T5 baseline) |
+| `modetest -c` | libdrm can open the KMS device and enumerate connector 35, encoders, CRTCs and planes with their properties. | Yes, `docs/evidence/runtime/02-modetest-connector.txt` (pre-fix baseline, exit 0) |
+| `modetest -s 35@38:1920x1080` | The atomic commit for the requested mode is accepted by the driver and the connector stays enabled with DPMS On. | Yes, `docs/evidence/runtime/04-modeset.txt` (pre-fix baseline; the alternate mode is programmed but reverted on client exit) |
+| Framebuffer content readback | A known pattern written through the driver can be read back from the GEM/dumb buffer. This proves the upload/composition path, not the scanout: the bytes may be correct while the panel shows nothing. | Partly: a GEM readback of the fb bound to crtc 38 succeeded unprivileged but returned a static, essentially blank buffer (48 nonzero bytes of 8294400, byte-identical across three samples while Plasma ran), because the shadow/backbuffer path means the GEM object is not the scanned-out memory. Not usable as pixel proof. |
+| Scanout CRC | A CRC of the CRTC output proves the pixel stream at the connector. The driver implements no CRC source (`src/` has no crc/writeback code), so this rung is unavailable even with `/dev/dri` access. | No |
+| External capture or photograph of the panel | The only end-to-end proof that the requested pixels reached the display. No capture hardware is attached to this host. | No |
+
+Why connector status alone is insufficient: `enabled` and `dpms: On` are
+attributes of the connector state, not a statement that the CRTC scanned the
+expected framebuffer. The current state could come from the boot firmware, the
+fbdev console, or the previously installed module. None of those is the
+post-fix build under test.
+
+AC-3 is therefore **GAP for pixel proof**, and **partly proven for the
+modeset itself** on the pre-fix baseline: the driver accepts the commit, the
+alternate mode is really programmed (dmesg staging bytes) and then reverted on
+client exit, and the panel returns to its original mode. What remains unproven
+is what the panel actually shows. Remaining closing sequence:
+
+```sh
+# already done in T10: udev ACL on /dev/dri/card0 lets uid 1005 open card0
+modetest -c
+modetest -s 35@38:1920x1080
+modetest -s 35@38:1024x768-60
+modetest -s 35@38:1920x1080
+# still blocked: pixel proof needs a CRC source (absent from src/) or an
+# external capture; kms_pipe_crc_basic cannot help without one.
+```
+
+## 6. Acceptance criterion 5: kernel-range and regression coverage
+
+Claim under test: the 6.17+ support statement is backed by a warning-clean
+build and the regression suite across the declared kernel range, for all
+three scanout defaults.
+
+What proves it:
+
+- A build exits 0 for each kernel tree and each of the three formats
+  (`rgb565-bbdither`, `xrgb8888`, `rgb565`), with the format macro verified in
+  the object command line (`tests/build-all-kernels.sh:41-54`).
+- The `rgb565-bbdither` build of each tree runs the full 17-command `check`
+  suite (`tests/build-all-kernels.sh:33-34`), not only the metadata checks.
+- The warning scan attributes no warning or error to `src/*.c` or `src/*.h`
+  (`11-warnings-scan.log`).
+- The declared floor 6.17 is built, not merely declared.
+
+Recorded:
+
+| Coverage | Result | Evidence |
+| --- | --- | --- |
+| 7.2.15, three formats | Built 3, exit 0 | `03-kernel-7.2.15-100.log` |
+| 7.3.3, three formats | Built 3, exit 0 | `04-kernel-7.3.3-100.log` |
+| 7.3.4, three formats | Built 3, exit 0 | `05-kernel-7.3.4-100.log` |
+| 6.17.1-300, three formats | Built 3, exit 0 | `06-kernel-6.17.1.log` |
+| All installed trees in one run | Built 9, exit 0 | `02-check-all-kernels.log` |
+| Driver-source warnings | none | `11-warnings-scan.log` |
+
+Limits of this evidence:
+
+- Only the dithered RGB565 build receives the full suite. XRGB8888 and plain
+  RGB565 receive the module metadata and compile-flag checks; that is the
+  script's design (`tests/build-all-kernels.sh:30-39`), not an accidental skip.
+- 6.17.1-300 is an offline build against extracted headers. It is not
+  installed or booted.
+- 6.18, 7.0 and 7.1 header trees named in the README compatibility paragraph
+  are not installed on this host, so that part of the matrix is not
+  re-verified post-T5.
+- 7.2.13-100 no longer has a build link; `readlink -f
+  /lib/modules/7.2.13-100.fc43.x86_64/build` returns nothing on 2026-11-18.
+  The 7.2.x row is covered by 7.2.15.
+- The compiler-mismatch warning appears only for the 6.17.1 tree (the archive
+  kernel was built with GCC 15.2.1; this host has 15.3.1). It is out of scope
+  and attributed to tooling, not driver source.
+
+AC-5 is **PASS for offline build and regression coverage** and **GAP for
+runtime behaviour**: no kernel in the matrix was booted with the newly built
+module, and no runtime claim is made.
+
+## 7. Claims that remain unproven
+
+| Claim | Why it is unproven | Blocking gap |
+| --- | --- | --- |
+| A post-fix build performs a modeset on the panel | The modeset path now works unprivileged, but only the **stale pre-fix 0.5.9** module has been exercised; the 0.6.0 build was not loaded in T10 | needs the after-fix run |
+| The panel shows the expected pixels at 1920x1080 | No CRC source, no framebuffer capture, no external capture; the GEM readback returns a static blank buffer because of the shadow path | GAP-B3 (partly), pixel proof open |
+| Hotplug detect and the SiI902X workaround behave on hardware | The SiI9024A not-ready warning is now observed on every mode program (`HPD=1 RSEN=0 status=04`), but no hotplug event can be generated | GAP-B2 |
+| Vblank timing meets 60 Hz on hardware | `check-vblank` live probe is still skipped; kmscube reaches 59.01 fps over 299 frames, which is suggestive but not a vblank-timing measurement | GAP-B3 |
+| DMA upload and its failure fallback work on hardware | Software checks only; no device-path execution | GAP-B3 |
+| Suspend/resume restores the display | No runtime test; `dmesg` is readable but no suspend was attempted | GAP-B2 |
+| Register values before and after a modeset | The `regs` debugfs file exists but `/sys/kernel/debug` is 0700 | GAP-B4 |
+| IGT KMS conformance | `kms_setmode`, `kms_atomic`, `kms_flip`, `kms_pipe_crc_basic` and `kms_rmfb` abort in `kmstest_set_vt_graphics_mode` because `/dev/tty0` is root-only; `kms_addfb_basic` `size-max` fails with errno 22 | GAP-B3 (VT), 1 real FAIL |
+| `kmscube` renders on this card | Proven for the pre-fix baseline: 299 frames in 5.07 s, real `SETCRTC`/`PAGE_FLIP` | resolved (pre-fix baseline) |
+| Kernel-log evidence of probe/remove or errors | Now readable: `dmesg` and `journalctl -k` both return the full 2017-line log. One error episode observed and not reproduced | resolved for access; episode open |
+| VBIOS ROM contents and strap configuration | ROM image captured (T12): 49152 bytes, checksum valid, `PCIR` 126f:0750; strap configuration still not readable from the image | GAP-B1 closed for contents; strap unknown |
+| PCI capabilities beyond 0x40 | `Capabilities: <access denied>` | GAP-B5 |
+| Runtime on 6.18, 7.0, 7.1 and final 7.4 | Headers absent or release not final; no boot | offline matrix only |
+| `.deb` or RPM install/erase | Root-only packaging path; T6 owns it | out of T4 scope |
+
+## 8. IGT as a stretch artifact
+
+IGT conformance is a **stretch artifact, not a gating deliverable**. The
+in-repo suite plus the build matrix are the gating evidence for this release.
+IGT would add independent KMS coverage that no in-repo check can provide.
+
+T10 got IGT to start and produced real results on the pre-fix baseline
+(`docs/evidence/runtime/06-igt.txt`), but only a subset can reach the driver.
+Both of the original blockers were closed; a third one was found behind them.
+
+Blockers, in the order they are hit:
+
+1. `libgsl.so.28` and `libgslcblas.so.0` are absent. They come from
+   `gsl-2.8-2.fc43.x86_64` (available in `fedora`). **CLOSED rootlessly** by
+   extraction; note the extracted directory is nested, so the library path ends
+   in `gsl/gsl-2.8-2.fc43.x86_64/usr/lib64`, not `gsl/usr/lib64`:
+
+```sh
+mkdir -p /mega/tmp/sm750/t10/x /mega/tmp/sm750/t10/gsl
+dnf download --destdir /mega/tmp/sm750/t10/x igt-gpu-tools kmscube drm-utils
+dnf download --destdir /mega/tmp/sm750/t10/gsl gsl
+for d in /mega/tmp/sm750/t10/x /mega/tmp/sm750/t10/gsl; do
+    (cd "$d" && for r in *.rpm; do rpm2cpio "$r" | cpio -idm; done)
+done
+```
+
+2. `/dev/dri/card0` is denied. **CLOSED** by a udev ACL:
+   `getfacl /dev/dri/card0` shows `user:coder:rw-`, and uid 1005 opens the node.
+
+3. `/dev/tty0` is `crw------- root tty`. **OPEN.** IGT's
+   `kmstest_set_vt_graphics_mode` (`../lib/igt_kms.c:1558`) opens it to issue
+   `KDSETMODE`, gets `errno 13 Permission denied`, and aborts the subtest before
+   any KMS ioctl. This blocks `kms_setmode`, `kms_atomic`, `kms_flip`,
+   `kms_pipe_crc_basic` and `kms_rmfb`. Closing it needs root or an ACL on
+   `/dev/tty0`; neither is in T10's constraints.
+
+The gate that can actually run today (no VT switch needed):
+
+```sh
+IGT=/mega/tmp/sm750/t10/x/igt-gpu-tools-2.4-1.fc43.x86_64
+GSL=/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64
+export LD_LIBRARY_PATH=$IGT/usr/lib64:$GSL/usr/lib64
+B=$IGT/usr/libexec/igt-gpu-tools
+for t in core_getversion dumb_buffer kms_addfb_basic kms_getfb; do
+    "$B/$t" --device /dev/dri/card0 || echo "$t -> exit $?"
+done
+```
+
+Observed on the pre-fix baseline: `core_getversion` exit 0 (2 SUCCESS),
+`dumb_buffer` exit 0 (6 SUCCESS), `kms_addfb_basic` exit 98 (26 SUCCESS,
+14 SKIP, 1 FAIL `size-max` errno 22 on `ADDFB2`), `kms_getfb` exit 98
+(10 SUCCESS, 2 SKIP, 2 FAIL, both `igt_drop_root` needing uid 0).
+
+Pass criterion: every selected test exits 0 with `SUCCESS`. SKIP is not a
+pass. `kms_pipe_crc_basic` is listed as optional only: the driver has no CRC
+source, so it would skip for a reason unrelated to device access - and on this
+host it currently fails earlier, at the VT blocker.
+
+## 9. Post-T5 blocked-suite probes (historical) and the T10 unblocked run
+
+Observed on 2026-11-18 between 05:10Z and 05:17Z, `uid=1005(coder)`, running
+kernel 7.3.4-100.fc43.x86_64. These are the probes that originally created rows
+R13-R15 and are kept as the record of the denied state.
+
+```sh
+$ modetest -c
+no device found
+trying to open device '/dev/dri/card3'... failed
+trying to open device '/dev/dri/card2'... failed
+trying to open device '/dev/dri/card1'... failed
+trying to open device '/dev/dri/card0'... failed
+[exit 255]
+```
+
+```sh
+$ kmscube -D /dev/dri/card0 -c 60
+could not open drm device
+failed to initialize legacy DRM
+[exit 255]
+```
+
+```sh
+$ LD_LIBRARY_PATH=/tmp/opencode/t4-igt/usr/lib64 \
+    /tmp/opencode/t4-igt/usr/libexec/igt-gpu-tools/kms_setmode --run-subtest basic
+.../kms_setmode: error while loading shared libraries: libgsl.so.28: cannot open shared object file: No such file or directory
+[exit 127]
+```
+
+`modetest -c -M sm750hdmidrm` was also tried and fails earlier at
+`failed to open device 'sm750hdmidrm' with busid '(null)': No such file or
+directory`, so `modetest -c` is the probe that reaches the permission check.
+
+**Superseded by T10** (2026-11-18, after the udev ACL on `/dev/dri/card0`).
+All three commands now run; the observed outcomes are in
+`docs/evidence/runtime/01`-`07` and summarised in rows R13-R17:
+
+```sh
+$ modetest -c            # exit 0, connector 35 HDMI-A-1, 28 modes, 1920x1080 preferred
+$ modetest -p            # exit 0, crtc 38 -> fb 43 (0,0) (1920x1080), dpms On
+$ tail -f /dev/null | kmscube -D /dev/dri/card0 -c 300
+                         # exit 0, Rendered 299 frames in 5.066709 sec (59.012665 fps)
+$ kms_addfb_basic --device /dev/dri/card0
+                         # exit 98, 26 SUCCESS / 14 SKIP / 1 FAIL (size-max)
+$ kms_setmode --run-subtest basic --device /dev/dri/card0
+                         # exit 98, FAIL at kmstest_set_vt_graphics_mode, errno 13
+```
+
+The remaining probes in section 9 are kept because the denied-state text is
+still the correct description of a host without the ACL, and because the
+`modetest -c -M` note above still applies.
+
+## 10. Consistency with other documents
+
+Where the plan or an older capture conflicts with the archived evidence, the
+evidence wins. The conflicts resolved here:
+
+| Conflict | Resolution |
+| --- | --- |
+| Task text says an "18-check" `make check`; `ENVIRONMENT.md` section 6 and `13-make-check-count.txt` say 17 | 17. The `check` recipe has 17 command lines (`Makefile:32-48`). A naive tab-line count over `Makefile:30-48` returns 18 because the prerequisite list at `Makefile:30-31` continues on a tab-indented second line; that line is not a recipe command. `01-make-check.log:8` records 17. |
+| `ENVIRONMENT.md` section 6 cited `Makefile:16-32` for the recipe | That range is pre-T5. After T5's edits the recipe is `Makefile:30-48`; the count is unchanged. T7 refreshed `ENVIRONMENT.md` section 6 to the current line numbers. |
+| `ENVIRONMENT.md` section 2 listed 7.2.13-100 as a usable tree | 7.2.13 no longer has a `build` link on 2026-11-18. The recorded matrix is 7.2.15/7.3.3/7.3.4 plus the extracted 6.17.1, matching `02`-`06`. T7 refreshed the table. |
+| `ENVIRONMENT.md` section 1 recorded kernel 7.3.3 | The host now runs 7.3.4. T5 logs record 7.3.4 as the running kernel, and R1 still builds against the 7.3.3 `KDIR` explicitly. T7 refreshed the value and kept the T3 capture as the historical record. |
+| `EVIDENCE-GAPS.md` GAP-B3 closing command uses `modetest -c -M sm750hdmidrm` | Keep `-M` for the post-access run; use plain `modetest -c` for the denied-state probe, because `-M` fails before card enumeration on this libdrm. |
+| `EVIDENCE-GAPS.md:87-89` says `journalctl -k -b` returns 0 lines for this user | Not reproduced in T10: `sudo -n journalctl -k -b -q --no-pager` exits 0 with the full 2017-line boot log, identical to `sudo -n dmesg`. Recorded in `07-kernel-log.txt`; `EVIDENCE-GAPS.md` was not edited (out of T10 scope). |
+| This document previously said connector 35 has 36 modes | 28 modes. `modetest -c` in `02-modetest-connector.txt` lists 28, with `#0 1920x1080 60.00` preferred. The 36 figure was a pre-T5 sysfs count and is corrected here. |
+| S4/S5/S6 previously read GAP on the grounds that no KMS client could open `card0` | That was true before the udev ACL. T10 ran all three suites unprivileged; S4 and S5 pass on the pre-fix baseline, S6 produces one genuine driver failure (`size-max`) plus a VT-permission blocker. All of it is BEFORE-fix data on the stale 0.5.9 module. |
+| `ENVIRONMENT.md` says IGT ships no `igt-info` | Correct. The KMS test binaries are in `/usr/libexec/igt-gpu-tools/`, not `/usr/bin`; no `igt-info` exists in the package. |
+| Plan says the matrix covers 7.2.13-100 | Actual post-T5 matrix covers 7.2.15-100, 7.3.3-100 and 7.3.4-100. Recorded in `02`-`05`. |

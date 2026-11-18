@@ -1,0 +1,61 @@
+# host: deneb
+# kernel: 7.3.3-100.fc43.x86_64
+# utc: 2026-11-17T18:31:29Z
+# command: modinfo sm750hdmidrm
+# ---- output (stdout+stderr, LC_ALL=C) ----
+filename:       /lib/modules/7.3.3-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+license:        GPL v2
+description:    Atomic DRM/KMS driver for SM750G10 SiI9024A HDMI boards
+author:         Benjamin Brown
+alias:          pci:v0000126Fd00000750sv*sd*bc*sc*i*
+depends:        drm_vram_helper,drm_ttm_helper
+name:           sm750hdmidrm
+retpoline:      Y
+vermagic:       7.3.3-100.fc43.x86_64 SMP preempt mod_unload 
+sig_id:         PKCS#7
+signer:         DKMS module signing key
+sig_key:        1F:E4:00:60:7A:A5:61:3A:B7:7D:E3:D7:36:8D:B7:19:D6:23:05:B3
+sig_hashalgo:   sha512
+signature:      70:A9:B7:D2:DF:C7:5E:92:F5:19:AD:68:A8:BC:8C:E9:61:F6:6D:9C:
+		C1:EC:30:28:DC:78:EB:3D:5F:76:BA:8F:77:9F:E4:85:08:4A:FB:68:
+		AA:66:88:89:81:25:E6:F1:E3:78:1D:8C:E1:4C:7E:A2:BD:98:01:5D:
+		F9:3F:0E:6E:37:2D:D3:BE:41:E3:63:B9:CC:92:D4:2F:44:AD:37:DE:
+		89:07:0D:4F:9F:16:53:80:D8:E6:EA:4C:C7:43:BE:BF:75:00:E2:FA:
+		92:2C:16:D4:39:98:45:1F:3F:A3:A9:93:55:67:16:33:AD:1C:2E:51:
+		01:F8:61:3C:DB:95:C2:B9:C9:AD:27:84:6D:79:81:B4:1E:57:C2:B6:
+		BC:41:E7:B9:A1:72:C4:8E:97:97:40:1A:83:65:01:A9:7C:9E:A6:F9:
+		80:8E:1E:71:0F:92:96:99:1A:B2:E1:D7:B6:F8:C3:24:19:43:AE:33:
+		63:3D:F6:5C:23:E0:61:6D:7A:46:66:FF:00:80:A1:A3:97:B4:5E:39:
+		33:18:C6:51:DB:94:CA:25:34:B4:02:E5:DB:A5:F3:1D:49:E2:8B:E7:
+		65:DB:31:56:F9:72:06:13:F5:41:58:04:F9:CA:42:CB:96:68:D2:86:
+		4C:3F:E2:20:28:16:5E:EB:03:A5:DD:2D:AF:08:53:91
+parm:           sii9024_dvi:Force DVI signalling over the HDMI connector (default: false) (bool)
+parm:           sii9024_falling_edge:Sample the 24-bit input bus on the falling pixel-clock edge (test only, default: false/rising) (bool)
+parm:           sii9024_tpi_totals:Program TPI 0x04-0x07 with raster totals as specified by the SiI9024A programming guide and board ROM (default: true) (bool)
+parm:           sii9024_no_termination:Disable internal TMDS source termination for an isolated output-stage test (default: false) (bool)
+parm:           sii9024_force_termination:Explicitly enable internal TMDS source termination, including in the literal option-ROM path (test only, default: false) (bool)
+parm:           sii9024_clean_init:Use only documented TPI initialization registers and omit inherited board-ROM magic (test only, default: false) (bool)
+parm:           sii9024_rom_exact:Replay the SE-DP750A-HDMI option-ROM initialization order; 1280x720 is byte-for-byte and selected diagnostic modes replace only the TPI timing bytes (test only, default: false) (bool)
+parm:           sii9024_rom_hdmi:With sii9024_rom_exact, replace only the final DVI enable with a valid 720p AVI InfoFrame and HDMI enable (test only) (bool)
+parm:           sii9024_force_black:With sii9024_rom_exact, make the transmitter replace input RGB with black while retaining clock/sync and TMDS (test only) (bool)
+parm:           dvo_clock_phase:DVO clock phase: -1=board option-ROM strap, 0=rising, 1=falling (int)
+parm:           sii9024_scl:SiI9024A software-I2C SCL GPIO (int)
+parm:           sii9024_sda:SiI9024A software-I2C SDA GPIO (int)
+parm:           preferred_width:Optional preferred mode width in pixels (uint)
+parm:           preferred_height:Optional preferred mode height in lines (uint)
+parm:           preferred_refresh:Optional preferred mode refresh in Hz (uint)
+parm:           dma_batch_rows:DMA batch rows, sampled per update and clamped to 1-128 (default 16) (uint)
+parm:           staging_timing:Log complete-frame upload and presentation timing for benchmarking (bool)
+parm:           scanout_format:Scanout backend: xrgb8888, rgb565, or rgb565-bbdither (charp)
+parm:           dither_green_gain:RGB565 bbdither green gain percentage (0-100, default 94) (uint)
+parm:           edid_only:Expose EDID modes instead of the driver catalogue (bool)
+parm:           softscale_wide:Enable logical 2464/2560x1080 modes when edid_only=0 (bool)
+parm:           sharpen:Enable fixed 8% post-softscale sharpening (bool)
+parm:           double_shadow:Enable source snapshots and difference-based damage trimming (bool)
+parm:           disable_hardware_cursor:Disable the hardware cursor plane and use software cursor rendering (bool)
+parm:           enable_dma:Enable optimized eight-row DMA1 shadow uploads (default enabled) (bool)
+parm:           disable_dma:Deprecated DMA safety veto; overrides enable_dma=1 (bool)
+parm:           async_updates:Coalesce shadow damage on a dedicated worker (default enabled) (bool)
+parm:           backbuffer_staging:Stage complete shadow frames off-screen and present them at vblank (bool)
+parm:           shadow_dma_min_bytes:Minimum aligned shadow span for DMA (default 4096 bytes) (uint)
+# ---- exit: 0 ----

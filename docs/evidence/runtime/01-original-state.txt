@@ -1,0 +1,138 @@
+ORIGINAL DISPLAY STATE - captured BEFORE any modeset
+=====================================================
+Task: T10 of plan 20261117-sm750-driver-prod
+Captured at: 2026-11-18T09:27:44+03:00
+Host: deneb
+Kernel: 7.3.4-100.fc43.x86_64
+User: coder (uid 1005, groups: coder vtune) - unprivileged, access via udev ACL
+Module under test: sm750hdmidrm from DKMS sm750hdmifb/0.5.9
+
+IMPORTANT - WHAT BUILD IS UNDER TEST
+------------------------------------
+The loaded module is the STALE PRE-FIX 0.5.9 build, not the 0.6.0 build:
+  /sys/module/sm750hdmidrm/version  -> does not exist (no version field)
+  /sys/module/sm750hdmidrm/srcversion -> does not exist
+  /sys/module/sm750hdmidrm/ does not contain a "regs" debugfs entry exposed to
+    the unprivileged user
+  modinfo filename: /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+  dkms status: sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: installed
+  /usr/src/sm750hdmifb-0.5.9/dkms.conf PACKAGE_VERSION="0.5.9"
+  git HEAD: 27db03b "Release 0.5.9 with newer kernel support"
+  dmesg: "Initialized sm750hdmidrm 0.1.0 for 0000:01:00.0 on minor 0"
+    (0.1.0 is the in-source DRM driver version constant, not the package version)
+All results in this directory therefore describe the PRE-FIX BASELINE only.
+
+DEVICE NODES
+------------
+/dev/dri/by-path/pci-0000:01:00.0-card -> ../card0   (SM750; the only node for it)
+No render node exists for 0000:01:00.0. renderD128/129/130 belong to
+0000:02:00.0, 0000:83:00.0, 0000:84:00.0 (all driver nvidia). The SM750 was never
+tested against a render node.
+
+  getfacl /dev/dri/by-path/pci-0000:01:00.0-card:
+    # owner: root
+    # group: video
+    user::rw-
+    user:duka:rw-
+    user:coder:rw-
+    group::rw-
+    mask::rw-
+    other::---
+
+DRIVER / DEVICE IDENTITY AS REPORTED BY LIBDRM
+----------------------------------------------
+modetest -c and modetest -p both report verbatim:
+  opened device `SM750G10 SiI9024A HDMI DRM shadow driver` on driver `sm750hdmidrm` (version 0.1.0 at 0)
+So the driver-reported version string observed by the tools is "0.1.0" (the
+in-source DRM version), while the packaged/DKMS version is 0.5.9.
+
+CONNECTOR
+---------
+  id      : 35
+  name    : HDMI-A-1  (sysfs: card0-HDMI-A-1)
+  encoder : 39
+  status  : connected
+  size    : 530x300 mm
+  modes   : 28
+  mode #0 : 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500
+            flags: phsync, pvsync; type: preferred, driver
+  sysfs   : status=connected  enabled=enabled  dpms=On
+  EDID    : monitor "PHL 243V7", serial UK01939009135
+
+ENCODER
+-------
+  id 39, crtc 38, type none, possible crtcs 0x00000001, possible clones 0x00000001
+
+CRTC BINDING - IS THERE AN ACTIVE MODE?
+---------------------------------------
+YES. The SM750 CRTC HAS AN ACTIVE MODE BEFORE THIS TASK RUNS.
+  modetest -p reports:
+    CRTCs:
+    id  fb  pos   size
+    38  43  (0,0) (1920x1080)
+      #0 1920x1080 60.00 ... type: preferred, driver
+  => CRTC 38 is bound to framebuffer 43 at 1920x1080, which is the connector's
+     preferred native mode.
+  sysfs confirms: card0-HDMI-A-1/enabled = enabled, dpms = On,
+  first entry of card0-HDMI-A-1/modes = 1920x1080.
+
+  CONSEQUENCE FOR RISK: a modeset on this connector IS visible to a logged-in
+  user. A modeset here is not a silent no-op. This is why every modeset below
+  re-applies the already-active 1920x1080@60 mode first and restores it last.
+
+PLANES
+------
+  36  crtc 38  fb 43  0,0  0,0  gamma 0  possible crtcs 0x00000001
+      formats: XR24   type: Primary
+  40  crtc 0   fb 0   0,0  0,0  gamma 0  possible crtcs 0x00000001
+      formats: AR24   type: Cursor
+
+FRAMEBUFFERS
+------------
+  modetest -f -> "Frame buffers:" header only, no rows listed.
+  Framebuffer 43 exists and is in use by CRTC 38 / plane 36 (per modetest -p),
+  but modetest -f enumerates none, i.e. the driver does not list it back through
+  the fb enumeration path. Recorded as observed, not interpreted.
+
+WHO ELSE IS USING THE DISPLAY
+-----------------------------
+  loginctl session 3: user duka, seat0, TTY tty1, Type=wayland, Active=yes
+  duka processes on tty1: startplasma-wayland (pid 1826), kwin_wayland (2090),
+    kwin_wayland_wrapper (2077), Xwayland (2163)
+  fuser -v /dev/dri/card0 -> no output (no open handle visible to this user)
+  /proc/2090/fd -> permission denied (cannot inspect duka's fds)
+  /sys/class/drm/card0/device/drm/card0/clients -> does not exist on this kernel
+
+  Display topology read from boot_vga and connector state:
+    0000:01:00.0 (SM750, sm750hdmidrm) boot_vga=0, connector 35 connected+enabled
+    0000:02:00.0 (nvidia)             boot_vga=0, card1-DVI-D-1 connected+enabled
+  Two DRM cards each have an enabled connected connector. The SM750 is NOT the
+  boot VGA device. The active Plasma session is on seat0 tty1; which of the two
+  enabled connectors the compositor actually scans out could not be proven from
+  an unprivileged account (duka's fds and /run/user/1000 are not readable).
+  Both connectors are therefore treated as user-visible, which is the
+  conservative assumption.
+
+KERNEL LOG AT BASELINE (sudo -n dmesg, exit 0, 123062 bytes)
+------------------------------------------------------------
+  [    3.448878] sm750hdmidrm: loading out-of-tree module taints kernel.
+  [    3.448893] sm750hdmidrm: module verification failed: signature and/or required key missing - tainting kernel
+  [    3.465602] sm750hdmidrm 0000:01:00.0: enabling device (0140 -> 0142)
+  [    3.473927] sm750hdmidrm 0000:01:00.0: [drm] DMA1 IRQ was not delivered; reverting to completion polling
+  [    3.474176] sm750hdmidrm 0000:01:00.0: [drm] DMA1 shadow uploads enabled after off-screen transfer verification (minimum 4096 bytes)
+  [    3.638007] sm750hdmidrm 0000:01:00.0: [drm] [PLANE:40:sm750-cursor] pixel format with alpha exposed but blend mode not setup. Please fix.
+  [    3.646057] [drm] Initialized sm750hdmidrm 0.1.0 for 0000:01:00.0 on minor 0
+  [    6.218023] sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility
+  [    6.221997] sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (4147200 bytes per buffer)
+  [    6.297629] sm750hdmidrm 0000:01:00.0: [drm] fb0: sm750hdmidrmdrm frame buffer device
+  [    6.297638] sm750hdmidrm 0000:01:00.0: [drm] registered SM750 HDMI DRM device with 16 MiB VRAM (RGB565 bbdither, primary controller)
+  [    6.297643] sm750hdmidrm 0000:01:00.0: [drm] 64x64 hardware cursor plane enabled with ARGB palette conversion
+  [    6.297646] sm750hdmidrm 0000:01:00.0: [drm] coalesced asynchronous shadow updates enabled
+  (13 lines mention sm750; the above are all of them that are not continuation lines)
+
+RESTORATION TARGET
+------------------
+The original state to return to at the end of this run is exactly:
+  connector 35 HDMI-A-1, CRTC 38, framebuffer 43, mode 1920x1080@60 (preferred),
+  dpms On, enabled.
+Restoration command is recorded in 04-modeset.txt.

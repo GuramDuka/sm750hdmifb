@@ -1,0 +1,106 @@
+# utc: 2026-11-18T11:17:35Z
+T11 PRECONDITIONS - captured BEFORE any system change
+=====================================================
+Task: T11 of plan 20261117-sm750-driver-prod
+Host: deneb, kernel 7.3.4-100.fc43.x86_64
+User: coder uid=1005 groups=coder vtune
+
+## 1. sudo -n -l (allowlist actually granted)
+$ sudo -n -l
+Matching Defaults entries for coder on deneb:
+    !visiblepw, always_set_home, match_group_by_gid, always_query_group_plugin,
+    env_reset, env_keep="COLORS DISPLAY HOSTNAME HISTSIZE KDEDIR LS_COLORS",
+    env_keep+="MAIL QTDIR USERNAME LANG LC_ADDRESS LC_CTYPE",
+    env_keep+="LC_COLLATE LC_IDENTIFICATION LC_MEASUREMENT LC_MESSAGES",
+    env_keep+="LC_MONETARY LC_NAME LC_NUMERIC LC_PAPER LC_TELEPHONE",
+    env_keep+="LC_TIME LC_ALL LANGUAGE LINGUAS _XKB_CHARSET XAUTHORITY",
+    secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin\:/var/lib/snapd/snap/bin
+
+User coder may run the following commands on deneb:
+    (root) NOPASSWD: /usr/local/sbin/sm750-regs
+    (root) NOPASSWD: /usr/bin/dmesg
+    (root) NOPASSWD: /usr/bin/journalctl -k -b --no-pager
+    (root) NOPASSWD: /usr/bin/journalctl -k -b -q --no-pager
+    (root) NOPASSWD: /usr/local/sbin/sm750-lspci
+    (root) NOPASSWD: /usr/local/sbin/sm750-vbios-dump
+    (root) NOPASSWD: /usr/bin/dkms status
+    (root) NOPASSWD: /usr/bin/dkms install -m sm750hdmifb -v 0.6.0
+    (root) NOPASSWD: /usr/bin/dkms uninstall -m sm750hdmifb -v 0.6.0
+    (root) NOPASSWD: /usr/bin/dkms build -m sm750hdmifb -v 0.6.0
+    (root) NOPASSWD: /usr/bin/dkms remove -m sm750hdmifb -v 0.6.0 --all
+    (root) NOPASSWD: /usr/bin/depmod -a
+    (root) NOPASSWD: /usr/bin/modprobe -r sm750hdmidrm
+    (root) NOPASSWD: /usr/bin/modprobe sm750hdmidrm
+    (root) NOPASSWD: /usr/bin/dnf install -y
+        /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+    (root) NOPASSWD: /usr/bin/dnf remove -y sm750hdmifb
+    (ALL : ALL) NOPASSWD: /usr/bin/dmidecode
+    (ALL : ALL) NOPASSWD: /usr/local/cuda/bin/ncu
+    (ALL : ALL) NOPASSWD: /usr/local/cuda/bin/nvprof
+[exit 0]
+
+## 2. Current package state (pre-install)
+$ rpm -q sm750hdmifb
+package sm750hdmifb is not installed
+[exit 1]
+$ sudo -n dkms status
+sm750hdmifb/0.5.9, 7.3.3-100.fc43.x86_64, x86_64: installed
+sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: installed
+[exit 0]
+
+## 3. Stale loaded module
+$ modinfo sm750hdmidrm | head -14
+filename:       /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+license:        GPL v2
+description:    Atomic DRM/KMS driver for SM750G10 SiI9024A HDMI boards
+author:         Benjamin Brown
+alias:          pci:v0000126Fd00000750sv*sd*bc*sc*i*
+depends:        drm_vram_helper,drm_ttm_helper
+name:           sm750hdmidrm
+retpoline:      Y
+vermagic:       7.3.4-100.fc43.x86_64 SMP preempt mod_unload 
+sig_id:         PKCS#7
+signer:         DKMS module signing key
+sig_key:        1F:E4:00:60:7A:A5:61:3A:B7:7D:E3:D7:36:8D:B7:19:D6:23:05:B3
+sig_hashalgo:   sha512
+signature:      37:43:37:E8:AA:49:BB:55:35:AD:90:7F:A4:09:93:16:3A:4F:2B:FD:
+$ ls -l /lib/modules/$(uname -r)/extra/sm750hdmidrm.ko.xz
+-rw-r--r-- 1 root root 60360 Nov 17 22:17 /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+$ grep -c regs /lib/modules/$(uname -r)/extra/sm750hdmidrm.ko (decompressed strings)
+2
+
+## 4. Pre-existing RPM at the allowlisted path (expected PRE-T13)
+$ sha256sum /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+b54480b0f972161554107bdc4ec898b42f6252a4490cfe8493420e302913f6bc  /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+$ rpm2cpio <rpm> | cpio -i --to-stdout ./usr/src/sm750hdmifb-0.6.0/src/sm750_drm.c | grep -c drm_plane_create_blend_mode_property
+0
+
+## 5. Tree state (drives the rebuild)
+$ git rev-parse HEAD
+53098af364fb27815fe69f12aaf960914f89aa99
+$ git status --short | wc -l
+28
+$ grep -c drm_plane_create_blend_mode_property src/sm750_drm.c
+1
+$ grep -n "MODULE_VERSION" src/sm750_drm.c
+3897:MODULE_VERSION(SM750_DRM_VERSION);
+
+## 6. Display state (must be restored at the end)
+$ readlink -f /dev/dri/by-path/pci-0000:01:00.0-card
+/dev/dri/card0
+$ cat /sys/class/drm/card0-HDMI-A-1/status /sys/class/drm/card0-HDMI-A-1/enabled /sys/class/drm/card0-HDMI-A-1/dpms
+connected
+enabled
+On
+$ modetest -p (CRTC section)
+CRTCs:
+id	fb	pos	size
+38	45	(0,0)	(1920x1080)
+  #0 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500 flags: phsync, pvsync; type: preferred, driver
+  props:
+	25 VRR_ENABLED:
+		flags: range
+		values: 0 1
+		value: 0
+
+Planes:

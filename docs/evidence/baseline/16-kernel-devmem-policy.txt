@@ -1,0 +1,16 @@
+# host: deneb
+# kernel: 7.3.3-100.fc43.x86_64
+# utc: 2026-11-17T18:31:46Z
+# note: /proc/config.gz is absent; the boot config file is world-readable.
+# ---- output ----
+
+$ ls -l /boot/config-7.3.3-100.fc43.x86_64
+-rw-r--r-- 1 root root 303746 Nov  6 03:00 /boot/config-7.3.3-100.fc43.x86_64
+
+$ grep -E "^CONFIG_(STRICT_DEVMEM|IO_STRICT_DEVMEM)" /boot/config-7.3.3-100.fc43.x86_64
+CONFIG_STRICT_DEVMEM=y
+CONFIG_IO_STRICT_DEVMEM=y
+[exit 0]
+
+$ modinfo sm750hdmidrm | grep -c "^parm:"
+29

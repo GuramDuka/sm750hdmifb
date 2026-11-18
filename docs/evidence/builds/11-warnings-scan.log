@@ -1,0 +1,41 @@
+# utc: 2026-11-18T04:51:54Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# compiler: /usr/bin/gcc (GCC) 15.3.1 20260722
+# command: grep -nE '(warning|error):' docs/evidence/builds/*.log
+# env: rootless; logs produced with CC=/usr/bin/gcc
+# workdir: /home/coder/sm750hdmifb
+
+--- unique warning/error lines across all archived build logs ---
+     19 warning: pahole version differs from the one used to build the kernel
+      3 warning: the compiler differs from the one used to build the kernel
+
+--- diagnostics attributed to driver sources (src/*.c or src/*.h) ---
+none
+
+--- diagnostics attributed to kernel headers or host tooling ---
+01-make-check.log: Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux:
+01-make-check.log: warning: pahole version differs from the one used to build the kernel
+02-check-all-kernels.log: Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux:
+02-check-all-kernels.log: warning: pahole version differs from the one used to build the kernel
+03-kernel-7.2.15-100.log: Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux:
+03-kernel-7.2.15-100.log: warning: pahole version differs from the one used to build the kernel
+04-kernel-7.3.3-100.log: Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux:
+04-kernel-7.3.3-100.log: warning: pahole version differs from the one used to build the kernel
+05-kernel-7.3.4-100.log: Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux:
+05-kernel-7.3.4-100.log: warning: pahole version differs from the one used to build the kernel
+06-kernel-6.17.1.log: Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux:
+06-kernel-6.17.1.log: warning: the compiler differs from the one used to build the kernel
+
+--- classification ---
+1. warning: pahole version differs from the one used to build the kernel
+   source: /usr/src/kernels/<k>/Makefile (BTF/pahole check), not the driver.
+   The host has no pahole installed (reported as 0); BTF generation is skipped.
+2. warning: the compiler differs from the one used to build the kernel (6.17.1-300.fc43 only)
+   source: /usr/src/kernels/6.17.1-300.fc43.x86_64/Makefile.
+   The archived Fedora kernel was built by gcc 15.2.1; this host has 15.3.1.
+   Not fixable without the exact upstream compiler; the driver compiles warning-free.
+3. Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+   note, not a warning from driver code. The archive kernel-devel tree ships no vmlinux.
+4. No diagnostic of any kind originates in src/*.c or src/*.h.
+
+# exit: 0

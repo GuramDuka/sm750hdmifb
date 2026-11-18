@@ -1,0 +1,38 @@
+# host: deneb
+# utc: 2026-11-17T18:31:46Z
+# note: PATH puts /usr/local/cuda/bin ahead of /usr/bin, so bare
+#       gcc resolves to the CUDA toolchain, not the system gcc.
+# ---- output ----
+
+$ command -v cc
+/usr/lib64/ccache/cc
+
+$ readlink -f "$(command -v cc)"
+/usr/bin/ccache
+
+$ cc --version | head -1
+cc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+
+$ command -v gcc
+/usr/local/cuda/bin/gcc
+
+$ rpm -qf /usr/bin/gcc
+gcc-15.3.1-1.fc43.x86_64
+
+$ rpm -qf /usr/local/cuda/bin/gcc
+file /usr/local/cuda/bin/gcc is not owned by any package
+
+$ printf "%s\n" "$PATH"
+/home/coder/.cargo/bin:/home/coder/.local/bin:/home/coder/bin:/usr/local/cuda/bin:/home/coder/bin:/home/coder/.nvm/versions/node/v26.13.1/bin:/usr/lib64/ccache:/usr/local/bin:/usr/bin:/home/coder/.dotnet/tools
+
+$ rpm -q libdrm
+libdrm-2.4.134-1.fc43.x86_64
+
+$ rpm -qf /usr/bin/modetest
+drm-utils-2.4.134-1.fc43.x86_64
+
+$ rpm -qf /usr/lib64/libdrm.so.2
+libdrm-2.4.134-1.fc43.x86_64
+
+$ ls -l /usr/include/xf86drm.h
+ls: cannot access '/usr/include/xf86drm.h': No such file or directory

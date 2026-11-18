@@ -1,0 +1,23 @@
+# host: deneb
+# kernel: 7.3.3-100.fc43.x86_64
+# utc: 2026-11-17T18:31:30Z
+# question: can journalctl replace dmesg without privileges?
+# ---- output ----
+
+$ journalctl -k -b --no-pager
+Hint: You are currently not seeing messages from other users and the system.
+      Users in groups 'adm', 'systemd-journal', 'wheel' can see all messages.
+      Pass -q to turn off this notice.
+-- No entries --
+[exit 0]
+
+$ journalctl -k -b -q --no-pager | wc -l
+0
+[exit 0]
+
+$ journalctl --user -q --no-pager | wc -l  (user journal is readable)
+31663
+[exit 0]
+
+$ id -nG
+coder

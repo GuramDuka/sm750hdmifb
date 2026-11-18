@@ -10,7 +10,7 @@ bash -n "$builder" "$project_dir/packaging/write-xorg-config.sh"
 sh -n "$project_dir/packaging/drm-postinst" \
 	"$project_dir/packaging/drm-prerm" \
 	"$project_dir/packaging/drm-postrm"
-grep -F 'PACKAGE_VERSION="0.5.9"' "$dkms_config" >/dev/null
+grep -F 'PACKAGE_VERSION="0.6.0"' "$dkms_config" >/dev/null
 grep -F 'BUILT_MODULE_NAME[0]="sm750hdmidrm"' "$dkms_config" >/dev/null
 grep -F 'BUILD_EXCLUSIVE_KERNEL="^(6\\.(1[7-9]|[2-9][0-9])\\.|[7-9]\\.|[1-9][0-9]\\.)"' \
 	"$dkms_config" >/dev/null
@@ -27,6 +27,30 @@ grep -F 'readonly deb="${dist_dir}/${package}_${version}_${arch}.deb"' \
 	"$builder" >/dev/null
 grep -F 'Maintainer: kodemunkie <kodemunkie@users.noreply.github.com>' \
 	"$builder" >/dev/null
+# A14: the payload needs a dpkg manifest.
+grep -F 'DEBIAN/md5sums' "$builder" >/dev/null
+# A02/A22: the archive is the tracked tree without the screenshots.
+grep -F "git -C \"\${project_dir}\" ls-files -z -- . ':(exclude)docs/images/*'" \
+	"$builder" >/dev/null
+grep -F "exclude='docs/images/*'" "$builder" >/dev/null
+# A08: initramfs refresh must not depend on a Debian-only tool.
+grep -F 'command -v update-initramfs' "$project_dir/packaging/drm-postinst" \
+	>/dev/null
+grep -F 'command -v dracut' "$project_dir/packaging/drm-postinst" >/dev/null
+# Every update-initramfs call must sit directly under its command -v guard.
+for script in drm-postinst drm-postrm; do
+	awk '
+		/^[[:space:]]*update-initramfs/ {
+			if (prev !~ /command -v update-initramfs/) {
+				print "unguarded update-initramfs at line " NR > "/dev/stderr"
+				bad = 1
+			}
+		}
+		{ prev = $0 }
+		END { exit bad }
+	' "$project_dir/packaging/$script"
+done
+grep -F 'Recommends: initramfs-tools | dracut' "$builder" >/dev/null
 grep -F 'SM750_DRM_SCANOUT_DEFAULT' "$project_dir/src/Makefile" >/dev/null
 grep -F 'SM750_DRM_DEFAULT_SCANOUT_FORMAT "rgb565-bbdither"' \
 	"$project_dir/src/sm750_drm.c" >/dev/null

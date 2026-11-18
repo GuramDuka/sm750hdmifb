@@ -1,0 +1,58 @@
+RELEASE GATE FAILURE - untracked content enters the source tarball
+==================================================================
+Date: 2026-11-17
+Host: Fedora 43, kernel 7.3.3-100.fc43.x86_64, gcc 14.4.1 (kernel built by gcc 15.3.1)
+
+Procedure (copy of the repo, never the worktree):
+  tar -cf - --exclude=./dist --exclude=./build . | tar -xf - -C /tmp/opencode/sm750pkg
+  cd /tmp/opencode/sm750pkg
+  make KDIR=/lib/modules/7.3.3-100.fc43.x86_64/build all      -> exit 0
+  ./build-package.sh                                          -> exit 0
+  ./tests/audit-release.sh                                    -> exit 1
+
+Observed:
+  $ tar -tzf dist/sm750hdmifb-0.5.9-source.tar.gz | grep -c 'docs/plan'
+  3
+  $ ./tests/audit-release.sh
+  exit=1
+  Restrictive licence marker found in releasable code.
+
+Cause:
+  build-package.sh:79-90 archives the working tree ("src docs tests tools packaging .github")
+  with exclude patterns only for VCS metadata and build artifacts. Any untracked file under
+  those directories (here docs/plan/20261117-sm750-driver-prod/plan.yaml) is shipped in the
+  source tarball and is then scanned by tests/audit-release.sh:33-59, which greps the shipped
+  text for restrictive licence markers and private paths.
+
+Impact:
+  A clean checkout passes the release audit; a working tree containing local planning or
+  audit notes fails with exit 1, and would ship those notes if the marker check were absent.
+
+ENVIRONMENT
+  uname -r: 7.3.3-100.fc43.x86_64
+  gcc: 14.4.1
+  kernel compiler: CONFIG_GCC_VERSION=150301 (gcc 15.3.1 20260722, Red Hat 15.3.1-1)
+  update-initramfs: ABSENT (dracut 107-8.fc43 present)
+  rg: /usr/bin/rg
+  pkg-config libdrm: not found (exit 1)
+  header trees: /lib/modules/7.2.13-100.fc43.x86_64/build /lib/modules/7.2.15-100.fc43.x86_64/build /lib/modules/7.3.3-100.fc43.x86_64/build
+  kmscube: ABSENT   igt_info: ABSENT   intel_reg: ABSENT   modetest: /usr/bin/modetest
+  /dev/fb*: ABSENT   /sys/class/graphics: fbcon only
+  CONFIG_DRM_FBDEV_EMULATION=y   CONFIG_FB=y   CONFIG_STRICT_DEVMEM=y   CONFIG_IO_STRICT_DEVMEM=y
+
+NON-ZERO EXITS OBSERVED DURING THE AUDIT
+  make check (no libdrm)                                    exit 2  Makefile:40/41
+  make check-all-kernels (no libdrm)                        exit 2  Makefile:35
+  make -B tests/check-vblank (no libdrm)                    exit 2  xf86drm.h missing
+  ./tests/check-vblank /dev/dri/card0 60                    exit 1  Permission denied
+  ./tests/audit-release.sh (tree with untracked docs/plan)   exit 1  restrictive marker
+  tests/check-release-version.sh (no rg in PATH)            exit 1  rg: command not found
+  pkg-config --modversion libdrm                            exit 1  package not found
+  dkms install -m sm750hdmifb -v 0.5.9                      exit 1  must be root
+  rpm -i --root=/tmp/opencode/rpmroot <pkg>                  exit 1  cannot change root
+  ls -d /lib/modules/6.17*/build                            exit 2  no such directory
+
+PASSING GATES
+  make check (rootless libdrm chain, pristine git archive)   exit 0  Ran 4 tests, OK
+  make check (rootless libdrm chain, working-tree copy)      exit 0  Ran 4 tests, OK
+  make check-all-kernels (rootless libdrm chain)             exit 0  9 kernel/format combinations

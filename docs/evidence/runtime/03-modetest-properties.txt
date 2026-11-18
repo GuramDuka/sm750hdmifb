@@ -1,0 +1,79 @@
+EVIDENCE 03 - modetest -p (CRTC/plane/property enumeration) as user coder
+========================================================================
+Run at      : 2026-11-18T09:28:11+03:00
+Command     : /usr/bin/modetest -p
+Working dir : /mega/tmp/sm750/t10
+User        : coder (uid 1005), groups: coder vtune
+modetest pkg: drm-utils-2.4.134-1.fc43.x86_64 ; libdrm-2.4.134-1.fc43.x86_64
+
+DRIVER-REPORTED VERSION STRING OBSERVED BY THIS RUN:
+  opened device `SM750G10 SiI9024A HDMI DRM shadow driver` on driver `sm750hdmidrm` (version 0.1.0 at 0)
+
+---- stdout (verbatim) ----
+trying to open device '/dev/dri/card3'... failed
+trying to open device '/dev/dri/card2'... failed
+trying to open device '/dev/dri/card1'... failed
+trying to open device '/dev/dri/card0'... done
+opened device `SM750G10 SiI9024A HDMI DRM shadow driver` on driver `sm750hdmidrm` (version 0.1.0 at 0)
+CRTCs:
+id	fb	pos	size
+38	43	(0,0)	(1920x1080)
+  #0 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500 flags: phsync, pvsync; type: preferred, driver
+  props:
+	25 VRR_ENABLED:
+		flags: range
+		values: 0 1
+		value: 0
+
+Planes:
+id	crtc	fb	CRTC x,y	x,y	gamma size	possible crtcs
+36	38	43	0,0		0,0	0       	0x00000001
+  formats: XR24
+  props:
+	9 type:
+		flags: immutable enum
+		enums: Overlay=0 Primary=1 Cursor=2
+		value: 1
+	32 IN_FORMATS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000100000018000000
+			01000000200000005852323400000000
+			01000000000000000000000000000000
+			0000000000000000
+		in_formats blob decoded:
+			 XR24:  LINEAR(0x0)
+40	0	0	0,0		0,0	0       	0x00000001
+  formats: AR24
+  props:
+	9 type:
+		flags: immutable enum
+		enums: Overlay=0 Primary=1 Cursor=2
+		value: 2
+	32 IN_FORMATS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000100000018000000
+			01000000200000004152323400000000
+			01000000000000000000000000000000
+			0000000000000000
+		in_formats blob decoded:
+			 AR24:  LINEAR(0x0)
+
+---- stderr (verbatim) ----
+---- exit code: 0 ----
+
+KEY OBSERVATIONS FROM THIS CAPTURE
+  CRTC 38 is active: fb 43, pos (0,0), size 1920x1080, mode #0 1920x1080 60.00
+    (preferred). This is the same state recorded in 01-original-state.txt.
+  CRTC property list exposes only 25 VRR_ENABLED (range 0 1, value 0).
+  Plane 36 (Primary, XR24) is bound to CRTC 38 with fb 43.
+  Plane 40 (Cursor, AR24) is unbound: crtc 0, fb 0.
+  Connector property list (from modetest -c) exposes only 1 EDID, 2 DPMS,
+    5 link-status, 7 non-desktop, 4 TILE. There is no CRTC_ID/X/Y property
+    dump for the connector in this libdrm output because modetest -p prints
+    CRTC and plane properties, and the connector properties appear under -c.

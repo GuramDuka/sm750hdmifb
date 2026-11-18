@@ -1,0 +1,52 @@
+# utc: 2026-11-18T04:49:02Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# compiler: /usr/bin/gcc (GCC) 15.3.1 20260722; module built with KDIR=/lib/modules/7.3.3-100.fc43.x86_64/build
+# host privileges: none; sudo denied except dmidecode/ncu/nvprof allowlist
+# workdir: /home/coder/sm750hdmifb
+
+## 1. Facility present in the built module
+$ modinfo -F version src/sm750hdmidrm.ko
+0.5.9
+$ nm src/sm750hdmidrm.ko | grep -E "sm750_(vram_)?debugfs_init|debugfs_create_file_full"
+                 U debugfs_create_file_full
+0000000000002d40 t __pfx_sm750_debugfs_init
+00000000000026a0 t __pfx_sm750_vram_debugfs_init
+0000000000002d50 t sm750_debugfs_init
+00000000000026b0 t sm750_vram_debugfs_init
+
+## 2. Source references
+$ grep -n "debugfs_create_file\|DEFINE_SHOW_ATTRIBUTE\|debugfs_init = \|sm750_regs_show" src/sm750_drm.c
+3312:static int sm750_regs_show(struct seq_file *m, void *unused)
+3333:DEFINE_SHOW_ATTRIBUTE(sm750_regs);
+3337:	debugfs_create_file("regs", 0444, minor->debugfs_root, minor->dev,
+3363:	.debugfs_init = sm750_vram_debugfs_init,
+3376:	.debugfs_init = sm750_debugfs_init,
+
+## 3. Read attempt as uid 1005 (the gap that remains)
+$ ls -ld /sys/kernel/debug /sys/kernel/debug/dri
+ls: невозможно получить доступ к '/sys/kernel/debug/dri': Отказано в доступе
+drwx------ 52 root root 0 ноя 18  2026 /sys/kernel/debug
+$ cat /sys/kernel/debug/dri/0/regs
+cat: /sys/kernel/debug/dri/0/regs: Отказано в доступе
+# exit: 1
+
+## 4. Why /dev/mem is not an alternative
+$ grep -E "CONFIG_(STRICT_DEVMEM|IO_STRICT_DEVMEM)=" /boot/config-$(uname -r)
+CONFIG_STRICT_DEVMEM=y
+CONFIG_IO_STRICT_DEVMEM=y
+$ ls -l /dev/mem
+crw-r----- 1 root kmem 1, 1 ноя 18 07:26 /dev/mem
+$ head -c 4 /dev/mem
+head: невозможно открыть '/dev/mem' для чтения: Отказано в доступе
+# exit: 1
+
+## 5. Alternative module_param trigger
+Not used: no module_param dump trigger was added. The debugfs file above is the single documented mechanism; the module_param path would require a writable parameter whose only effect is a log dump, which is harder to consume and cannot be captured atomically before/after a modeset.
+
+## 6. Exact command to close the gap once root is available
+# sudo cat /sys/kernel/debug/dri/0/regs > regs-before.txt
+# modetest -M sm750hdmidrm -s <connector>@<crtc>:1920x1080
+# sudo cat /sys/kernel/debug/dri/0/regs > regs-after.txt
+# diff -u regs-before.txt regs-after.txt
+
+# exit: 0

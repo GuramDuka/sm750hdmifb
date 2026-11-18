@@ -22,6 +22,16 @@ if grep -E 'Option "(SWcursor|DoubleShadow)" "true"' "$config" \
 	echo "Xorg configuration overrides a kernel-controlled feature." >&2
 	exit 1
 fi
+# The generated per-device file must not reuse the packaged OutputClass name;
+# two files with one name are merged by name, so removal and ordering become
+# ambiguous (defect A10).
+grep -F '/etc/X11/xorg.conf.d/20-sm750hdmidrm-device.conf' \
+	"$project_dir/packaging/drm-postinst" >/dev/null
+if grep -F '/etc/X11/xorg.conf.d/20-sm750hdmidrm.conf' \
+		"$project_dir/packaging/drm-postinst" >/dev/null; then
+	echo "postinst generates a file that collides with the packaged OutputClass." >&2
+	exit 1
+fi
 if grep -F 'Driver "nvidia"' "$config" >/dev/null; then
 	echo "Generated Xorg configuration enables an NVIDIA display driver." >&2
 	exit 1

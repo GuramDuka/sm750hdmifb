@@ -1,10 +1,16 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Module parameters
 
-Parameters are read when `sm750hdmidrm` loads and cannot be changed at runtime.
-Use `sm750hdmidrm.name=value` on the kernel command line or an `options
-sm750hdmidrm ...` line in `/etc/modprobe.d/`. Runtime parameters override
-build-time defaults.
+Most parameters are read when `sm750hdmidrm` loads and cannot be changed at
+runtime. Use `sm750hdmidrm.name=value` on the kernel command line or an
+`options sm750hdmidrm ...` line in `/etc/modprobe.d/`. Runtime parameters
+override build-time defaults.
+
+Two diagnostic parameters are deliberately writable after load:
+`dma_batch_rows` and `staging_timing` are exposed with mode `0644`, so they can
+be changed through `/sys/module/sm750hdmidrm/parameters/` to compare upload
+batching and timing on a live system. Every other parameter is `0444` and is
+fixed once the module is loaded.
 
 ## Everyday options
 

@@ -467,3 +467,173 @@ additionally consolidated, with their exact commands and hashes, in
 - Outcome: two gotchas recorded - nasm has no `ljmp` (write `jmp 0xf000:label`), and
   `r2 -B 0xc0000` mis-seeks while raw offsets work; `gcc` on PATH is CUDA's 14.4.1, so
   scripts must call `/usr/bin/gcc` (15.3.1). No further packages are required for T17.
+
+### 2026-11-18T10:33Z | gem-devops | T12: VBIOS captured at 48 KiB, GAP-B1 closed
+
+- Action: ran the installed v2 helper through the existing path-based sudo grant
+  (`sudo -n /usr/local/sbin/sm750-vbios-dump`, helper sha256 `9e6c5db7` re-verified
+  identical to the staged copy), then verified the image, the ROM-enable restore and
+  the ROM BAR state. No modeset, no module reload, no RPM install.
+- Result: exit 2, 49152 bytes, sha256
+  `16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551`. Exit 2 is
+  SUCCESS here: the image is complete at 48 KiB (header size byte 0x02 = 0x60 = 96
+  blocks, PCIR image length at 0x2c = 0x0060, file length equals declared length,
+  whole-image byte sum 0 modulo 256, bytes 0x815d..0xbfff pure 0xcc padding). The
+  helper's `EXPECT=65536` is a stale constant, not a short read; the earlier task
+  premise that the layout is 64 KiB was wrong. A second read to
+  `/mega/tmp/sm750/t12/retry.bin` was byte-identical.
+- Structure as read: `55 aa` signature; entry `55 push bp / aa stos / 60 pusha /
+  e9 50 12 jmp 0xc1256`; PCIR pointer at 0x18 -> structure at 0x1c; vendor 0x126f,
+  device 0x0750, class 0x030000 (display controller), structure length 24, code type
+  x86, indicator 0x80 (last image); VBE 2.0 block at 0x7f whose OEM-string far pointer
+  resolves to the banner; strings "Version 1.00.59-", "05/14/19 16:25", "Silicon
+  Motion SM750 VGA BIOS (CRT)", "SM750". Undetermined and left as such: the intended
+  span of the PCIR checksum byte 0x6b, the VBE mode list, and the VBE total-memory
+  field (not populated - the bytes at 0x91 are the ASCII string "SM750"). The CRT
+  banner is a label, not a capability statement; nothing is claimed about HDMI from
+  the image.
+- ROM restore: `/sys/bus/pci/devices/0000:01:00.0/rom` back to `-rw------- root:root
+  65536` (mtime 13:12:28 +0300, the trap's `echo 0`) and the BAR reads
+  `Expansion ROM at c7400000 [disabled] [size=64K]` again.
+- Files: `docs/evidence/baseline/18-vbios-dump.txt` (new),
+  `docs/evidence/EVIDENCE-GAPS.md` (GAP-B1 closed, summary row, journalctl
+  correction), `docs/DELIVERABLES.md` (section 3 VBIOS row and the section 2.7
+  index), `docs/TEST-STRATEGY.md` (the VBIOS row of the coverage table),
+  `docs/LOGBOOK.md`. The image stays at `/mega/tmp/sm750/vbios-01-00-0.bin` and is
+  not in the tree and not committed.
+- Evidence: `docs/evidence/baseline/18-vbios-dump.txt`; verbatim helper streams in
+  `/mega/tmp/sm750/t12/{dump.stdout,dump.stderr,r.out,r.err}`.
+- Correction recorded in EVIDENCE-GAPS.md: the zero-line `journalctl -k -b` claim
+  (GAP-B2 text) was measured without the sudo grant. With the grant the same command
+  returns 2017 lines (T10, `docs/evidence/runtime/07-kernel-log.txt`) and the
+  2026-11-18T09:36Z `sudo -n dmesg` capture is 169860 bytes / 240 `sm750` lines. The
+  original paragraph is kept and the correction names it.
+- Outcome: accepted. GAP-B1 is closed with the image verified, not merely captured.
+  Two follow-ups for other owners: the helper's `EXPECT` constant should become
+  49152 (root-owned host path; needs the host owner, not this task), and
+  `docs/ROOT-ACTIONS.md` rows 4 and 5 (GAP-B1 attempt truncated / reinstall v2) are
+  now both satisfied and should be marked done by that file's owner.
+
+### 2026-11-18T10:36Z | gem-implementer | T13 cursor plane declares its blend mode (defect A25)
+
+- Action: fixed the one defect the kernel log reported that `docs/AUDIT.md` never
+  inventoried: `[PLANE:40:sm750-cursor] pixel format with alpha exposed but blend
+  mode not setup`. The DRM core warns only when a plane exposes a format with
+  alpha while `plane->blend_mode_property` is NULL
+  (`validate_blend_mode_for_alpha_formats()` in `drivers/gpu/drm/drm_mode_config.c`,
+  run from `drm_mode_config_validate()` at `drm_dev_register`). Route chosen: keep
+  `DRM_FORMAT_ARGB8888` and create the blend-mode property, offering only
+  `BIT(DRM_MODE_BLEND_PREMULTI)`; adding
+  `drm_plane_create_blend_mode_property()` in the `hardware_cursor` block of
+  `sm750_modeset_init` with a comment that records the reasoning. XRGB8888 was
+  rejected because the cursor path really does consume alpha
+  (`sm750_cursor_encode()` dithers it over three palette entries) and because
+  `sm750_cursor_unpremultiply()` divides colour by alpha, so premultiplied ARGB is
+  the contract the hardware already implements; dropping alpha would also break
+  compositors that hand a cursor plane ARGB8888. COVERAGE is not offered: this
+  driver unpremultiplies, it never premultiplies. `drm_plane_create_alpha_property()`
+  is deliberately absent - the hardware has no plane-wide alpha factor, and the
+  core check does not ask for one. No `LINUX_VERSION_CODE` guard is needed: the
+  prototype is identical in 6.17, 7.2 and 7.3, and 6.17's `WARN_ON` requires
+  PREMULTI in the mask while 7.2/7.3 accept it. `tests/check-hardware-cursor.sh`
+  gained three requirements and a negative gate rejecting
+  `drm_plane_create_alpha_property`; it failed red before the driver change.
+- Files: `src/sm750_drm.c` (include at :30, comment :3473-3490, call :3491),
+  `tests/check-hardware-cursor.sh` (:32-33, :43-45), `docs/DEFECTS.md` (header
+  :4-8, row A25 :46, section :90-143), `docs/RELEASE-NOTES.md` (0.6.0 bullet),
+  `docs/evidence/EVIDENCE-GAPS.md` (GAP-B2 :58-147, table row :398, closing
+  paragraph :405-410), `docs/DELIVERABLES.md` (:25, :27, :394),
+  `docs/evidence/runtime/cursor-alpha-01-warning-before.txt`,
+  `docs/evidence/builds/19-cursor-alpha-fix.log`.
+- Evidence: before capture from the running pre-fix 0.5.9 module, warning at
+  `dmesg` line 1245 `[    3.638007]`, plus the pre-fix modetest property surface
+  showing plane 40 with `type` and `IN_FORMATS` only
+  (`docs/evidence/runtime/cursor-alpha-01-warning-before.txt`); the kernel check
+  source, the diff, the gate, the object proof (`U
+  drm_plane_create_blend_mode_property`, `mov $0x1,%esi` before the call, zero
+  references to the alpha property), `make check` -> `Ran 4 tests ... OK`,
+  `Built 9` over 7.2.15/7.3.3/7.3.4 and `Built 3` over 6.17.1-300
+  (`docs/evidence/builds/19-cursor-alpha-fix.log`). Scratch transcripts in
+  `/mega/tmp/sm750/t13/`.
+- Outcome: `make check` exit 0 with 17 recipe commands and no warning from
+  `src/`; the four-tree matrix is green. The live log still shows the warning
+  because the running module is the stale pre-fix build - the built 0.6.0 module
+  carries the property and the warning clears once T11 installs it and reloads.
+  Unrelated finding reported, not fixed: `./tests/audit-release.sh` exits 1 with
+  `Source archive contains development-only content: docs/plan` because
+  `docs/plan/` and `.gem-team.yaml` became tracked while `build-package.sh:98-100`
+  excludes only `docs/images`; that is a packaging-scope regression for the task
+  that owns `build-package.sh`, and `dist/RELEASE-AUDIT.txt` is therefore still
+  the 09:54 report next to the 13:25 artifacts.
+
+### 2026-11-18T10:52Z | gem-implementer | T13 follow-up: transient check-vblank failure, then two clean runs
+
+- Action: a `make check` run at 10:47Z failed at `tests/check-drm-module.sh`
+  with `DRM_IOCTL_WAIT_VBLANK: Invalid argument` (exit 2), then passed when
+  repeated. Re-ran the target twice in a row and ran `tests/check-vblank
+  /dev/dri/card0 60` standalone; everything passed.
+- Files: none changed (diagnosis only).
+- Evidence: `/mega/tmp/sm750/t13/make-check-final2.log` (the failing run,
+  `DRM_IOCTL_WAIT_VBLANK: Invalid argument`), `make-check-r1.log` and
+  `make-check-r2.log` (exit 0, 17 recipe commands each), and the standalone
+  `Measured 60.00 DRM vblanks/s over 120 events (expected 60.00)`.
+- Outcome: the live vblank ioctl check is flaky, not broken by T13 - the module
+  under test is the stale 0.5.9 build and the dmesg around that time shows
+  repeated probe/modeset cycles from other work on the host, so a
+  `DRM_VBLANK_RELATIVE` wait can return `EINVAL` while the CRTC is momentarily
+  off. Do not treat a single `DRM_IOCTL_WAIT_VBLANK: Invalid argument` failure as
+  a driver regression; re-run before investigating.
+
+### 2026-11-18T10:50Z | orchestrator | T12 and T13 accepted; T18 added for the release-archive gate
+
+- Accepted T12 (gem-devops): VBIOS captured at 49152 bytes, sha256
+  `16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551`,
+  reproduced byte-identically on a second read; GAP-B1 closed. The helper's
+  `EXPECT=65536` is a stale constant, so its exit 2 is success - recorded as a
+  plan decision rather than a defect.
+- Accepted T13 (gem-implementer): the cursor plane keeps `DRM_FORMAT_ARGB8888`
+  and declares `BIT(DRM_MODE_BLEND_PREMULTI)` at `src/sm750_drm.c:3491`; defect
+  A25 recorded. The live probe warning can only clear after T11 reloads the
+  module.
+- Added T18 (wave 9) for a pre-existing gate defect: `./tests/audit-release.sh`
+  exits 1 with "Source archive contains development-only content: docs/plan"
+  because `build-package.sh:98` archives `git ls-files` while
+  `tests/audit-release.sh:54-58` forbids `docs/plan`, `docs/evidence` and
+  `docs/images`. T8 now depends on T18.
+- Also recorded in the plan: the io_uring assessment (not applicable, with
+  evidence), the QEMU harness route for T17 (generic loader + gdb; `-option-rom`
+  cannot load this image), and the T11 rebuild requirement because the staged
+  0.6.0 RPM predates T13.
+- Files: `docs/plan/20261117-sm750-driver-prod/plan.yaml` (18 tasks, 32
+  decisions), `docs/LOGBOOK.md`.
+- Evidence: subagent reports for T12 and T13; measurements in this session's
+  shell history under `/mega/tmp/sm750/`.
+- Outcome: plan accepted at 13/18 completed; T11, T15, T16, T17, T18 and T8
+  remain.
+
+### 2026-11-18T11:30Z | orchestrator | T15 accepted; static-analysis toolchain adopted; T19 created
+
+- T15 (gem-debugger) accepted. The `kms_addfb_basic` `size-max` EINVAL is
+  correct by design: IGT puts a DRM_FORMAT_RGB565 1024x2048 pitch 2048
+  framebuffer on the same 4 MiB object (`../tests/kms_addfb_basic.c:590-594`),
+  and generic DRM rejects it twice - the height check against the declared
+  `max_height` 1152 (`src/sm750_drm.c:3437`, from `SM750_DRM_MAX_HEIGHT`
+  at `:95`) and the atomic plane-format gate, because the primary plane
+  advertises XRGB8888 only. Every datasheet limit is satisfied, so the silicon
+  is not the constraint. Decision recorded in the plan: no code change; the
+  declared limits get documented and size-max stops counting as a driver FAIL.
+- The live numbers in that report come from the stale 0.5.9 module and still
+  need a 0.6.0 re-check after T11.
+- Toolchain: the host owner installed sparse, dwarves (pahole), smatch,
+  cppcheck, coccinelle, kmscube, bear, kernel-tools, v4l-utils and
+  igt-gpu-tools. The orchestrator verified every binary on PATH and every RPM
+  version. T19 was created and dispatched to turn that into an opt-in
+  `make static` gate; it deliberately does not join the `check` target,
+  whose 17 recipe commands are asserted by `tests/check-drm-module.sh` and
+  documented in `docs/AUDIT.md` A23.
+- T18 stays queued behind T11/T17 so only one `make` runs in the tree.
+- Files: `docs/plan/20261117-sm750-driver-prod/plan.yaml` (19 tasks),
+  `docs/LOGBOOK.md`.
+- Evidence: `docs/evidence/runtime/10-addfb-size-max.txt` (476 lines);
+  subagent report for T15.
+- Outcome: 14/19 completed; T11, T16, T17, T19 running; T18, T8 pending.

@@ -1,0 +1,16 @@
+OK: source payload matches git ls-files (73 files)
+OK: rpmbuild -ba exit 0: sm750hdmifb-0.6.0-1.fc43.src.rpm, sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+OK: dependencies: BuildRequires 4, runtime dkms, post dkms+kmod, preun dkms
+OK: scriptlets: add in %post, build+install+depmod in %posttrans, remove in %preun, no %postun
+OK: %files: 36 files, 4 owned directories, 2 %config(noreplace) entries
+OK: missing headers: warning on stderr, exit 0; build/install/depmod sequence verified
+OK: dkms sandbox: sm750hdmifb/0.6.0, 7.3.4-100.fc43.x86_64, x86_64: built
+OK: built object: /mega/tmp/sm750/t9/rpmwork/dkms/sm750hdmifb/0.6.0/7.3.4-100.fc43.x86_64/x86_64/module/sm750hdmidrm.ko (320960 bytes, host tree untouched)
+SKIP: dnf install sm750hdmifb-0.6.0-1.fc43.noarch.rpm: needs root (writes /usr/src, /etc, /var/lib/dkms)
+SKIP: dkms status showing 'installed' in the host tree: needs root, follows the skipped dnf install
+SKIP: dkms install (even with --installtree): 'Error! You must be root to use this command.'
+SKIP: modinfo of the installed module: needs root, follows the skipped dnf install
+SKIP: dnf remove sm750hdmifb: needs root and the skipped dnf install
+SKIP: dkms status after erase (registration gone): needs root, follows the skipped dnf remove
+SKIP: closing commands recorded in docs/evidence/EVIDENCE-GAPS.md GAP-B7
+RPM/DKMS checks passed: sm750hdmifb 0.6.0, sandbox built, root-only steps skipped

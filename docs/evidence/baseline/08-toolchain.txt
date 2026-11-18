@@ -1,0 +1,65 @@
+# host: deneb
+# kernel: 7.3.3-100.fc43.x86_64
+# utc: 2026-11-17T18:31:29Z
+# command: command -v plus one version probe per tool
+# ---- output ----
+rpmbuild: FOUND /usr/bin/rpmbuild
+rpmdev-setuptree: FOUND /usr/bin/rpmdev-setuptree
+spectool: FOUND /usr/bin/spectool
+dkms: FOUND /usr/bin/dkms
+modinfo: FOUND /usr/bin/modinfo
+modetest: FOUND /usr/bin/modetest
+gcc: FOUND /usr/local/cuda/bin/gcc
+python3: FOUND /usr/bin/python3
+igt-info: MISSING
+kmscube: MISSING
+v4l2-ctl: MISSING
+pkg-config: FOUND /usr/bin/pkg-config
+make: FOUND /usr/bin/make
+dnf: FOUND /usr/bin/dnf
+rpm2cpio: FOUND /usr/bin/rpm2cpio
+xxd: FOUND /usr/bin/xxd
+
+$ rpmbuild --version
+RPM version 6.0.2
+
+$ dkms --version
+dkms-3.4.4
+
+$ modinfo -V
+kmod version 34.2
++ZSTD +XZ +ZLIB +LIBCRYPTO
+
+$ modetest --version   (no --version option; prints usage)
+usage: modetest [-acDdefMoPpsCvrw]
+
+$ rpm -qf /usr/bin/modetest
+drm-utils-2.4.134-1.fc43.x86_64
+
+$ /usr/bin/gcc --version | head -1
+gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+
+$ /usr/local/cuda/bin/gcc --version | head -1  (this is what bare gcc resolves to)
+gcc (GCC) 14.4.1 20260724 (Red Hat 14.4.1-2)
+
+$ python3 --version
+Python 3.14.10
+
+$ make --version | head -1
+GNU Make 4.4.1
+
+$ dnf --version | head -1
+dnf5 version 5.2.18.0
+
+$ pkg-config --version
+2.3.0
+
+$ rpm2cpio (no version flag; usage probe)
+argument is not an RPM package
+
+$ pkg-config --modversion libdrm  (system prefix)
+Package libdrm was not found in the pkg-config search path.
+Perhaps you should add the directory containing `libdrm.pc'
+to the PKG_CONFIG_PATH environment variable
+Package 'libdrm' not found
+[exit 1]

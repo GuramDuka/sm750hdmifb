@@ -1,0 +1,6 @@
+# SHA-256 of the vendor documents archived by docs/specs/INDEX.md.
+# Files are downloaded, never committed. Names below are the download names.
+# Verify with: sha256sum -c SHA256SUMS
+# Retrieval date: 2026-11-17
+fac31257bb6ab058573bdb3fa255e6c5146522b0dee8aa6376cd59e500531889  SM750_Datasheet_v1.4.pdf
+6eafa7240ead440fe6bf374fbeb393d75f26191148e3e8595f42accbb3bfd19f  SM750_PB_EN_201910.pdf

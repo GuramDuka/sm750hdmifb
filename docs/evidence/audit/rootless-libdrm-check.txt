@@ -1,0 +1,18 @@
+ROOTLESS LIBDRM CHAIN - VERIFIED COMMANDS
+
+dnf download libdrm libdrm-devel --destdir /tmp/opencode/libdrm
+for r in /tmp/opencode/libdrm/*.rpm; do (cd /tmp/opencode/libdrm && rpm2cpio $r | cpio -idmv); done
+export PKG_CONFIG_PATH=/tmp/opencode/libdrm/usr/lib64/pkgconfig
+export PKG_CONFIG_SYSROOT_DIR=/tmp/opencode/libdrm
+export LD_LIBRARY_PATH=/tmp/opencode/libdrm/usr/lib64
+export C_INCLUDE_PATH=/tmp/opencode/libdrm/usr/include
+
+cd /tmp/opencode/clean && make check   -> EXIT 0 (17 recipe commands, 13 shell + 2 python + 2 binaries)
+cd /tmp/opencode/sm750audit && make check-all-kernels -> EXIT 0
+  Built 9 sm750hdmidrm kernel/format combinations (7.2.13 x3, 7.2.15 x3, 7.3.3 x3)
+
+WITHOUT the chain:
+  make check              -> EXIT 2: tests/check-vblank.c:11:10: fatal error: xf86drm.h: No such file or directory
+  make check-all-kernels  -> EXIT 2: same failure via Makefile:35
+
+pkg-config --modversion libdrm -> 2.4.134

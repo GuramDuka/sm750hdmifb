@@ -1,0 +1,40 @@
+# host: deneb
+# kernel: 7.3.3-100.fc43.x86_64
+# utc: 2026-11-17T18:31:30Z
+# note: no package is installed; RPM payloads are unpacked into
+#       /mega/tmp/sm750/t3/libdrm and used through PKG_CONFIG_PATH.
+# ---- commands ----
+mkdir -p /mega/tmp/sm750/t3/libdrm
+cd /mega/tmp/sm750/t3/libdrm
+dnf download libdrm libdrm-devel
+for r in *.rpm; do rpm2cpio "$r" | cpio -idm; done
+export PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig
+export PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm
+export LD_LIBRARY_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64
+# ---- output ----
+
+$ ls -l *.rpm
+-rw-r--r-- 1 coder coder 181644 Nov 17 20:47 libdrm-2.4.134-1.fc43.i686.rpm
+-rw-r--r-- 1 coder coder 167169 Nov 17 20:47 libdrm-2.4.134-1.fc43.x86_64.rpm
+-rw-r--r-- 1 coder coder 191379 Nov 17 20:47 libdrm-devel-2.4.134-1.fc43.i686.rpm
+-rw-r--r-- 1 coder coder 191473 Nov 17 20:47 libdrm-devel-2.4.134-1.fc43.x86_64.rpm
+
+$ PKG_CONFIG_PATH=... PKG_CONFIG_SYSROOT_DIR=... pkg-config --modversion libdrm
+2.4.134
+[exit 0]
+
+$ pkg-config --cflags --libs libdrm
+-I/mega/tmp/sm750/t3/libdrm/usr/include -I/mega/tmp/sm750/t3/libdrm/usr/include/libdrm -L/mega/tmp/sm750/t3/libdrm/usr/lib64 -ldrm
+[exit 0]
+
+$ ls -l /mega/tmp/sm750/t3/libdrm/usr/include/xf86drm.h
+-rw-r--r-- 1 coder coder 37616 May 29 03:00 /mega/tmp/sm750/t3/libdrm/usr/include/xf86drm.h
+
+# ---- tests/check-vblank compile (isolated copy, repo untouched) ----
+cc -O2 -Wall -Wextra -Werror $(pkg-config --cflags libdrm) \
+	-o tests/check-vblank tests/check-vblank.c $(pkg-config --libs libdrm) -lm
+[exit 0]
+
+$ ls -l /mega/tmp/sm750/t3/build/tests/check-vblank
+-rwxr-xr-x 1 coder coder 13056 Nov 17 21:31 /mega/tmp/sm750/t3/build/tests/check-vblank
+[exit 0]

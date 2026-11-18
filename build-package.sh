@@ -5,7 +5,7 @@ set -euo pipefail
 readonly project_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 readonly package=sm750hdmifb
 readonly module=sm750hdmidrm
-readonly version=0.5.9
+readonly version=0.6.0
 readonly arch=all
 readonly build_root="${project_dir}/build/package/${package}_${version}_${arch}"
 readonly dist_dir="${project_dir}/dist"
@@ -53,6 +53,10 @@ install -m 0755 "${project_dir}/packaging/drm-prerm" \
 	"${build_root}/DEBIAN/prerm"
 install -m 0755 "${project_dir}/packaging/drm-postrm" \
 	"${build_root}/DEBIAN/postrm"
+# Maintainer scripts carry @VERSION@ instead of a literal version so a release
+# bump cannot leave them pointing at the previous one (defect A09).
+sed -i "s/@VERSION@/${version}/g" "${build_root}/DEBIAN/postinst" \
+	"${build_root}/DEBIAN/prerm"
 
 cat >"${build_root}/DEBIAN/control" <<EOF
 Package: ${package}
@@ -62,6 +66,7 @@ Priority: optional
 Architecture: ${arch}
 Maintainer: kodemunkie <kodemunkie@users.noreply.github.com>
 Depends: dkms, make, gcc
+Recommends: initramfs-tools | dracut
 Provides: sm750hdmi-dkms
 Conflicts: sm750hdmi-dkms, sm750hdmidrm-xrgb8888-dkms, sm750hdmidrm-rgb565-dither-dkms
 Replaces: sm750hdmi-dkms, sm750hdmidrm-xrgb8888-dkms, sm750hdmidrm-rgb565-dither-dkms
@@ -74,20 +79,42 @@ EOF
 
 printf '/etc/modprobe.d/%s.conf\n/etc/modules-load.d/%s.conf\n' \
 	"${module}" "${module}" >"${build_root}/DEBIAN/conffiles"
+# dpkg --verify needs a manifest; dpkg-deb does not generate one (defect A14).
+(
+	cd "${build_root}"
+	find . -path ./DEBIAN -prune -o -type f -printf '%P\0' |
+		sort -z | xargs -0 md5sum
+) >"${build_root}/DEBIAN/md5sums"
 dpkg-deb --root-owner-group --build "${build_root}" "${deb}"
 
-tar -C "${project_dir}" -czf "${source_archive}" \
-	--transform="s|^|${package}-${version}/|" \
-	--exclude-vcs --exclude='./build' --exclude='./dist' \
-	--exclude='src/*.o' --exclude='src/*.ko' --exclude='src/*.cmd' \
-	--exclude='src/.*.cmd' --exclude='src/*.mod' \
-	--exclude='src/*.mod.c' --exclude='src/Module.symvers' \
-	--exclude='src/modules.order' \
-	--exclude='tests/check-vblank' \
-	--exclude='tests/test-bbdither-rgb565' \
-	--exclude='tests/test-scale-optimizations' \
-	.gitignore LICENSE Makefile README.md build-package.sh dkms.conf \
-	src docs tests tools packaging .github
+# Ship exactly the tracked tree. Packing the working tree leaked untracked
+# planning notes into the release and made the audit scan them (defect A02).
+# Screenshots stay in git: the source archive only has to build the module
+# (defect A22). Building from an unpacked tarball has no .git, so fall back to
+# the explicit path list with the same excludes.
+if git -C "${project_dir}" rev-parse --git-dir >/dev/null 2>&1; then
+	tracked_list=$(mktemp "${TMPDIR:-/tmp}/sm750-tracked.XXXXXX")
+	trap 'rm -f -- "$tracked_list"' EXIT
+	git -C "${project_dir}" ls-files -z -- . ':(exclude)docs/images/*' \
+		>"$tracked_list"
+	tar -C "${project_dir}" -czf "${source_archive}" \
+		--transform="s|^|${package}-${version}/|" --null \
+		-T "$tracked_list"
+else
+	tar -C "${project_dir}" -czf "${source_archive}" \
+		--transform="s|^|${package}-${version}/|" \
+		--exclude-vcs --exclude='./build' --exclude='./dist' \
+		--exclude='src/*.o' --exclude='src/*.ko' --exclude='src/*.cmd' \
+		--exclude='src/.*.cmd' --exclude='src/*.mod' \
+		--exclude='src/*.mod.c' --exclude='src/Module.symvers' \
+		--exclude='src/modules.order' \
+		--exclude='tests/check-vblank' \
+		--exclude='tests/test-bbdither-rgb565' \
+		--exclude='tests/test-scale-optimizations' \
+		--exclude='docs/images/*' \
+		.gitignore LICENSE Makefile README.md build-package.sh dkms.conf \
+		src docs tests tools packaging .github
+fi
 
 (cd "${dist_dir}" && sha256sum "$(basename "${deb}")" \
 	"$(basename "${source_archive}")" >SHA256SUMS)

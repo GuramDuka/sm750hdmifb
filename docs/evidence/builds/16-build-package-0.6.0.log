@@ -1,0 +1,25 @@
+# utc: 2026-11-18T06:54:20Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# compiler: /usr/bin/gcc -> gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+# command: ./build-package.sh && ./tests/audit-release.sh
+# env: LC_ALL=C; rootless
+# workdir: /home/coder/sm750hdmifb
+
+--- output ---
+$ ./build-package.sh
+dpkg-deb: building package 'sm750hdmifb' in '/home/coder/sm750hdmifb/dist/sm750hdmifb_0.6.0_all.deb'.
+/home/coder/sm750hdmifb/dist/sm750hdmifb_0.6.0_all.deb
+/home/coder/sm750hdmifb/dist/sm750hdmifb-0.6.0-source.tar.gz
+/home/coder/sm750hdmifb/dist/SHA256SUMS
+[exit 0]
+
+$ ls -l dist/
+total 336
+-rw-r--r-- 1 coder coder  14715 Nov 18 09:53 RELEASE-AUDIT.txt
+-rw-r--r-- 1 coder coder    190 Nov 18 09:54 SHA256SUMS
+-rw-r--r-- 1 coder coder 126561 Nov 18 09:54 sm750hdmifb-0.6.0-source.tar.gz
+-rw-r--r-- 1 coder coder  73212 Nov 18 09:54 sm750hdmifb_0.6.0_all.deb
+
+$ ./tests/audit-release.sh
+Release audit passed: /home/coder/sm750hdmifb/dist/RELEASE-AUDIT.txt
+[exit 0]

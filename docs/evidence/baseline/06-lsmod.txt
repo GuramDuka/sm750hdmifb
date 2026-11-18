@@ -1,0 +1,9 @@
+# host: deneb
+# kernel: 7.3.3-100.fc43.x86_64
+# utc: 2026-11-17T18:31:29Z
+# command: lsmod | grep -E '^(sm750hdmidrm|drm_vram_helper|drm_ttm_helper|drm|sii902x) '
+# ---- output (stdout+stderr, LC_ALL=C) ----
+sm750hdmidrm          163840  8
+drm_vram_helper        28672  1 sm750hdmidrm
+drm_ttm_helper         20480  3 drm_vram_helper,nvidia_drm,sm750hdmidrm
+# ---- exit: 0 ----

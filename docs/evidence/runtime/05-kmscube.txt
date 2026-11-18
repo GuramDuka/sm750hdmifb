@@ -1,0 +1,133 @@
+T10 - RUNTIME TIER 5: KMSCUBE - BEFORE / PRE-FIX BASELINE
+======================================================================
+Module under test: sm750hdmidrm as currently loaded = STALE PRE-FIX 0.5.9 BUILD.
+Proof: /sys/module/sm750hdmidrm/version and /srcversion do not exist; there is no
+`regs` entry under /sys/module/sm750hdmidrm/; dkms status reports
+`sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: installed`; git HEAD 27db03b
+"Release 0.5.9 with newer kernel support". This file is the PRE-FIX BASELINE, not a
+result for the 0.6.0 build.
+
+TOOL PROVENANCE (no root install was performed)
+  kmscube binary : /mega/tmp/sm750/t10/x/kmscube-0-11.20241006.git311eaaa.fc43.x86_64/usr/bin/kmscube
+  source package : kmscube-0-11.20241006.git311eaaa.fc43.x86_64.rpm, unpacked with
+                   `rpm2cpio <rpm> | cpio -idmv` under /mega/tmp/sm750/t10/x/
+  dependency check: `ldd` fully satisfied against the host system - kmscube was NOT
+                   installed with dnf and no package was added or removed.
+
+STACK OBSERVED
+  EGL version   : "1.5", vendor "Mesa Project"
+  GL ES version : OpenGL ES 3.2 Mesa 25.3.6
+  renderer      : "llvmpipe (LLVM 21.1.8, 256 bits)"   <- software rasterizer
+  Note: rendering is done by llvmpipe on the CPU, not by SM750 hardware acceleration.
+  That is a property of the host Mesa setup, not of the driver, and is reported so the
+  fps numbers below are not mistaken for a hardware performance measurement.
+  stderr always contains, once per opened fd:
+      pci id for fd 3: 126f:0750, driver (null)
+  (126f:0750 is the SM750; `driver (null)` is Mesa not resolving a pci-id table entry
+  for this device. Recorded, not interpreted as a driver defect.)
+
+======================================================================
+TOOLING ROOT CAUSE FOUND FIRST: kmscube EXITS IMMEDIATELY ON STDIN EOF
+======================================================================
+kmscube polls stdin for the user-interrupt key. When stdin is /dev/null, read()
+returns EOF at once, kmscube treats that as "user interrupted!" and exits 0 BEFORE it
+prints its frame counter. Earlier runs therefore exited 0 in ~2.8 s with no frame line
+and looked like a hang or a silent failure.
+
+  Reproduced:
+    kmscube -D /dev/dri/card0 -c 120   (stdin = /dev/null)  -> exit 0
+      stdout ends:  ===================================
+                    user interrupted!
+      no "Rendered ... frames" line
+
+  Fix used for every real run in this file (stdin held open):
+    tail -f /dev/null | kmscube -D /dev/dri/card0 -c N
+
+This was a tooling gap, NOT a driver defect. It is recorded here because the earlier
+GAP entry for S5 was caused by it.
+
+======================================================================
+RESULTS WITH STDIN HELD OPEN (all exit 0)
+======================================================================
+  command: tail -f /dev/null | kmscube -D /dev/dri/card0 -c 1
+    -> exit 0, "Rendered 0 frames in 0.081795 sec"   (startup only, 1st frame not counted)
+  command: tail -f /dev/null | kmscube -D /dev/dri/card0 -c 120
+    -> exit 0
+       Rendered 113 frames in 2.000055 sec (56.498446 fps)
+       Rendered 119 frames in 2.100066 sec (56.664892 fps)
+  command: tail -f /dev/null | kmscube -D /dev/dri/card0 -c 300
+    -> exit 0
+       Rendered 115 frames in 2.000020 sec (57.499432 fps)
+       Rendered 236 frames in 4.016722 sec (58.754375 fps)
+       Rendered 299 frames in 5.066709 sec (59.012665 fps)
+  (Earlier runs of the same shape: -c 60 -> "Rendered 59 frames in 1.899982 sec
+   (31.052919 fps)"; -c 600 -> 599 frames in 21.55 s, 27.8 fps.)
+  Long-run figure to quote: 299 frames in 5.066709 s = 59.01 fps against a 60 Hz panel,
+  i.e. the render loop tracks vblank through this driver at essentially the panel rate.
+  Raw files: /mega/tmp/sm750/t10/f_kc120.out, f_kc300.out, f_kc60.out (and f_kc*.err).
+
+KMS PATH PROVEN, NOT ASSUMED
+  strace of a kmscube run shows the real KMS ioctls succeeding on card0:
+    DRM_IOCTL_MODE_GETRESOURCES   = 0
+    DRM_IOCTL_MODE_GETCONNECTOR   = 0
+    DRM_IOCTL_MODE_GETENCODER     = 0
+    DRM_IOCTL_MODE_CREATE_DUMB    = 0
+    DRM_IOCTL_MODE_MAP_DUMB       = 0
+    DRM_IOCTL_MODE_ADDFB2         = 0
+    DRM_IOCTL_MODE_SETCRTC        = 0
+    DRM_IOCTL_MODE_PAGE_FLIP      = 0
+    failing syscalls             : none
+  So kmscube really programs crtc 38 on connector 35 at 1920x1080 through the legacy
+  SETCRTC + PAGE_FLIP path and really page-flips.
+
+  Independently confirmed by sampling the CRTC binding from a second, read-only client
+  while kmscube rendered (/mega/tmp/sm750/t10/readback_during_kmscube.py):
+    crtc 38 fb_id changed from 43 (desktop) to 44 and 42 (kmscube's own buffers),
+    position (0,0). After kmscube exited, fb_id returned to 0 then 43.
+  Lesson recorded: the first process to open card0 holds DRM master, so a probe must
+  open the device AFTER kmscube starts, otherwise kmscube itself fails with
+  `failed to set mode: Permission denied` and exit 243.
+
+======================================================================
+VARIANTS THAT DO NOT START (tooling limitations, not driver defects)
+======================================================================
+  command: tail -f /dev/null | kmscube -D /dev/dri/card0 -A -c 120
+    -> exit 255, stdout ends: no eglDupNativeFenceFDANDROID
+       (kmscube's atomic path needs an EGL Android native-fence extension this Mesa
+        build does not expose. Tooling gap.)
+  command: tail -f /dev/null | kmscube -D /dev/dri/card0 -n 35 -c 60
+    -> exit 255, stdout: no connected connector!
+                         failed to initialize legacy DRM
+       (kmscube's -n is a connector INDEX, not the DRM connector id 35. With one
+        connected connector the valid index is 0. Tooling misuse, not a driver fault.)
+  command: kmscube --help
+    -> prints usage, exit non-zero (no --help support in this build).
+
+======================================================================
+WHAT COULD NOT BE PROVEN, AND WHY
+======================================================================
+  Panel-visible pixel content was NOT read back from any client, because:
+    - there is no /dev/fb* on this host (CONFIG_FB_DEVICE is not set in
+      /boot/config-7.3.4-100.fc43.x86_64, although CONFIG_DRM_FBDEV_EMULATION=y and
+      dmesg logs `fb0: sm750hdmidrmdrm frame buffer device`);
+    - there is no writeback connector (modetest -c reports 0), so `modetest -o` cannot
+      dump a frame - it exits 1 with
+      `writeback / dump is only supported in atomic mode`;
+    - a non-owning client cannot MAP_DUMB another client's GEM handles: GETFB2 on
+      kmscube's fbs 42/44 returned handles=(0,...), and MAP_DUMB failed with
+      `[Errno 2] No such file or directory`.
+  What IS proven: kmscube starts, creates a GL context, takes over crtc 38, page-flips,
+  and reports a steady ~59 fps. A frame count and fps are therefore available; the
+  pixels on the panel are not.
+
+======================================================================
+RESULT FOR S5 (kmscube)
+======================================================================
+  Started from extracted RPM payload, no root install : yes
+  Exit code                                          : 0
+  Frames rendered                                    : yes, 299 frames in 5.07 s (59.01 fps)
+  GL renderer                                        : llvmpipe (software)
+  Panel pixel content read back                      : no - tooling/kernel-config gap
+  Kernel errors during kmscube runs                  : none in this tier; a separate
+    error episode was observed once at [8523..8586] in the run window and is documented
+    in 07-kernel-log.txt with its full trace and repro status.

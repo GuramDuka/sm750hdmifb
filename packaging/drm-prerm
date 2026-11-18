@@ -3,7 +3,8 @@
 set -e
 
 name=${DPKG_MAINTSCRIPT_PACKAGE:-sm750hdmifb}
-version=0.5.9
+# Substituted from build-package.sh; the version must match the DKMS tree.
+version=@VERSION@
 
 restore_predecessor_file() {
 	path=$1
@@ -15,7 +16,7 @@ restore_predecessor_file() {
 }
 
 if [ "$1" = remove ] || [ "$1" = deconfigure ] || [ "$1" = upgrade ]; then
-	rm -f /etc/X11/xorg.conf.d/20-sm750hdmidrm.conf
+	rm -f /etc/X11/xorg.conf.d/20-sm750hdmidrm-device.conf
 	restore_predecessor_file /etc/X11/xorg.conf.d/20-sm750hdmifb-display.conf
 	restore_predecessor_file /etc/lightdm/lightdm.conf.d/99-sm750hdmifb.conf
 	restore_predecessor_file /usr/local/lib/xorg/modules/drivers/sm750shadow_drv.so

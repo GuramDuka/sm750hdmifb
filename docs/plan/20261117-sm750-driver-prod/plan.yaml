@@ -53,6 +53,14 @@ decisions:
   - "docs/evidence/EVIDENCE-GAPS.md:87-89 is CONTRADICTED: it claims journalctl -k -b yields 0 lines and '-- No entries --', but T10 measured 2017 lines from both `sudo -n dmesg` and `sudo -n journalctl -k -b -q --no-pager`. The file was not edited by T10; the contradiction is recorded in docs/evidence/runtime/07-kernel-log.txt and in the TEST-STRATEGY conflict table. GAP-B2 must be closed on the corrected measurement."
   - "Context clusters are grouped by primary agent because a shared_context key requires one agent: baseline-env = T3/T6 (gem-devops), audit-context = T1/T2 (gem-researcher), docs-context = T4/T7 (gem-documentation-writer). T5 (gem-implementer) and T8 (gem-reviewer) are intentionally standalone: no peer task shares their agent, and they consume cluster findings through relevant_context references."
 
+  - "T12 acceptance (2026-11-18): the VBIOS image is 49152 bytes (48 KiB), NOT 65536. Header size byte 0x02=0x60 and PCIR image-length field at 0x2c=0x0060 both declare 96 blocks; the file length equals the declared length and the whole-image byte sum is 0 mod 256. The helper's EXPECT=65536 is a stale constant, so its exit 2 is SUCCESS on a correct capture. Image /mega/tmp/sm750/vbios-01-00-0.bin sha256 16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551, reproduced byte-identically on a second read. PCIR checksum span, VBE mode list and VBE total memory stay UNDETERMINED rather than guessed."
+  - "T13 acceptance (2026-11-18): the cursor plane keeps DRM_FORMAT_ARGB8888 and declares its blend mode via drm_plane_create_blend_mode_property(&sdev->cursor_plane, BIT(DRM_MODE_BLEND_PREMULTI)) at src/sm750_drm.c:3491. Rationale: the hardware really consumes per-pixel alpha (dithered palette mask) and the driver unpremultiplies at src/sm750_drm.c:2618, so XRGB8888 would misdescribe it; validate_blend_mode_for_alpha_formats() in drivers/gpu/drm/drm_mode_config.c:867-885 only needs blend_mode_property to be non-NULL. drm_plane_create_alpha_property() stays absent because there is no plane-wide alpha factor. The live warning clears only after T11 reloads the module."
+  - "io_uring assessment (2026-11-18, user question): NOT applicable and not to be implemented. Evidence: no DRM driver in the 7.3.4 tree implements uring_cmd (grep count 0 under drivers/gpu/drm/), DEFINE_DRM_GEM_FOPS at src/sm750_drm.c:3255 expands to DRM_GEM_FOPS with no .read/.write, driver_features at :3367/:3381 is DRIVER_GEM|DRIVER_MODESET|DRIVER_ATOMIC with no DRIVER_RENDER and no PRIME/dma-buf path, and the data movement is memcpy_toio into the VRAM BAR (:1529, :1550, :1608, :2848) plus an 8-row DMA1 burst. The cost is memory bandwidth and the vblank budget, not syscall overhead; a new URING_CMD UAPI would be a contract change outside this plan."
+  - "VBIOS execution harness (2026-11-18): QEMU 10.1.5 cannot load this image through -option-rom or -device VGA,romfile= because load_option_rom requires 0x55AA at the END of a 512-byte block and this image has zero such blocks. The generic loader route works and is the T17 harness: -device loader,file=...,addr=0xc0000,force-raw=on plus -S -gdb tcp::PORT, then gdb sets CS=0xc000, EIP=0x1256 and single-steps (proven: 246 ROM instructions traced from 0x000c1256, nested call to 0xc6065 executed). unicorn 2.1.4 in /mega/tmp/sm750/pylib is the second engine for trace comparison."
+  - "Release-archive defect found at T13 (2026-11-18, pre-existing): ./tests/audit-release.sh exits 1 with 'Source archive contains development-only content: docs/plan' because build-package.sh:98 builds the tarball from git ls-files and docs/plan/ is now tracked, while tests/audit-release.sh:54-58 forbids docs/plan, docs/evidence and docs/images. Not caused by T13 or T12; needs its own fix (exclude list entry or an audit rule change) before AC-6 can pass."
+  - "T15 acceptance (2026-11-18): the kms_addfb_basic size-max EINVAL is CORRECT BY DESIGN, not a driver defect. IGT size_tests() at ../tests/kms_addfb_basic.c:590-594 puts a second framebuffer DRM_FORMAT_RGB565 1024x2048 pitch 2048 on the same 4 MiB object; it is rejected twice over by generic DRM code, both drm_dbg_kms-only and therefore silent without drm.debug: the height check in drm_internal_framebuffer_create() (bad framebuffer height 2048 > max_height 1152, declared at src/sm750_drm.c:3437 from SM750_DRM_MAX_HEIGHT at :95) and the atomic plane-format gate in drm_gem_fb_init_with_funcs() (the primary plane advertises XRGB8888 only). Every datasheet limit is satisfied (pitch 16368 B, window height 4095 lines, plane BR 11-bit = 2048 lines, 64 MiB VRAM), so silicon is not the constraint; the limits are deliberate interface declarations. Decided: no code change; document the declared limits and stop counting size-max as a driver FAIL. Live values came from the stale 0.5.9 module and need a re-check on 0.6.0 after T11."
+  - "Static-analysis toolchain adopted (2026-11-18, user acted on m00767): the host owner installed sparse 0.6.4, dwarves 1.32 (pahole), smatch 1.73, cppcheck 2.19.1, coccinelle 1.3, kmscube, bear 3.1.6, kernel-tools 7.3.4-100, v4l-utils 1.32.0 (edid-decode) and igt-gpu-tools 2.4; the orchestrator verified every binary on PATH. T19 was created to convert that into a repeatable opt-in gate, deliberately NOT part of the check target because tests/check-drm-module.sh and docs/AUDIT.md A23 both assert exactly 17 recipe commands."
+
 assumptions:
   - "Primary RPM target Fedora 43 x86_64 (current host), spec written EL9-portable where macros allow: prefer portable macro equivalents over Fedora-only macros, and record any EL9 divergence as a comment in the spec rather than treating it as a blocker. dkms, rpmbuild 6.0.2, rpmdev-setuptree and spectool are present; ~/rpmbuild now EXISTS, so clean-buildroot work uses a fresh _topdir via --define."
   - "Kernel floor remains 6.17 per dkms.conf BUILD_EXCLUSIVE_KERNEL; the EL9 portability target does not lower it, so EL9 kernels below 6.17 are documented as unsupported in the spec comment rather than accommodated."
@@ -431,7 +439,7 @@ tasks:
     depends_on: [T9, T10, T13]
     agent: gem-devops
     context_cluster: runtime-context
-    status: pending
+    status: in_progress
     retries_used: 0
     acceptance_criteria:
       - "Preconditions verified before touching the system: /etc/sudoers.d/10-sm750-debug contains 0.6.0 grants and passes visudo -c -f, and the regenerated file's sha256 is recorded."
@@ -449,6 +457,8 @@ tasks:
         - "Restore the panel to its original mode after the re-run, as in T10."
         - "Scratch under /mega/tmp/sm750/t11/; ASCII only."
       relevant_context:
+        - "REBUILD REQUIRED: the RPM at /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm predates T13 (zero drm_plane_create_blend_mode_property references in its src/sm750_drm.c), so rpmbuild -ba must be re-run from the current tree before installing."
+        - "docs/evidence/packaging/ holds 0.5.9 runs archived under 0.5.9/; dist/ holds a 13:25 deb and tarball that predate T13 as well."
         - "Why this task exists: /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz is 60360 B, mtime 2026-11-17 22:17, no version field in modinfo, zero occurrences of the string 'regs'; dkms status shows sm750hdmifb/0.5.9 installed for 7.3.3-100 and 7.3.4-100 from /usr/src/sm750hdmifb-0.5.9 which also lacks the regs code; rpm -q sm750hdmifb reports not installed. The .ko sits in extra/ rather than updates/dkms, so DEST_MODULE_LOCATION was not honoured by whatever installed it."
         - "Allowlisted privileged commands as of the last verified sudo -n -l: /usr/local/sbin/sm750-regs, /usr/local/sbin/sm750-lspci, /usr/local/sbin/sm750-vbios-dump, dmesg, journalctl -k -b [--no-pager|-q --no-pager], dkms status|install|uninstall|build|remove -m sm750hdmifb -v <ver>, depmod -a, modprobe [-r] sm750hdmidrm, dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-<ver>-1.fc43.noarch.rpm, dnf remove -y sm750hdmifb."
         - "The RPM install path in the allowlist points at /mega/tmp/sm750/t6/rpmbuild; either build there or report the mismatch as a missing grant."
@@ -468,7 +478,7 @@ tasks:
     depends_on: [T3]
     agent: gem-devops
     context_cluster: runtime-context
-    status: pending
+    status: completed
     retries_used: 0
     acceptance_criteria:
       - "The helper /usr/local/sbin/sm750-vbios-dump runs as coder through the existing sudo grant and writes the image; its stdout and stderr are captured to docs/evidence/baseline/18-vbios-dump.txt."
@@ -514,7 +524,7 @@ tasks:
     depends_on: [T5, T9]
     agent: gem-implementer
     context_cluster: src-context
-    status: pending
+    status: completed
     retries_used: 0
     acceptance_criteria:
       - "The probe-time warning disappears: 'pixel format with alpha exposed but blend mode not setup' no longer appears in the kernel log for sm750-cursor after the fix, demonstrated by a captured log excerpt, or the driver's intent is documented in-code and the warning is shown to be expected for this hardware with the reason stated."
@@ -584,7 +594,7 @@ tasks:
     wave: 8
     depends_on: [T10, T13]
     agent: gem-debugger
-    status: pending
+    status: completed
     retries_used: 0
     acceptance_criteria:
       - "Root cause identified with evidence: the exact subtest parameters, the driver function that returns EINVAL, and the comparison against the DRM core expectation are all recorded in docs/evidence/runtime/ with file:line references."
@@ -616,7 +626,7 @@ tasks:
     wave: 8
     depends_on: [T10]
     agent: gem-debugger
-    status: pending
+    status: in_progress
     retries_used: 0
     acceptance_criteria:
       - "The captured episode is reproduced from docs/evidence/runtime/07-kernel-log.txt with its full stack, exact timestamps and the sequence of client operations that preceded it."
@@ -651,7 +661,7 @@ tasks:
     depends_on: [T12]
     agent: gem-implementer
     context_cluster: vbios-re
-    status: pending
+    status: in_progress
     retries_used: 0
     acceptance_criteria:
       - "A structure map is committed (docs/VBIOS-REVERSE-ENGINEERING.md) naming every region with its file offset range, length, kind (header, PCI data structure, code, data table, font bitmap, string, padding) and the evidence used to classify it; the regions must cover all 49152 bytes with no unclassified gap, and the map states that the image is loaded at 0xC0000."
@@ -686,6 +696,73 @@ tasks:
       high_risk_signals: []
       critic_signals: [architecture]
 
+  - id: T18
+    title: Fix the release-archive gate so audit-release passes on a tracked docs tree
+    description: |
+      Rung: reuse recorded evidence; bounded fix. ./tests/audit-release.sh exits 1 with
+      "Source archive contains development-only content: docs/plan" because build-package.sh
+      builds the source tarball from git ls-files while docs/plan, docs/evidence and
+      docs/images are now tracked. The gate and the packager disagree about what belongs in
+      a release archive; make them agree without weakening the gate.
+    wave: 9
+    depends_on: [T12, T13, T14]
+    agent: gem-implementer
+    status: pending
+    retries_used: 0
+    acceptance_criteria:
+      - "The disagreement is stated with line references: build-package.sh:98-114 (tarball content from git ls-files plus an exclude list) versus tests/audit-release.sh:54-58 (forbidden paths)."
+      - "One coherent rule is chosen and justified: either the packager excludes docs/plan, docs/evidence and docs/images (keeping the audit rule unchanged), or the audit rule is narrowed with a written reason. The gate must not be weakened to hide development content."
+      - "The rule is implemented in one place and referenced from the other, so a future docs/ addition cannot silently break the gate again."
+      - "./tests/audit-release.sh exits 0 on a freshly built tarball, and the tarball manifest shows zero docs/plan, docs/evidence and docs/images entries; the manifest is captured under docs/evidence/builds/."
+      - "make check stays green (17 recipe commands), build-package still produces the deb and tarball, and no src/, tests/check-*.sh assertion is deleted."
+      - "docs/PACKAGING-RPM.md and docs/DELIVERABLES.md mention the archive-content rule in one sentence each; docs/LOGBOOK.md gets one entry; docs/DEFECTS.md records the row."
+    handoff:
+      constraints:
+        - "Do not delete or relax a check to make the suite pass; if the audit rule is wrong, change it deliberately and say why in the plan decision."
+        - "Scratch under /mega/tmp/sm750/t18/; nothing in $HOME; ASCII only."
+        - "dist/ may be rebuilt; do not delete docs/evidence/packaging/0.5.9/ archives."
+      relevant_context:
+        - "Failure text: 'Source archive contains development-only content: docs/plan' from ./tests/audit-release.sh, exit 1."
+        - "build-package.sh:98-100 excludes only docs/images today; the tarball is built from git ls-files output."
+        - "docs/plan/, docs/evidence/ and .gem-team.yaml became tracked after T14's commit 6332870 and the orchestrator commits ca30ebf, 906e9ce, 9e71a3b, 53098af."
+        - "T12 measured docs/evidence count in the tarball as 0 and the docs/plan count as non-zero."
+
+  - id: T19
+    title: Static-analysis gate over src/ with sparse, smatch, cppcheck, coccinelle and pahole
+    description: |
+      Rung: new coverage, not a defect. The driver has passed make check, the four-kernel
+      build matrix and the rootless runtime suite, but src/ has never been through
+      kernel-oriented static analysis. The host owner installed the toolchain on
+      2026-11-18 at the orchestrator's request, so the gap can now be closed.
+    wave: 9
+    depends_on: [T5]
+    agent: gem-implementer
+    status: in_progress
+    retries_used: 0
+    acceptance_criteria:
+      - "sparse runs with make C=2 against the 7.3.4-100 and 6.17.1-300 trees; exit status and warning count recorded per tree."
+      - "smatch runs over src/ against the same trees; findings listed."
+      - "cppcheck runs from a bear-generated compile database with --enable=warning,performance,portability and a documented suppression list."
+      - "coccinelle runs at least three relevant semantic patches against src/ (null/ERR_PTR checks, error-path unlocks, sizeof misuse, redundant NULL comparisons)."
+      - "pahole reports struct layout and BTF status of the built object, with a statement on whether any padding or missing-BTF warning matters."
+      - "A triage table gives one row per distinct finding: id, tool, file:line, class (real/style/false-positive), evidence or reasoning, action taken. Zero findings is acceptable only with raw output attached and proof the invocation analysed the files."
+      - "Every REAL finding is either fixed with a proving build (make check, Built 9, Built 3) or becomes a docs/DEFECTS.md row (next free id after A26) with severity and evidence path."
+      - "make static plus tests/check-static.sh form an opt-in gate that fails on NEW findings beyond a recorded baseline; the existing check target keeps exactly 17 recipe commands."
+      - "check-static.sh exits 0 with a clear skip message on a machine without the analysers, so the RPM and build-package path stay unaffected."
+      - "Evidence under docs/evidence/builds/20..25 with a # utc: header and the exact command line per file; one docs/LOGBOOK.md entry; docs/DELIVERABLES.md section."
+    handoff:
+      constraints:
+        - "No behaviour change to src/. A fix that changes semantics becomes a defect row instead."
+        - "Do not add commands to the existing check target; a separate opt-in target only."
+        - "Do not touch docs/TEST-STRATEGY.md, docs/evidence/EVIDENCE-GAPS.md, docs/PACKAGING-RPM.md, packaging/ or docs/plan/."
+        - "Rootless only; gcc on PATH is /usr/local/cuda/bin/gcc 14.4.1, so call /usr/bin/gcc explicitly."
+        - "Scratch under /mega/tmp/sm750/t19/; nothing in $HOME; ASCII only."
+      relevant_context:
+        - "Installed and verified by the orchestrator: sparse 0.6.4, smatch 0.6.4 wrapper (1.73-8), cppcheck 2.19.1, spatch 1.3, pahole v1.32, bear 3.1.6, kernel-tools 7.3.4-100, v4l-utils 1.32.0, kmscube, igt-gpu-tools 2.4 (binaries in /usr/libexec/igt-gpu-tools)."
+        - "Header trees: /usr/src/kernels/{7.2.15-100,7.3.3-100,7.3.4-100}.fc43.x86_64 and the koji tree /mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64."
+        - "src/ is three units: sm750_drm.c (atomic modeset, cursor, shadow/DMA staging), sii902x.c (HDMI transmitter I2C), ddk750_* (register/clock helpers)."
+        - "tests/check-drm-module.sh asserts the 17-command check target; docs/AUDIT.md A23 records that count. Adding a command breaks both."
+
   - id: T8
     title: Independent acceptance review against all seven criteria
     description: |
@@ -694,7 +771,7 @@ tasks:
       confirm the AC-6 rootless/root split is stated correctly, and issue a verdict with
       remaining gaps.
     wave: 10
-    depends_on: [T1, T2, T3, T4, T5, T6, T7, T9, T10, T11, T12, T13, T14, T15, T16, T17]
+    depends_on: [T1, T2, T3, T4, T5, T6, T7, T9, T10, T11, T12, T13, T14, T15, T16, T17, T18, T19]
     agent: gem-reviewer
     status: pending
     retries_used: 0

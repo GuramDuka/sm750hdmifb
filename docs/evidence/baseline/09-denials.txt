@@ -1,0 +1,104 @@
+# host: deneb
+# kernel: 7.3.3-100.fc43.x86_64
+# utc: 2026-11-17T18:31:29Z
+# note: every line below is a fresh observation on this host.
+# A denial is recorded as a gap, not as a failure or a pass.
+# ---- output ----
+
+$ id
+uid=1005(coder) gid=1006(coder) groups=1006(coder)
+
+$ getent group video
+video:x:39:cosmic-greeter,duka
+
+$ ls -l /dev/dri/
+total 0
+drwxr-xr-x  2 root root        180 Nov 17 07:31 by-path
+crw-rw----+ 1 root video  226,   0 Nov 17 17:42 card0
+crw-rw----+ 1 root video  226,   1 Nov 17 17:42 card1
+crw-rw----+ 1 root video  226,   2 Nov 17 17:42 card2
+crw-rw----+ 1 root video  226,   3 Nov 17 17:42 card3
+crw-rw-rw-  1 root render 226, 128 Nov 17 07:31 renderD128
+crw-rw-rw-  1 root render 226, 129 Nov 17 07:31 renderD129
+crw-rw-rw-  1 root render 226, 130 Nov 17 07:31 renderD130
+
+$ getfacl -p /dev/dri/card0
+# file: /dev/dri/card0
+# owner: root
+# group: video
+user::rw-
+user:duka:rw-
+group::rw-
+mask::rw-
+other::---
+
+
+$ python3 -c <open /dev/dri/card0 for reading>
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+    open("/dev/dri/card0", "rb")
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+PermissionError: [Errno 13] Permission denied: '/dev/dri/card0'
+[exit 1]
+
+$ python3 -c <open /dev/dri/renderD128 for reading>
+[exit 0]
+
+$ modetest -c
+no device found
+trying to open device '/dev/dri/card3'... failed
+trying to open device '/dev/dri/card2'... failed
+trying to open device '/dev/dri/card1'... failed
+trying to open device '/dev/dri/card0'... failed
+[exit 255]
+
+$ dmesg
+dmesg: read kernel buffer failed: Operation not permitted
+[exit 1]
+
+$ ls -l /proc/kmsg
+-r-------- 1 root root 0 Nov 17 20:44 /proc/kmsg
+
+$ ls -l /var/log/messages
+-rw------- 1 root root 16435575 Nov 17 21:31 /var/log/messages
+
+$ ls -ld /sys/kernel/debug
+drwx------ 52 root root 0 Nov 17 10:31 /sys/kernel/debug
+
+$ ls /sys/kernel/debug
+ls: cannot open directory '/sys/kernel/debug': Permission denied
+[exit 2]
+
+$ ls -l /dev/mem
+crw-r----- 1 root kmem 1, 1 Nov 17 07:31 /dev/mem
+
+$ dd if=/dev/mem of=/dev/null bs=64 count=1
+dd: failed to open '/dev/mem': Permission denied
+[exit 1]
+
+$ ls -l /sys/bus/pci/devices/0000:01:00.0/rom
+-rw------- 1 root root 65536 Nov 17 19:45 /sys/bus/pci/devices/0000:01:00.0/rom
+
+$ dd if=/sys/bus/pci/devices/0000:01:00.0/rom of=/mega/tmp/sm750/t3/vbios.bin bs=65536 count=1
+dd: failed to open '/sys/bus/pci/devices/0000:01:00.0/rom': Permission denied
+[exit 1]
+
+$ ls -l /sys/bus/pci/devices/0000:01:00.0/resource1
+-rw------- 1 root root 2097152 Nov 17 20:43 /sys/bus/pci/devices/0000:01:00.0/resource1
+
+$ dd if=/sys/bus/pci/devices/0000:01:00.0/resource1 of=/dev/null bs=64 count=1
+dd: failed to open '/sys/bus/pci/devices/0000:01:00.0/resource1': Permission denied
+[exit 1]
+
+$ dkms install sm750hdmifb/0.5.9 -k 7.3.3-100.fc43.x86_64   (denial probe)
+
+Error! You must be root to use this command.
+[exit 1]
+
+$ dkms build sm750hdmifb/0.5.9 -k 7.3.3-100.fc43.x86_64   (denial probe)
+
+Error! No write access to DKMS tree at /var/lib/dkms
+[exit 1]
+
+# sudo is never invoked by this script. The NOPASSWD list is committed in
+# docs/evidence/audit/privilege-probe.txt from T2; this script never runs sudo.

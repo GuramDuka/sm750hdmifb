@@ -2,8 +2,14 @@
 # SPDX-License-Identifier: GPL-2.0-only
 set -e
 
+# initramfs-tools and dracut are both optional; rebuild with whichever is
+# present and never fail a removal because neither is installed.
 if [ "$1" = remove ] || [ "$1" = purge ]; then
-	update-initramfs -u || true
+	if command -v update-initramfs >/dev/null 2>&1; then
+		update-initramfs -u || true
+	elif command -v dracut >/dev/null 2>&1; then
+		dracut --force || true
+	fi
 fi
 
 exit 0

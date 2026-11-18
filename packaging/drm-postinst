@@ -3,7 +3,22 @@
 set -e
 
 name=${DPKG_MAINTSCRIPT_PACKAGE:-sm750hdmifb}
-version=0.5.9
+# Substituted from build-package.sh; keeping one source of truth for the
+# version stops the script from silently targeting an old release.
+version=@VERSION@
+
+# Debian uses initramfs-tools, Fedora uses dracut. Neither is guaranteed, so a
+# missing tool is a warning, never a failed install.
+refresh_initramfs() {
+	kernel_version=$1
+	if command -v update-initramfs >/dev/null 2>&1; then
+		update-initramfs -u -k "$kernel_version"
+	elif command -v dracut >/dev/null 2>&1; then
+		dracut --force --kver "$kernel_version"
+	else
+		echo "No initramfs tool found; leaving the $kernel_version initramfs unchanged." >&2
+	fi
+}
 
 disable_predecessor_file() {
 	path=$1
@@ -20,7 +35,7 @@ disable_predecessor_file /etc/lightdm/lightdm.conf.d/99-sm750hdmifb.conf
 disable_predecessor_file /usr/local/lib/xorg/modules/drivers/sm750shadow_drv.so
 
 if ! "/usr/lib/$name/write-xorg-config" \
-	/etc/X11/xorg.conf.d/20-sm750hdmidrm.conf; then
+	/etc/X11/xorg.conf.d/20-sm750hdmidrm-device.conf; then
 	echo "No unique SM750 found; using the generic Xorg OutputClass." >&2
 fi
 
@@ -65,7 +80,7 @@ if command -v dkms >/dev/null 2>&1; then
 		fi
 		dkms install -m "$name" -v "$version" -k "$kernel_version" --force
 		depmod -a "$kernel_version"
-		update-initramfs -u -k "$kernel_version"
+		refresh_initramfs "$kernel_version"
 		installed_count=$((installed_count + 1))
 	done
 	[ "$installed_count" -gt 0 ] || {

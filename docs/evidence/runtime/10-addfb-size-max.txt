@@ -1,0 +1,476 @@
+T15 - RUNTIME TIER 10: kms_addfb_basic --run-subtest size-max - ADDFB2 EINVAL ROOT CAUSE
+========================================================================================
+
+SCOPE AND PROVENANCE OF THE NUMBERS IN THIS FILE
+
+  Module under test: sm750hdmidrm as currently loaded = STALE PRE-FIX 0.5.9 BUILD.
+  Proof, re-checked in this task:
+    /sys/module/sm750hdmidrm/version and /sys/module/sm750hdmidrm/srcversion do not
+    exist; `sudo -n dkms status` reports
+    `sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: installed`;
+    modetest reports driver version "0.1.0" (the 0.5.9 banner), not 0.6.0.
+  The working tree declares SM750_DRM_VERSION "0.6.0" (src/sm750_drm.c:71) but no
+  0.6.0 binary was installed or loaded by this task (another task owns that step).
+  Source line numbers in this file were read at git HEAD 53098af ("docs: record
+  verified 16-bit VBIOS toolchain for T17"). T13 was editing the cursor code in
+  src/sm750_drm.c concurrently; the lines cited here are all outside that area, but
+  a later reader should re-check any `src/sm750_drm.c` line number against the
+  revision they have.
+  Therefore every ioctl return code below was produced by the 0.5.9 object code.
+  Section "DOES 0.6.0 CHANGE THIS PATH" records what would need re-testing.
+
+  Primary transcript for the failure: docs/evidence/runtime/06-igt.txt:52,68-76,150,161.
+  This file does not replace that transcript; it explains one line of it.
+
+  Kernel source for the generic rejection sites: the Fedora source tree is not
+  installed (`dnf download --source kernel` exits 1), so the two files are pristine
+  mainline copies fetched for this task:
+    /tmp/opencode/drm_framebuffer.c         md5 ffe2149fbdb5cced9c9cfb42f7a54f7b
+    /mega/tmp/sm750/t15/gemfb.c             md5 e79b0c728c6e299bd55feb2248a38b61
+                                            (= drivers/gpu/drm/drm_gem_framebuffer_helper.c)
+  Host kernel: 7.3.4-100.fc43.x86_64 (`uname -r`).
+
+========================================================================================
+1. WHAT THE SUBTEST ASKS FOR
+========================================================================================
+
+Source: igt-gpu-tools 2.4-1.fc43, tests/kms_addfb_basic.c, function size_tests(),
+lines 553-602 (extracted from `dnf download --source igt-gpu-tools` into
+/mega/tmp/sm750/t15/igt-gpu-tools-2.4/). The subtest is `size-max` (declared :590).
+
+  One buffer object is created for the whole subtest (igt_fixture, :577-578):
+      gem_bo = igt_create_bo_with_dimensions(fd, 1024, 1024,
+                  DRM_FORMAT_XRGB8888, DRM_FORMAT_MOD_LINEAR, ...)
+      size = 1024 * 1024 * 4 = 4194304 bytes = exactly 4 MiB (one page-aligned BO).
+
+  Three framebuffer descriptors are built on that ONE handle:
+
+    name  width  height  format            pitch  minimum size the BO must satisfy
+    ----  -----  ------  ----------------  -----  ---------------------------------
+    f     1024   1024    DRM_FORMAT_XRGB8888  4096  (1024-1)*4096 + 4096 = 4194304
+    f_16  1024   2048    DRM_FORMAT_RGB565    2048  (2048-1)*2048 + 2048 = 4194304
+    f_8   2048   2048    DRM_FORMAT_C8        2048  (2048-1)*2048 + 2048 = 4194304
+
+  Each of the three consumes the 4 MiB object exactly. That is the point of the
+  subtest: "the largest framebuffer that still fits in the object".
+
+  Sequence inside `size-max` (:591-601):
+    do_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &f);      <-- line 591, succeeds
+    do_ioctl(fd, DRM_IOCTL_MODE_RMFB, ...);
+    do_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &f_16);   <-- line 594, THIS IS THE FAILURE
+    do_ioctl(fd, DRM_IOCTL_MODE_RMFB, ...);
+    if (igt_display_has_format_mod(&display, DRM_FORMAT_C8, 0))   <-- line 597
+        do_ioctl(fd, DRM_IOCTL_MODE_ADDFB2, &f_8);
+
+  Note the asymmetry at :597: only the C8 step is gated by a format probe. The
+  RGB565 step at :594 is issued unconditionally. The recorded failure
+  (06-igt.txt:68-76, "Test assertion failure function size_tests, file
+  ../tests/kms_addfb_basic.c:594", "Last errno: 22") is therefore the RGB565
+  request, not the C8 one.
+
+  The failing ioctl, decoded:
+    DRM_IOCTL_MODE_ADDFB2 (0xC06864B8)
+      width  = 1024
+      height = 2048
+      pixel_format = DRM_FORMAT_RGB565 ('RG16')
+      handles[0] = 4 MiB XRGB8888 dumb buffer
+      pitches[0] = 2048
+      offsets[0] = 0
+      modifier[0] = 0 (implicit linear)
+      flags = 0
+
+========================================================================================
+2. WHERE THE EINVAL COMES FROM: TWO INDEPENDENT GATES, BOTH GENERIC DRM
+========================================================================================
+
+The driver registers no framebuffer-creation callback of its own; it uses the
+generic GEM helper:
+
+  src/sm750_drm.c:3243-3244   static const struct drm_mode_config_funcs
+                              sm750_mode_config_funcs = { .fb_create = drm_gem_fb_create, ... }
+  src/sm750_drm.c:3249-3250   static const struct drm_mode_config_funcs
+                              sm750_shadow_mode_config_funcs = { .fb_create = drm_gem_fb_create_with_dirty, ... }
+  src/sm750_drm.c:3432-3433   selected by `sdev->shadow_scanout`
+
+So every rejection below is produced by DRM core/helper code acting on limits the
+driver declared. There is no driver-local EINVAL on this path.
+
+GATE 1 (fires first): framebuffer height outside the declared range.
+
+  /tmp/opencode/drm_framebuffer.c:279-282, in drm_internal_framebuffer_create():
+
+      if ((config->min_height > r->height) || (r->height > config->max_height)) {
+          drm_dbg_kms(dev, "bad framebuffer height %d, should be >= %d && <= %d\n",
+                      r->height, config->min_height, config->max_height);
+          return ERR_PTR(-EINVAL);
+      }
+
+  The width twin is the preceding block, drm_framebuffer.c:274-277
+  ("bad framebuffer width %d, should be >= %d && <= %d"). Order inside the function:
+  flags :270-273, width :274-277, height :279-282, modifier support :284-287,
+  format table :292-295, framebuffer_check() :301, driver fb_create() :305.
+  Because height is validated BEFORE fb_create() is called, a too-tall request dies
+  here whatever its pixel format is.
+
+  The values are the driver's own declaration:
+    src/sm750_drm.c:3435   drm->mode_config.min_height = 200;
+    src/sm750_drm.c:3437   drm->mode_config.max_height = SM750_DRM_MAX_HEIGHT;
+    src/sm750_drm.c:95     #define SM750_DRM_MAX_HEIGHT 1152
+  Confirmed at run time by DRM_IOCTL_MODE_GETRESOURCES on the loaded driver:
+    "mode_config from DRM_IOCTL_MODE_GETRESOURCES: width 320..2560, height 200..1152"
+
+  2048 > 1152, so gate 1 rejects the f_16 request with -EINVAL, which is the errno 22
+  IGT records.
+
+GATE 2 (would fire next if gate 1 were relaxed): pixel format not offered by any plane.
+
+  /mega/tmp/sm750/t15/gemfb.c:166-171, in drm_gem_fb_init_with_funcs():
+
+      if (drm_drv_uses_atomic_modeset(dev) &&
+          !drm_any_plane_has_format(dev, mode_cmd->pixel_format,
+                                    mode_cmd->modifier[0])) {
+          drm_dbg_kms(dev, "Unsupported pixel format %p4cc / modifier 0x%llx\n",
+                      &mode_cmd->pixel_format, mode_cmd->modifier[0]);
+          return -EINVAL;
+      }
+
+  The gate is live on this driver because it advertises atomic modesetting:
+    src/sm750_drm.c:3367 and :3381
+      .driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC
+  and because the plane format lists are:
+    src/sm750_drm.c:3423   static const u32 formats[] = { DRM_FORMAT_XRGB8888 };
+    src/sm750_drm.c:3424   static const u32 cursor_formats[] = { DRM_FORMAT_ARGB8888 };
+  DRM_FORMAT_RGB565 appears in neither, so drm_any_plane_has_format() returns false
+  for it.
+
+GATE 3 (checked, does NOT fire): GEM object smaller than the minimum size.
+
+  gemfb.c:186-193
+      min_size = (height - 1) * mode_cmd->pitches[i]
+               + drm_format_info_min_pitch(info, i, width)
+               + mode_cmd->offsets[i];
+      if (objs[i]->size < min_size) { ...; ret = -EINVAL; }
+
+  For the f_16 request: (2048-1)*2048 + 2048 = 4194304, and the fixture BO is
+  exactly 4194304 bytes, so `objs[0]->size < min_size` is false. The size gate is
+  provably not the cause. (This gate DID explain some early exploratory failures
+  with a smaller BO; those were my probes' fault, not the driver's, and are not
+  part of the recorded IGT failure.)
+
+  Every one of the three messages is drm_dbg_kms(), i.e. emitted only with
+  drm.debug enabled. That is why 06-igt.txt records "dmesg delta 0 lines" while the
+  ioctl still returns EINVAL: the rejection is silent by default. drm.debug could
+  not be enabled in this session (/sys/module/drm/parameters/debug is root-only and
+  no passwordless root is available), so the firing gate was established by ioctl
+  isolation instead, below.
+
+========================================================================================
+3. ISOLATION: EACH GATE REPRODUCED WITH THE OTHER VARIABLES HELD LEGAL
+========================================================================================
+
+Tool: unprivileged python3 + ctypes against /dev/dri/card0.
+Script: /mega/tmp/sm750/t15/addfb_final.py
+Capture: /mega/tmp/sm750/t15/addfb_final.out
+Exit status: 0.  Run as uid=1005, no DRM master requested, no modeset ioctl issued,
+every accepted framebuffer removed with RMFB, both dumb buffers destroyed.
+
+Verbatim output:
+
+  device: /dev/dri/card0  (uid=1005, no DRM master requested)
+  mode_config from DRM_IOCTL_MODE_GETRESOURCES: width 320..2560, height 200..1152
+  crtc 38 fb=43 pos=(0,0) valid=1 1920x1080 1920x1080
+
+  [1] IGT size-max fixture: 4 MiB BO (1024x1024 XR24), the three requests
+      dumb 1024x1024 bpp32 -> handle=1 pitch=4096 size=0
+    XR24 1024x1024 pitch=4096                      -> OK    fb_id=44
+    RG16 1024x2048 pitch=2048                      -> EINVAL(errno 22)
+    0x20203843 2048x2048 pitch=2048                -> EINVAL(errno 22)
+
+  [2] Isolation: same geometry legal, only the format differs (16 MiB BO)
+      dumb 2048x2048 bpp32 -> handle=2 pitch=8192 size=0
+    XR24 1024x200 pitch=4096                       -> OK    fb_id=44
+    RG16 1024x200 pitch=2048                       -> EINVAL(errno 22)
+
+  [3] Isolation: same format legal, only the height differs
+    XR24 1024x1152 pitch=4096                      -> OK    fb_id=44
+    XR24 1024x1153 pitch=4096                      -> EINVAL(errno 22)
+    XR24 1024x2048 pitch=4096                      -> EINVAL(errno 22)
+
+  [4] Isolation: same format and height legal, only the width differs
+    XR24 2560x200 pitch=10240                      -> OK    fb_id=44
+    XR24 2561x200 pitch=10244                      -> EINVAL(errno 22)
+
+  Notes on the output:
+   - Row [1] line 1 is the exact f request from kms_addfb_basic.c:591 and it
+     succeeds, matching IGT (the subtest only fails at the second addfb).
+   - Row [1] line 2 is the exact f_16 request from :594 and reproduces the failure.
+   - 0x20203843 is this script's FOURCC("C8  ") for DRM_FORMAT_C8 (low byte 'C' =
+     0x43); the third row is informational, IGT gates that step at :597.
+   - "size=0" is the driver's dumb_create returning a zero size field; the BO is
+     still allocated with the reported pitch (not relevant to the diagnosis).
+
+Interpretation, one variable at a time:
+
+  [2] 1024x200 is legal in width, height, pitch and BO size for BOTH formats, yet
+      XR24 succeeds and RG16 fails on the same BO. The only difference is the
+      pixel format. => The format gate (gemfb.c:166-171) rejects RGB565 on its own,
+      independently of any size consideration.
+
+  [3] XRGB8888 at 1152 succeeds, at 1153 fails, at 2048 fails. => max_height 1152 is
+      the exact boundary, and the size-max height of 2048 crosses it by 896 lines.
+      => Gate 1 (drm_framebuffer.c:279-282) rejects on height alone, with the format
+      held legal.
+
+  [4] XRGB8888 at 2560 wide succeeds, at 2561 fails. => max_width 2560 is enforced
+      exactly as declared, i.e. the declared limits are applied faithfully and are
+      not accidentally over- or under-enforced.
+
+Additional matrix runs (earlier in this task, same ioctl path) accepted only
+DRM_FORMAT_XRGB8888 and DRM_FORMAT_ARGB8888; AB24, XB24, RG24, BG24, RG16, AR15,
+C8, XRGB2101010 and NV12 were all EINVAL at otherwise-legal geometry. That matches
+the two-entry plane format lists at src/sm750_drm.c:3423-3424 and the plane dump:
+
+  modetest -M sm750hdmidrm -p   (exit 0)
+    plane 36 (Primary)  formats: XR24        (IN_FORMATS blob: XR24: LINEAR(0x0))
+    plane 40 (Cursor)   formats: AR24
+
+So the size-max f_16 request is rejected twice over: first by the core height check,
+and, if that limit were raised, by the atomic format gate. Relaxing only the height
+would not make the subtest pass.
+
+========================================================================================
+4. LIMIT COMPARISON: DECLARED DRIVER LIMITS vs THE SILICON
+========================================================================================
+
+Datasheet: SM750 DS-1 rev 1.4 (2012-09-27), recorded in docs/specs/INDEX.md:29 with
+SHA-256 fac31257bb6ab058573bdb3fa255e6c5146522b0dee8aa6376cd59e500531889.
+Page numbers below are the datasheet's own page numbers, as used by
+docs/specs/REGISTER-MAP.md.
+
+  register             offset    datasheet  field and limit
+  -------------------  --------  ---------  --------------------------------------
+  PANEL_FB_WIDTH       0x080010  p151       29:20 "FB Window Width ... specified in
+                                             128-bit aligned bytes" and 13:4 "FB
+                                             Offset ... 128-bit aligned bytes per
+                                             line of the FB graphics plane", both
+                                             10-bit fields, bits 19:16 and 3:0
+                                             hardwired 0 => max pitch
+                                             0x3FF * 16 = 16368 bytes per line.
+  PANEL_WINDOW_WIDTH   0x080014  p152       27:16 "FB Global Width ... in pixels",
+                                             12-bit => max 4095 pixels.
+  PANEL_WINDOW_HEIGHT  0x080018  p152       27:16 "FB Global Height ... in lines",
+                                             12-bit => max 4095 lines.
+  PANEL_PLANE_TL       0x08001C  p153       26:16 top, 10:0 left, 11-bit => max 2047.
+  PANEL_PLANE_BR       0x080020  p153       26:16 bottom, 10:0 right, 11-bit =>
+                                             max 2047, i.e. a 2048-line window is the
+                                             largest expressible geometry.
+
+  In-tree citations for the same registers, as the map records them:
+    docs/specs/REGISTER-MAP.md:57  PANEL_FB_WIDTH     0x080010 -> src/ddk750_reg.h:588, p151, used at src/sm750_drm.c:74
+    docs/specs/REGISTER-MAP.md:58  PANEL_WINDOW_WIDTH 0x080014 -> src/ddk750_reg.h:593, p152, used at src/sm750_drm.c:1319
+    docs/specs/REGISTER-MAP.md:59  PANEL_WINDOW_HEIGHT 0x080018 -> src/ddk750_reg.h:598, p152, used at src/sm750_drm.c:1322
+    docs/specs/REGISTER-MAP.md:60  PANEL_PLANE_TL      0x08001C -> p153, used at src/sm750_drm.c:1325
+    docs/specs/REGISTER-MAP.md:61  PANEL_PLANE_BR      0x080020 -> p153, used at src/sm750_drm.c:1326
+    docs/specs/REGISTER-MAP.md:136 PANEL_FB_WIDTH_OFFSET_MASK 0x3FFF (src/ddk750_reg.h:591,
+                                   four bits wider than the datasheet's 10-bit field)
+    src/ddk750_reg.h:610-611      PANEL_PLANE_BR_BOTTOM_MASK (0x7ff << 16), PANEL_PLANE_BR_RIGHT_MASK 0x7ff
+
+  Revision note: the driver-line column above is REGISTER-MAP.md's own text and
+  predates git HEAD 53098af (the tree this diagnosis was verified against). At
+  HEAD 53098af those register writes are at src/sm750_drm.c:1329
+  (`poke32(SM750_DRM_FB_WIDTH, ...)`), :1330 (PANEL_WINDOW_WIDTH), :1333
+  (PANEL_WINDOW_HEIGHT), :1336 (PANEL_PLANE_TL) and :1337 (PANEL_PLANE_BR). The
+  offsets, pages and field limits, which are what this finding rests on, are
+  unchanged.
+
+  Comparing the three attributes of the rejected request:
+
+    attribute        request   silicon limit              driver declared   verdict
+    ---------------  --------  -------------------------  ----------------  -------
+    pitch (bytes)       2048   16368 (p151)               no ADDFB2-time cap  inside
+    width (pixels)      1024   2048 (p153 BR right)       2560 (declared,      inside
+                                                           used by the soft
+                                                           downscale path)
+    height (lines)      2048   2048 (p153 BR bottom;      1152                inside
+                                PANEL_WINDOW_HEIGHT 4095)                    silicon,
+                                                                             REJECTED
+                                                                             by driver
+    buffer bytes     4194304   VRAM 64 MiB                -                    inside
+
+  VRAM: `Memory at c0000000 (32-bit, prefetchable) [size=64M]` from lspci; the driver
+  reads it via `sdev->vram_size = ddk750_get_vm_size()` at src/sm750_drm.c:3407
+  (src/ddk750_chip.c:181 returns SZ_64M for SM750LE and otherwise decodes
+  MISC_CTRL_LOCALMEM_SIZE_*).
+
+  Conclusion of the comparison: the request is inside every datasheet limit. In
+  particular a 2048-line framebuffer is exactly the largest window the 11-bit
+  PANEL_PLANE_BR bottom field can express, and 2048 bytes of pitch is eight times
+  below the 16368-byte pitch ceiling. The silicon is NOT the binding constraint.
+
+  For completeness, the driver's only datasheet-pitch enforcement is not at ADDFB2
+  time: src/sm750_drm.c:2920 sm750_pipe_check() checks, at atomic commit,
+      pitch > SM750_DRM_FB_WIDTH_OFFSET_MASK  or  !IS_ALIGNED(pitch, SM750_DRM_LINE_ALIGN)
+  and only when `plane_state->fb && !sdev->shadow_scanout` (src/sm750_drm.c:2926-2931).
+  A probe sweep of pitches 4096..20000 at ADDFB2 time succeeded for every value,
+  consistent with that.
+
+========================================================================================
+5. VERDICT
+========================================================================================
+
+  The driver is not wrong. The test is not exceeding a hardware limit.
+
+  What the subtest exceeds is the driver's KMS interface contract, in two declared
+  dimensions at once:
+
+    (a) pixel format: the primary plane advertises only DRM_FORMAT_XRGB8888
+        (src/sm750_drm.c:3423). RGB565 is not a KMS format on this driver; it is an
+        internal upload/scanout format. docs/MODES.md:91-96 states the contract:
+        "Userspace always renders XRGB8888 source buffers. The default
+        rgb565-bbdither scanout converts only changed output regions to two-byte
+        RGB565 immediately before upload." The conversion is also the
+        `scanout_format` module parameter (docs/PARAMETERS.md:19, default
+        `rgb565-bbdither`; accepts xrgb8888 and rgb565). The driver converts
+        internally; it never accepts a 16-bit source buffer from userspace.
+
+    (b) framebuffer height: max_height is declared as 1152
+        (src/sm750_drm.c:95 and :3437), which is the height of the tallest mode in
+        the supported catalogue (docs/MODES.md:76-86, 2048x1152). The mode validator
+        enforces the same number for display modes at src/sm750_drm.c:1201
+        (`if (hardware_mode->vdisplay > SM750_DRM_MAX_HEIGHT) return MODE_BAD_VVALUE;`).
+
+  Both are deliberate: the shadow/scaling path is sized from those two constants
+  (src/sm750_drm.c:3640-3641, :3644-3646 allocate the snapshots as MAX_WIDTH*MAX_HEIGHT
+  and PHYSICAL_MAX_WIDTH*MAX_HEIGHT), and the pipeline never scans more lines than
+  the tallest supported mode.
+
+  Decisive datasheet constraint (proves the limit is driver policy, not silicon):
+  DS-1 rev 1.4 p151 PANEL_FB_WIDTH gives a 16368-byte pitch ceiling, p152
+  PANEL_WINDOW_HEIGHT gives a 4095-line window and p153 PANEL_PLANE_BR gives an
+  11-bit bottom coordinate (2048 lines), with 64 MiB of VRAM. A 1024x2048
+  XRGB8888/RGB565 framebuffer at 2048-byte pitch is inside all of them. The
+  hardware would accept it; the driver declines to expose it.
+
+  IGT-side observation (for the IGT maintainers, not a driver action): size_tests()
+  gates the C8 request on igt_display_has_format_mod() at kms_addfb_basic.c:597 but
+  issues the RGB565 request at :594 unconditionally. Any driver whose primary plane
+  does not advertise RGB565 fails size-max at :594 for that reason alone, whatever
+  its size limits are. This driver is exactly such a driver.
+
+  Disposition: accepted / correct-by-design. No code change is required for
+  correctness, and no code change is recommended:
+    - Raising max_height alone cannot make the subtest pass, because gate 2 rejects
+      RGB565 independently (probe [2]). It would only widen the declared KMS surface
+      beyond anything the pipeline scans out.
+    - Adding RGB565 to the primary plane's format list would require the scanout
+      path to consume 16-bit source rows; every converter in the driver assumes u32
+      XRGB8888 source rows (src/sm750_drm.c:1991-2015, dither_source_line is u32 at :270).
+      That is a feature, not a defect fix, and it contradicts the documented
+      contract in docs/MODES.md:91-96.
+
+  Documentation change (the concrete recommendation):
+    docs/MODES.md, "Physical catalogue limits" section: record that a KMS
+    framebuffer is limited to the declared mode_config range of 320x200 to
+    2560x1152 (src/sm750_drm.c:3434-3437), that max_width 2560 exceeds the
+    2048-pixel scanout catalogue because it is consumed by the downscale path,
+    that the primary plane's only KMS format is XRGB8888 and RGB565 exists only as
+    the internal scanout conversion, and that IGT kms_addfb_basic/size-max
+    consequently cannot pass on this driver (it asks for a 1024x2048 RGB565
+    framebuffer at kms_addfb_basic.c:594 without a format probe).
+    Optional, if a reader needs the mapping in code: a comment at
+    src/sm750_drm.c:3437 explaining that max_height is the tallest catalogue mode
+    rather than the 2048-line PANEL_PLANE_BR ceiling.
+
+========================================================================================
+6. DOES 0.6.0 CHANGE THIS PATH
+========================================================================================
+
+  Compared `git show 27db03b:src/sm750_drm.c` (0.5.9, the loaded build) with the
+  working tree (declares 0.6.0). On this path the two are substantively identical,
+  differing only in line numbers:
+
+    attribute                   0.5.9                      0.6.0 (working tree)
+    --------------------------  ---------------------------  --------------------
+    primary plane formats       :3307 XRGB8888 only         :3423 XRGB8888 only
+    cursor plane formats        :3308 ARGB8888              :3424 ARGB8888
+    SM750_DRM_MAX_WIDTH         :66 2560                    :77 2560
+    SM750_DRM_MAX_HEIGHT        :84 1152                    :95 1152
+    mode_config min/max         :3319-3321 200/2560/1152     :3435-3437 same
+    DRIVER_ATOMIC               :3254, :3267                :3367, :3381
+    mode_valid height check     :1191                       :1201
+    fb_create                   drm_gem_fb_create(_with_dirty)  unchanged
+
+  Therefore the diagnosis transfers to 0.6.0. The following still need a live
+  re-check on the installed 0.6.0 module, because they are observations of the
+  running binary rather than of source:
+    - DRM_IOCTL_MODE_GETRESOURCES reporting 320..2560 / 200..1152;
+    - the exact boundary behaviour at 1152/1153, 2560/2561;
+    - the plane format dump from modetest (XR24 primary, AR24 cursor);
+    - the EINVAL errno itself (unchanged expected, since the gates are generic).
+  The static conclusions (format list, declared limits, the two gate locations, the
+  datasheet comparison) do not need re-testing: they are read from source that did
+  not change on this path.
+
+========================================================================================
+7. REPRODUCTION RECIPE
+========================================================================================
+
+  Unprivileged, read-only with respect to display state (no modeset ioctl):
+
+    python3 /mega/tmp/sm750/t15/addfb_final.py > /mega/tmp/sm750/t15/addfb_final.out
+    echo $?        # 0
+
+  Direct probes used to attribute each gate (all on /dev/dri/card0):
+    DRM_IOCTL_MODE_GETRESOURCES  0xC04064A0   declared min/max width/height
+    DRM_IOCTL_MODE_GETCRTC       0xC06864A1   confirm the active CRTC/mode
+    DRM_IOCTL_MODE_CREATE_DUMB   0xC01864B2   the 4 MiB fixture BO / 16 MiB isolation BO
+    DRM_IOCTL_MODE_ADDFB2        0xC06864B8   the request under test
+    DRM_IOCTL_MODE_RMFB          0xC00464AF   cleanup
+
+  IGT itself could NOT be re-run for this subtest in this session: size-max now
+  aborts earlier in drm_open_driver_master -> igt_device_set_master -> show_clients
+  -> __igt_debugfs_dump because the Plasma session holds DRM master and debugfs is
+  root-only:
+    igt_debugfs-CRITICAL: Test assertion failure function igt_debugfs_path,
+    file ../lib/igt_debugfs.c:121: Failed assertion: debugfs_root / Last errno: 1,
+    Operation not permitted        (exit 98, capture: /mega/tmp/sm750/t15/igt_size_max_rerun.txt)
+  The original transcript in 06-igt.txt was captured when the session did not hold
+  master, so it remains the authoritative record of the IGT-side failure, and the
+  direct ioctls above are the reproduction.
+
+  Commands relied on, with exit status:
+    python3 addfb_final.py                                 exit 0
+    modetest -M sm750hdmidrm -p                            exit 0
+    sudo -n dmesg                                          exit 0
+    sudo -n dkms status                                    exit 0  (0.5.9 installed)
+    <payload>/usr/libexec/igt-gpu-tools/kms_addfb_basic \
+        --run-subtest size-max --device /dev/dri/card0     exit 98 (debugfs path)
+    dnf download --source kernel                           exit 1  (no distro source)
+
+========================================================================================
+8. PANEL SAFETY
+========================================================================================
+
+  No probe in this task issues a modeset. State was captured before and after every
+  probe. (The pre-state capture /mega/tmp/sm750/t15/panel_before.txt is empty: that
+  capture did not run, so the "before" reference is the state recorded in
+  06-igt.txt and 04-modeset.txt, not a fresh file.)
+
+  After the final run (/mega/tmp/sm750/t15/panel_after_final.txt, modetest exit 0):
+    CRTCs:
+      id  fb  pos   size
+      38  42  (0,0) (1920x1080)
+        #0 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500
+           flags: phsync, pvsync; type: preferred, driver
+    plane 36 formats: XR24      (line 15)
+    plane 40 formats: AR24      (line 33, Cursor)
+    /sys/class/drm/card0-HDMI-A-1/{status,enabled,dpms} = connected enabled On
+
+  The fb id drifts (43 during the probe run, 42 afterwards) because the Plasma
+  session re-creates its own framebuffer; the CRTC, connector, mode and resolution
+  are unchanged, and the panel was never blanked or left on a foreign mode.
+
+  dmesg after the probes shows only the two recurring lines, no new errors:
+    sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (N bytes per buffer)
+    sm750hdmidrm 0000:01:00.0: SiI9024A receiver not ready after 2000 ms:
+        HPD=1 RSEN=0 status=04; enabling for compatibility

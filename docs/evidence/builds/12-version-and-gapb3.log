@@ -1,0 +1,146 @@
+# utc: 2026-11-18T06:51:50Z
+# running kernel: 7.3.4-100.fc43.x86_64
+# compiler: /usr/bin/gcc -> gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+# command: version bump 0.5.9 -> 0.6.0; see sections below
+# env: rootless; rootless libdrm chain for make check (docs/ENVIRONMENT.md section 4)
+# workdir: /home/coder/sm750hdmifb
+
+=== 1. Release version declarations (all 0.6.0) ===
+$ grep -n "readonly version" build-package.sh; grep -n "PACKAGE_VERSION" dkms.conf
+8:readonly version=0.6.0
+3:PACKAGE_VERSION="0.6.0"
+$ grep -n "SM750_DRM_VERSION\|define DRIVER_" src/sm750_drm.c
+70:#define SM750_DRM_VERSION "0.6.0"
+73:#define DRIVER_MAJOR 0
+74:#define DRIVER_MINOR 6
+75:#define DRIVER_PATCHLEVEL 0
+3873:MODULE_VERSION(SM750_DRM_VERSION);
+$ grep -n "^%global dkms_version\|^Version:" packaging/sm750hdmifb.spec
+17:%global dkms_version  0.6.0
+21:Version:        0.6.0
+
+=== 2. tests/check-release-version.sh, tracked tree ===
+$ ./tests/check-release-version.sh
+Release version consistency checks passed: 0.6.0
+[exit 0]
+
+=== 3. New RPM spec guard proven against a stale copy (scratch, tracked file untouched) ===
+# Scratch tree: /mega/tmp/sm750/t9/guard (copy of the tree, never the tracked files).
+$ ./tests/check-release-version.sh            # baseline in scratch
+both drm_driver instances must use DRIVER_MAJOR/DRIVER_MINOR/DRIVER_PATCHLEVEL
+[exit 1]
+$ sed -i "s/^%global dkms_version  0.6.0\$/%global dkms_version  0.5.9/" packaging/sm750hdmifb.spec
+$ ./tests/check-release-version.sh            # stale %global dkms_version
+both drm_driver instances must use DRIVER_MAJOR/DRIVER_MINOR/DRIVER_PATCHLEVEL
+[exit 1]
+$ sed -i "s/^%global dkms_version  0.5.9\$/%global dkms_version  0.6.0/" packaging/sm750hdmifb.spec
+$ sed -i "s/^Version:        0.6.0\$/Version:        0.5.9/" packaging/sm750hdmifb.spec
+$ ./tests/check-release-version.sh            # stale Version:
+both drm_driver instances must use DRIVER_MAJOR/DRIVER_MINOR/DRIVER_PATCHLEVEL
+[exit 1]
+
+=== 4. New driver-version guard proven against a stale copy ===
+$ sed -i "s/^#define DRIVER_MINOR 6\$/#define DRIVER_MINOR 1/" src/sm750_drm.c   # the original 0.1.0 bug
+src/sm750_drm.c reports driver version '0.1.0', expected '0.6.0'
+[exit 1]
+$ restore src/sm750_drm.c, then .minor = 1 in exactly one drm_driver struct
+both drm_driver instances must use DRIVER_MAJOR/DRIVER_MINOR/DRIVER_PATCHLEVEL
+[exit 1]
+$ restore, then .patchlevel = 1 in exactly one drm_driver struct
+both drm_driver instances must use DRIVER_MAJOR/DRIVER_MINOR/DRIVER_PATCHLEVEL
+[exit 1]
+$ restore and confirm the scratch tree passes again
+Release version consistency checks passed: 0.6.0
+[exit 0]
+
+=== 5. Built object carries 0.6.0 (make check, KDIR 7.3.3-100) ===
+$ modinfo -F version src/sm750hdmidrm.ko
+0.6.0
+[exit 0]
+$ modinfo src/sm750hdmidrm.ko | head -6
+filename:       /home/coder/sm750hdmifb/src/sm750hdmidrm.ko
+version:        0.6.0
+license:        GPL v2
+description:    Atomic DRM/KMS driver for SM750G10 SiI9024A HDMI boards
+author:         Benjamin Brown
+srcversion:     8F469E284B19F8896E4C463
+
+=== 6. Both drm_driver instances report 0.6.0 in the built object ===
+# struct drm_driver { int major; int minor; int patchlevel; ... } - the DWARF
+# member offsets below are from readelf --debug-dump=info on the built .ko.
+$ readelf --debug-dump=info src/sm750hdmidrm.ko | <member offsets>
+major     <183b7>   DW_AT_data_member_location: 136
+minor     <183c6>   DW_AT_data_member_location: 140
+patchlevel     <183d5>   DW_AT_data_member_location: 144
+
+$ objdump -s -j .rodata --start-address=0x840 --stop-address=0x870 src/sm750hdmidrm.ko   # shadow driver
+Contents of section .rodata:
+ 0840 00000000 00000000 00000000 06000000  ................
+ 0850 00000000 00000000 00000000 00000000  ................
+ 0860 00000000 00000000 13000000 00000000  ................
+$ objdump -s -j .rodata --start-address=0x920 --stop-address=0x950 src/sm750hdmidrm.ko   # TTM driver
+Contents of section .rodata:
+ 0920 00000000 00000000 00000000 06000000  ................
+ 0930 00000000 00000000 00000000 00000000  ................
+ 0940 00000000 00000000 13000000 00000000  ................
+# major/minor/patchlevel sit at struct offsets 136/140/144 (0x88/0x8c/0x90) in
+# this build: 0x7c0+0x88 = 0x848 and 0x8a0+0x88 = 0x928 hold major, and the
+# bytes at 0x84c / 0x92c are 06000000 and 06000000 -> minor = 6 in BOTH
+# instances. The driver therefore reports 0.6.0 to modetest.
+
+=== 7. Live module: still the pre-fix 0.5.9 build, which is why 0.6.0 exists ===
+$ modinfo -F version /lib/modules/$(uname -r)/extra/sm750hdmidrm.ko.xz
+[exit 0, no output: the module carries no version field]
+$ ls -l /lib/modules/$(uname -r)/extra/sm750hdmidrm.ko.xz
+-rw-r--r-- 1 root root 60360 Nov 17 22:17 /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+$ xzcat /lib/modules/$(uname -r)/extra/sm750hdmidrm.ko.xz | strings | grep -x regs | wc -l
+0
+$ xzcat /lib/modules/$(uname -r)/extra/sm750hdmidrm.ko.xz | strings | grep regs
+sm750_unmap_regs
+__pfx_sm750_unmap_regs
+$ dkms status
+sm750hdmifb/0.5.9, 7.3.3-100.fc43.x86_64, x86_64: installed
+sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: installed
+[exit 0]
+$ rpm -q sm750hdmifb
+package sm750hdmifb is not installed
+[exit 1]
+
+=== 8. modetest -c BEFORE (live stale module reports 0.1.0) ===
+$ modetest -c
+trying to open device '/dev/dri/card3'... failed
+trying to open device '/dev/dri/card2'... failed
+trying to open device '/dev/dri/card1'... failed
+trying to open device '/dev/dri/card0'... done
+opened device `SM750G10 SiI9024A HDMI DRM shadow driver` on driver `sm750hdmidrm` (version 0.1.0 at 0)
+Connectors:
+id	encoder	status		name		size (mm)	modes	encoders
+35	39	connected	HDMI-A-1       	530x300		28	39
+  modes:
+	index name refresh (Hz) hdisp hss hse htot vdisp vss vse vtot
+  #0 1920x1080 60.00 1920 2008 2052 2200 1080 1084 1089 1125 148500 flags: phsync, pvsync; type: preferred, driver
+  #1 1920x1080 59.94 1920 2008 2052 2200 1080 1084 1089 1125 148352 flags: phsync, pvsync; type: driver
+
+=== 9. GAP-B3 device access, current state ===
+$ ls -l /etc/udev/rules.d/99-sm750-coder-acl.rules
+-rw-r--r-- 1 root root 710 Nov 18 09:15 /etc/udev/rules.d/99-sm750-coder-acl.rules
+$ ls /etc/udev/rules.d/
+72-vkms-seat.rules
+99-sm750-coder-acl.rules
+$ getfacl /dev/dri/by-path/pci-0000:01:00.0-card
+getfacl: Removing leading '/' from absolute path names
+# file: dev/dri/by-path/pci-0000:01:00.0-card
+# owner: root
+# group: video
+user::rw-
+user:duka:rw-
+user:coder:rw-
+group::rw-
+mask::rw-
+other::---
+
+
+# The live module cannot be reloaded rootlessly (modprobe and dkms install are
+# root-only; see docs/evidence/EVIDENCE-GAPS.md GAP-B7), so the 0.1.0 -> 0.6.0
+# change is verified in the built object (sections 5-6) and the source, not in
+# the running module. Reloading is T11's job.
