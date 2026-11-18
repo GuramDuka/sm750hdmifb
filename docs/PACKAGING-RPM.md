@@ -245,7 +245,7 @@ dir  /usr/src/sm750hdmifb-0.6.0/src
 
 Deliberately **not** shipped: `DEBIAN/` (control, md5sums, postinst, prerm,
 postrm - RPM metadata and the scriptlets in section 7 replace them),
-`build-package.sh`, `tests/`, `tools/`, `.github/`, and every `docs/` file
+`build-package.sh`, `tests/`, `tools/`, and every `docs/` file
 except the four installed under `/usr/share/doc/sm750hdmifb`. The two Debian
 conffiles map to `%config(noreplace)`; the Xorg snippet is a plain file in
 both packages.

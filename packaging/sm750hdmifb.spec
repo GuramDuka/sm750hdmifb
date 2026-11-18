@@ -260,7 +260,7 @@ exit 0
 #   no-ship  DEBIAN/postinst, DEBIAN/prerm, DEBIAN/postrm (packaging/drm-*):
 #            dpkg maintainer scripts whose arguments and tools do not exist
 #            under rpm; replaced by the %post/%posttrans/%preun above
-#   no-ship  build-package.sh, tests/, tools/, .github/, docs/ (except the two
+#   no-ship  build-package.sh, tests/, tools/, docs/ (except the two
 #            documents listed above) - repository tooling, not runtime assets
 %dir %{_usrsrc}/%{name}-%{version}
 %{_usrsrc}/%{name}-%{version}/Makefile

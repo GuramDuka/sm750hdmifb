@@ -21,7 +21,7 @@ grep -F 'Removing stale DKMS registration:' \
 grep -F '[ "$1" = remove ] || [ "$1" = deconfigure ] || [ "$1" = upgrade ]' \
 	"$project_dir/packaging/drm-prerm" >/dev/null
 grep -F -- "-name 'linux-headers-6.17.*-generic'" \
-	"$project_dir/.github/workflows/build.yml" >/dev/null
+	"$project_dir/docs/ci/build.yml" >/dev/null
 grep -F 'readonly package=sm750hdmifb' "$builder" >/dev/null
 grep -F 'readonly deb="${dist_dir}/${package}_${version}_${arch}.deb"' \
 	"$builder" >/dev/null

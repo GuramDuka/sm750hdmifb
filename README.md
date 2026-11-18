@@ -409,7 +409,7 @@ fbdev client restore its own 1920x1080 mode.
 - [Acceptance report](docs/ACCEPTANCE-REPORT.md) - criterion-by-criterion verdict with evidence paths
 - [Project logbook](docs/LOGBOOK.md) - chronological record, newest entry last
 - [Host root actions](docs/ROOT-ACTIONS.md) - sudoers, helpers, udev rule, recovery
-- [Manual CI build](https://github.com/KodeMunkie/sm750hdmifb/actions/workflows/build.yml)
+- [CI recipe](docs/ci/build.yml) - inactive: GitHub Actions is disabled for this repository, the file is a copy-paste recipe
 
 Two verification targets are opt-in and deliberately outside `make check`, so
 the default gate stays the same 17 commands on machines without the analysers:

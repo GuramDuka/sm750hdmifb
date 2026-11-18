@@ -14,6 +14,12 @@ there. Rows that name a header-tree set (for example A06, which lists 7.2.13,
 7.2.15 and 7.3.3) describe the host as it was on 2026-11-17; the current matrix
 is in [ENVIRONMENT.md](ENVIRONMENT.md) section 2.
 
+Path note (2026-11-18, after the audit date): every reference below to
+`.github/workflows/build.yml` describes where the CI recipe was on the audit
+date. GitHub Actions is now disabled and the recipe moved to
+[docs/ci/build.yml](ci/build.yml); see
+[ENVIRONMENT.md](ENVIRONMENT.md) section 1.3. The rows are left as observed.
+
 Severity rubric used below:
 
 | Severity | Meaning |

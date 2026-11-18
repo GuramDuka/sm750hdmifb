@@ -1,4 +1,14 @@
 # SPDX-License-Identifier: GPL-2.0-only
+#
+# INACTIVE CI RECIPE. GitHub Actions is disabled for this repository, so this
+# file lives outside .github/workflows/ on purpose: GitHub only loads workflows
+# from that directory, and any commit that creates or updates a file below it
+# is rejected unless the pushing token carries the `workflow` scope.
+#
+# To re-enable: copy this file back to .github/workflows/build.yml, push with a
+# token that has the `workflow` scope, and delete the "INACTIVE" note above.
+# The release gates in tests/audit-release.sh, tests/check-drm-packaging.sh and
+# tests/check-release-version.sh read this copy, so keep artifact names in sync.
 name: Manual DKMS build
 
 on:

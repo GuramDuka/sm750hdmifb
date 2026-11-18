@@ -113,7 +113,7 @@ to `src/*.c` or `src/*.h` (`docs/evidence/builds/11-warnings-scan.log`).
 ```
 
 Expected: exit 0. The script rebuilds the noarch RPM from a fresh `_topdir`,
-asserts the payload against `git ls-files` (115 files in the current tree; the
+asserts the payload against `git ls-files` (116 files in the current tree; the
 same command the script uses is `git ls-files -- . ':(exclude)docs/plan'
 ':(exclude)docs/evidence' ':(exclude)docs/images' | wc -l`), the `%files` list
 (36 files), the scriptlets and the dependencies, runs the `%posttrans` branch
@@ -397,6 +397,7 @@ list.
 | `docs/STATIC-ANALYSIS.md` | static-analysis gate, per-tool counts, triage of every finding, tool configuration and limits |
 | `docs/PACKAGING-RPM.md` | spec purpose, build recipe, install, verify, rollback |
 | `docs/ENVIRONMENT.md` | host, header trees, tool matrix, privilege state |
+| `docs/ci/build.yml` | inactive CI recipe: GitHub Actions is disabled, the file is kept outside `.github/workflows/` |
 | `docs/DELIVERABLES.md` | this index and the reproduction guide |
 
 ### 5.3 Specification archive
@@ -504,6 +505,7 @@ list.
 | `docs/evidence/vbios-re/04-toolchain.txt` | T17: why the reconstruction is 16-bit assembly, with the toolchain it was built by |
 | `docs/evidence/builds/26-audit-release.log` | T18: `build-package.sh` and `tests/audit-release.sh` after the A29 fix |
 | `docs/evidence/builds/27-source-archive-manifest.log` | T18: tarball manifest after the A29 fix, with the development-only directory counts |
+| `docs/evidence/builds/28-static-determinism.log` | T24: the spatch non-determinism cause, the twelve-patch matrix and the controls |
 
 ### 5.5 Images and plan
 

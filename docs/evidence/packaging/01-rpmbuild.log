@@ -1,15 +1,15 @@
-# utc: 2026-11-18T06:55:24Z
+# utc: 2026-11-18T20:32:41Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
 # command: rpmbuild -ba --define '_topdir /mega/tmp/sm750/t6/rpmbuild' /home/coder/sm750hdmifb/packaging/sm750hdmifb.spec
 # workdir: 
 
 --- output ---
-Building target platforms: noarch
-Building for target noarch
+Платформы для сборки: noarch
+Сборка для платформы noarch
 setting SOURCE_DATE_EPOCH=1794960000
-Executing(%mkbuilddir): /bin/sh -e /var/tmp/rpm-tmp.f592Sj
-Executing(%prep): /bin/sh -e /var/tmp/rpm-tmp.RQYjPK
+Выполняется(%mkbuilddir): /bin/sh -e /var/tmp/rpm-tmp.RmKk1q
+Выполняется(%prep): /bin/sh -e /var/tmp/rpm-tmp.hiNC3u
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.0-build
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.0-build
@@ -22,7 +22,7 @@ Executing(%prep): /bin/sh -e /var/tmp/rpm-tmp.RQYjPK
 + RPM_EC=0
 ++ jobs -p
 + exit 0
-Executing(%build): /bin/sh -e /var/tmp/rpm-tmp.7Z3hyT
+Выполняется(%build): /bin/sh -e /var/tmp/rpm-tmp.ITsoG1
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.0-build
 + CFLAGS='-O2 -flto=auto -ffat-lto-objects -fexceptions -g -grecord-gcc-switches -pipe -Wall -Werror=format-security -Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3 -Wp,-D_GLIBCXX_ASSERTIONS -specs=/usr/lib/rpm/redhat/redhat-hardened-cc1 -fstack-protector-strong -specs=/usr/lib/rpm/redhat/redhat-annobin-cc1  -m64 -march=x86-64 -mtune=generic -fasynchronous-unwind-tables -fstack-clash-protection -fcf-protection -mtls-dialect=gnu2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer  '
@@ -49,7 +49,7 @@ Executing(%build): /bin/sh -e /var/tmp/rpm-tmp.7Z3hyT
 + RPM_EC=0
 ++ jobs -p
 + exit 0
-Executing(%install): /bin/sh -e /var/tmp/rpm-tmp.QHbfgQ
+Выполняется(%install): /bin/sh -e /var/tmp/rpm-tmp.Shfrsr
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.0-build
 + '[' /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.0-build/BUILDROOT '!=' / ']'
@@ -113,7 +113,7 @@ Scanned 13 directories and 31 files,
                0 modified (0 replaced + 0 rewritten),
                0 unsupported format, 0 errors
 Processing files: sm750hdmifb-0.6.0-1.fc43.noarch
-Executing(%doc): /bin/sh -e /var/tmp/rpm-tmp.vV9US1
+Выполняется(%doc): /bin/sh -e /var/tmp/rpm-tmp.HJhVt4
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.0-build
 + cd sm750hdmifb-0.6.0
@@ -138,10 +138,10 @@ Requires(preun): /bin/sh dkms
 Requires(posttrans): /bin/sh
 Requires: /usr/bin/bash
 Obsoletes: sm750hdmi-dkms < 0.6.0 sm750hdmidrm-rgb565-dither-dkms < 0.6.0 sm750hdmidrm-xrgb8888-dkms < 0.6.0
-Checking for unpackaged file(s): /usr/lib/rpm/check-files /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.0-build/BUILDROOT
-Wrote: /mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-0.6.0-1.fc43.src.rpm
-Wrote: /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
-Executing(rmbuild): /bin/sh -e /var/tmp/rpm-tmp.XLiyyU
+Проверка на неупакованный(е) файл(ы): /usr/lib/rpm/check-files /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.0-build/BUILDROOT
+Записан: /mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-0.6.0-1.fc43.src.rpm
+Записан: /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+Выполняется(rmbuild): /bin/sh -e /var/tmp/rpm-tmp.e9RYGQ
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.0-build
 + test -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.0-build

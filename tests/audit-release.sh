@@ -19,10 +19,16 @@ for required in "$module" "$deb" "$source_archive" "$project_dir/LICENSE"; do
 	}
 done
 
-# Any release artifact name mentioned by the workflow must carry the version
-# this tree builds; the old gate only knew 0.5.0-0.5.5 (defect A16).
+# Any release artifact name mentioned by the CI recipe must carry the version
+# this tree builds; the old gate only knew 0.5.0-0.5.5 (defect A16). The recipe
+# is kept at docs/ci/build.yml because GitHub Actions is disabled here.
+ci_recipe=$project_dir/docs/ci/build.yml
+[[ -s $ci_recipe ]] || {
+	echo "Missing CI recipe: $ci_recipe" >&2
+	exit 1
+}
 stale_artifacts=$(rg -o 'sm750hdmifb[-_][0-9]+\.[0-9]+\.[0-9]+' \
-	"$project_dir/.github/workflows/build.yml" |
+	"$ci_recipe" |
 	grep -vF -- "-$version" | grep -vF -- "_$version" || true)
 if [[ -n $stale_artifacts ]]; then
 	echo "Manual build workflow contains a stale release version:" >&2

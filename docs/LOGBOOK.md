@@ -1489,3 +1489,28 @@ we push to `origin`, and only ever pull from `github.com/KodeMunkie/sm750hdmifb`
   `completed`, `status: in_progress` -> `completed`, and decisions 46-48
   appended (T23/T24 acceptance, T8 round 2 acceptance, publishing topology).
   Plan is 24 tasks / 48 decisions with no task left open.
+
+### 2026-11-18T20:41Z | orchestrator | workflows disabled: CI recipe moved to docs/ci/build.yml
+
+- Owner instruction: disable the workflows.
+- Moved `.github/workflows/build.yml` to `docs/ci/build.yml` with `git mv`
+  and removed the now-empty `.github/` directory, so GitHub loads no workflow
+  from this repository. The recipe body is unchanged and gained an
+  `INACTIVE CI RECIPE` banner with the re-enable procedure.
+- Relocation rather than deletion because three release gates assert that
+  file: `tests/audit-release.sh:25-31`, `tests/check-drm-packaging.sh:24-25`
+  and `tests/check-release-version.sh:9`/`:74`. All three were repointed to
+  `docs/ci/build.yml`, and `tests/audit-release.sh` gained a non-empty guard.
+  `build-package.sh:127` dropped `.github` from its tar list.
+- This also unblocks the GitHub push recorded in `docs/ENVIRONMENT.md` 1.2:
+  a `repo`-only token cannot create or update a file under
+  `.github/workflows/`, but accepts a ref update that removes it. Two probes
+  proved it before anything was pushed.
+- Docs: `docs/ENVIRONMENT.md` 1.3, `docs/AUDIT.md` path note,
+  `docs/DEFECTS.md` A18/A19, `README.md:412`, `docs/PACKAGING-RPM.md:248`,
+  `packaging/sm750hdmifb.spec:263`, `docs/DELIVERABLES.md` 5.2 and 5.4 plus
+  the payload figure 115 -> 116.
+- Gates: `check-release-version.sh`, `check-drm-packaging.sh`,
+  `make check`, `check-rpm-dkms.sh`, `build-package.sh` + `audit-release.sh`
+  all exit 0. Archive is 116 entries, one under `docs/ci/`, none `.github`.
+- Plan decision 49 appended; `check:` recipe still 17 commands.

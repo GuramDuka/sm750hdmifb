@@ -98,6 +98,71 @@ State when this policy was set (2026-11-18): all three remotes carried
 `git push --dry-run` against both push URLs reported
 `27db03b..332b997  main -> main` with no credential prompt.
 
+### 1.2 First push after the policy: GitHub rejects workflow edits
+
+The first real `git push origin main` (2026-11-18T20:07Z, local `be73e9c`)
+published to polaris and was rejected by `github.com/GuramDuka`:
+
+```
+ ! [remote rejected] main -> main (refusing to allow a Personal Access Token
+   to create or update workflow `.github/workflows/build.yml` without
+   `workflow` scope)
+```
+
+Cause, not a repository defect: the pushed range contains commit `db7ecd3`,
+which edits `.github/workflows/build.yml` (adds `push`/`pull_request`
+triggers and switches the package step to `make check-package`). A GitHub
+Personal Access Token needs the `workflow` scope to change any file under
+`.github/workflows/`, and the token in `~/.git-credentials` (helper `store`)
+carries only `repo`. SSH is not a workaround here - `~/.ssh` holds no private
+key, so `git@github.com:` authentication fails.
+
+Result: polaris and GitHub diverged at that push - polaris at `be73e9c`,
+GitHub still at `27db03b`. Fix on the credential side, then push again:
+
+```sh
+gh auth refresh -h github.com -s workflow    # interactive, adds the scope
+# or replace the stored HTTPS credential with a token that has `repo, workflow`
+git push github main                         # publishes only the GitHub copy
+```
+
+Until the scope is granted, a push to the GitHub copy fails at the first
+workflow-touching commit while the polaris copy stays current. Verify the
+two copies separately:
+
+```sh
+git ls-remote origin refs/heads/main
+git ls-remote github refs/heads/main
+```
+
+### 1.3 Workflows disabled: the CI recipe moved to docs/ci/build.yml
+
+Owner instruction on 2026-11-18: disable the workflows. Done by moving the
+file out of `.github/workflows/` to `docs/ci/build.yml`, which carries an
+`INACTIVE CI RECIPE` banner. GitHub loads workflows only from
+`.github/workflows/`, so nothing runs there any more, and `.github/` no longer
+exists in the tree.
+
+This also unblocks the push described in 1.2. With a `repo`-only token GitHub
+refuses any ref update that creates or updates a file below
+`.github/workflows/`, but it accepts one that removes the file. Two probes
+proved it on this host: a commit deleting the file on top of `27db03b` and a
+commit deleting it on top of `be73e9c` (the whole blocked range) were both
+accepted into new branches. No history rewrite and no new token scope is
+needed, because the same refusal does not apply to deletions or moves.
+
+Consumers of the old path were repointed in the same change:
+`tests/audit-release.sh:25-31` (stale artifact names, plus a new existence
+guard), `tests/check-drm-packaging.sh:24` (Ubuntu header pattern),
+`tests/check-release-version.sh:9` and `:74` (artifact names and the
+`artifact_count` floor). `build-package.sh:127` no longer lists `.github`,
+because tar would fail on a path that is not in a fresh clone.
+
+To re-enable on GitHub: copy `docs/ci/build.yml` back to
+`.github/workflows/build.yml`, remove the banner, and push with a token that
+carries `repo, workflow` (or run `gh auth refresh -h github.com -s workflow`
+first).
+
 ## 2. Kernel header trees
 
 `/lib/modules/<kver>/build` resolves as follows (refreshed 2026-11-18; the

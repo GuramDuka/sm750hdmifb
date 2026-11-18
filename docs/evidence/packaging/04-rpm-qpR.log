@@ -1,4 +1,4 @@
-# utc: 2026-11-18T06:55:26Z
+# utc: 2026-11-18T20:32:43Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
 # command: rpm -qpR /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm; rpmspec -q --buildrequires; requires

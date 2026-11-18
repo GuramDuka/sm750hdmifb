@@ -124,7 +124,7 @@ else
 		--exclude='tests/test-scale-optimizations' \
 		"${tar_excludes[@]}" \
 		.gitignore LICENSE Makefile README.md build-package.sh dkms.conf \
-		src docs tests tools packaging .github
+		src docs tests tools packaging
 fi
 
 (cd "${dist_dir}" && sha256sum "$(basename "${deb}")" \

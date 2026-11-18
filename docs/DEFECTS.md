@@ -39,8 +39,8 @@ after (working tree) form of every fixed item. All logs were produced unprivileg
 | A15 | S3 | Module cannot report its package version | fixed | `src/sm750_drm.c:70` (`SM750_DRM_VERSION`), `:3866` (`MODULE_VERSION`); `tests/check-drm-module.sh:14-17` | `09`, `10` |
 | A16 | S3 | Stale-version release gate only covered 0.5.0-0.5.5 | fixed | `tests/audit-release.sh:22-31` (current version derived from `build-package.sh`) | `08`, `10` |
 | A17 | S3 | Documentation claimed all parameters are load-time only | fixed | `docs/PARAMETERS.md:4-11` | `10` |
-| A18 | S3 | CI only ran on `workflow_dispatch` | fixed | `.github/workflows/build.yml:4-7` (`push`, `pull_request`) | `10` |
-| A19 | S3 | `make check` never built or audited a package | fixed | `Makefile:71-74` (`check-package`); CI step at `.github/workflows/build.yml:48` | `07`, `08`, `10` |
+| A18 | S3 | CI only ran on `workflow_dispatch` | fixed | `docs/ci/build.yml:15-17` (`push`, `pull_request`); the recipe is inactive since 2026-11-18, see `docs/ENVIRONMENT.md` 1.3 | `10` |
+| A19 | S3 | `make check` never built or audited a package | fixed | `Makefile:71-74` (`check-package`); CI step at `docs/ci/build.yml:58` | `07`, `08`, `10` |
 | A20 | S3 | DKMS auto-installs on kernels the release notes call untested | accepted | rationale at `docs/RELEASE-NOTES.md:14-19`; no change to `dkms.conf:7-8` | `10` |
 | A21 | S3 | No committed evidence for the claimed kernel matrix | fixed | `docs/evidence/builds/01`-`11` (this task's logs; T4 cites them) | `02`-`06`, `11` |
 | A22 | S4 | Source tarball carried about 9 MB of screenshots | fixed | same fix as A02; `docs/images` excluded from the manifest (`build-package.sh:98`) | `07`, `10` |
