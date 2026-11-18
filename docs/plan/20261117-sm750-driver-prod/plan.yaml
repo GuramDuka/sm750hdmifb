@@ -548,7 +548,7 @@ tasks:
     wave: 8
     depends_on: [T3, T5, T6, T7, T9]
     agent: gem-documentation-writer
-    status: pending
+    status: completed
     retries_used: 0
     acceptance_criteria:
       - "docs/LOGBOOK.md exists: append-only, newest-last, ASCII, one entry per action or change with UTC date-time, actor, action, files touched, evidence path and outcome. It is backfilled from docs/plan/20261117-sm750-driver-prod/plan.yaml, docs/evidence/ and git history so the T1..T14 history is present, not only future work."

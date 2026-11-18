@@ -388,3 +388,21 @@ additionally consolidated, with their exact commands and hashes, in
   `sudo -n journalctl -k -b -q --no-pager`. The correction belongs to T11, which owns
   that file; until then the contradiction stands recorded in
   `docs/evidence/runtime/07-kernel-log.txt`.
+
+### 2026-11-18T10:07Z | gem-planner | T14 accepted
+
+- Action: verified the T14 deliverables against its seven acceptance criteria and
+  marked T14 completed in the plan of record.
+- Files: `docs/plan/20261117-sm750-driver-prod/plan.yaml` (T14 status).
+- Evidence: `git show --stat 6332870` lists exactly the six T14 paths
+  (`AGENTS.md` 63 lines, `README.md`, `docs/DELIVERABLES.md`,
+  `docs/ENVIRONMENT.md`, `docs/LOGBOOK.md` 373 lines, `docs/ROOT-ACTIONS.md`
+  436 lines); 31 logbook entries with ascending UTC timestamps, first
+  2026-11-17T15:42Z; helper bodies in `docs/ROOT-ACTIONS.md` match the real files
+  by sha256 (sm750-regs `1a345ff0`, sm750-lspci `4b4f555a`, vbios v1 `e2f6f687`,
+  vbios v2 `9e6c5db7`, udev rules `1bf4cf01`); zero non-ASCII bytes in all six.
+- Outcome: accepted. Two documented deviations from the task text are correct
+  behaviour, not errors: the root-only table now carries the values measured at
+  2026-11-18T09:36Z (169860 bytes, 240 sm750 lines) instead of the earlier
+  154236/150, and the T13 cursor capture was added to the deliverables index
+  before the amend so the section 2.7 comm check stayed green.
