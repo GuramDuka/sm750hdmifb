@@ -936,22 +936,25 @@ because both contain the same bytes.
 
 ## 10. Reproduction
 
-One command, from a clean checkout:
+Two opt-in targets, both recomputing from the captured image:
 
 ```sh
-make vbios-re
+make vbios-re      # rebuild the ROM and compare it byte for byte
+make vbios-trace   # execute both images and compare their instruction traces
 ```
 
-which runs `tools/vbios-re/check.sh` -> `reencode.py`, writing the rebuilt image
-and the generated source under `/mega/tmp/sm750/t17/reconstruct/`. The target is
-opt-in, not a dependency of `check`, for the same reason `static` is not: the
+Neither is a dependency of `check`, for the same reason `static` is not: the
 captured ROM is vendor material and is not in the tree. When the image is
-absent the harness prints `SKIP: captured ROM not present at <path>` and exits
-77, which the target turns into a successful skip (`make` exit 0). `make check`
+absent both harnesses print `SKIP: captured ROM not present at <path>` and exit
+77, which the targets turn into a successful skip (`make` exit 0). `make check`
 therefore stays green on a checkout without the image.
 
-The target needs only `python3`, `nasm` and `objdump`. The image path can be
-overridden with `VBIOS_ROM` and the output directory with `VBIOS_RE_OUT`.
+### 10.1 Rebuild and byte exactness
+
+`make vbios-re` runs `tools/vbios-re/check.sh` -> `reencode.py`, writing the
+rebuilt image and the generated source under `/mega/tmp/sm750/t17/reconstruct/`.
+It needs only `python3`, `nasm` and `objdump`. The image path can be overridden
+with `VBIOS_ROM` and the output directory with `VBIOS_RE_OUT`.
 
 To reproduce the evidence files:
 
@@ -960,6 +963,153 @@ python3 tools/vbios-re/reencode.py --out /mega/tmp/sm750/t17/reconstruct
 cmp -l /mega/tmp/sm750/vbios-01-00-0.bin /mega/tmp/sm750/t17/reconstruct/reencode.bin
 objdump -D -b binary -m i8086 -M intel --adjust-vma=0xc0000 <image>   # both
 ```
+
+### 10.2 Execution trace
+
+Section 9 compares the two images as text; this compares them as programs. Both
+images are executed from one fixed reset state and the resulting instruction
+streams are diffed step by step. On a byte-identical pair the result is
+necessarily identical, so what the trace adds is an independent check on the
+whole pipeline - region model, generated assembly, `nasm`, linked binary - that
+fails if any stage ever emits code that assembles but does not run the same
+way, and it exercises the entry path the system BIOS takes instead of the
+byte order of a file.
+
+```sh
+make vbios-trace                      # or: ./tools/vbios-re/trace.sh
+VBIOS_ROM=/path/to/image ./tools/vbios-re/trace.sh
+VBIOS_TRACE_BOUND=5000 ./tools/vbios-re/trace.sh      # more steps
+VBIOS_TRACE_OUT=/mega/tmp/sm750/trace2 ./tools/vbios-re/trace.sh
+```
+
+`trace.sh` checks the image, `qemu-system-i386`, `gdb`, `python3` and capstone
+in that order and skips (exit 77) with a `SKIP:` line when one is missing. It
+then regenerates the rebuilt image with `reencode.py --quiet` into
+`$VBIOS_TRACE_OUT/reconstruct/` so the comparison target is what this tree
+produces, not a stale scratch file, and runs `tools/vbios-re/trace.py`. That
+helper needs `qemu-system-i386`, `gdb`, capstone and unicorn; capstone and
+unicorn are installed under `/mega/tmp/sm750/pylib`, which the script prepends
+to `PYTHONPATH` (`VBIOS_PYLIB` overrides it). A run takes about a minute, most
+of it in the rebuild.
+
+Both engines start from the same state, which is the state a BIOS would hand
+the image to at linear `0xC0000`:
+
+| Register | Value |
+| --- | --- |
+| `CS:IP` | `0xC000:0x1256` (image offset `0x1256`, the `e9 50 12` target) |
+| `SS:SP` | `0x0000:0x7C00` |
+| `DS`, `ES`, `FS`, `GS` | `0` |
+| `EFLAGS` | `0x2` |
+
+Engine `qemu` is the real CPU. The image cannot be loaded with `-option-rom`
+(section 1: QEMU's loader requires `55 AA` at the end of a 512-byte block and
+this image has none), so it goes through QEMU's generic loader and is stepped
+through the gdb stub:
+
+```sh
+qemu-system-i386 -M pc -m 8 -S -gdb tcp:127.0.0.1:47127 \
+  -device loader,file=<image>,addr=0xc0000,force-raw=on \
+  -display none -monitor none -serial none -no-reboot -no-shutdown
+gdb -q -batch -x <out>/qemu-captured.gdb
+```
+
+The generated command file sets `$cs` and `$eip` (real target registers on this
+architecture, so the `set` moves the CPU; the transcript shows gdb arriving at
+`0x0000fff0` and the trace starting at `0xc000:0x1256`), then loops:
+
+```gdb
+set $n = 0
+while $n < 2000
+  printf "P %d %04x %04x\n", $n, ($cs), ($eip)
+  x/16xb (($cs << 4) + $eip)
+  si
+  set $n = $n + 1
+  if ($cs) != 0xc000
+    printf "FAR %04x %04x\n", ($cs), ($eip)
+    loop_break
+  end
+end
+```
+
+The port is fixed at 47127 and the run aborts with `FATAL: gdb port 47127 is
+already in use; pass --port N` rather than picking another one silently.
+`VBIOS_TRACE_PORT` overrides it.
+
+Engine `unicorn` maps the image at `0xC0000` over 1 MiB of RAM and hooks
+`UC_HOOK_CODE` for the instruction stream and `UC_HOOK_INSN` for `IN`/`OUT`, so
+port accesses are recorded with port, direction, width and value. Both engines
+decode the bytes they see with capstone in 16-bit mode, so the traces are the
+same format:
+
+```text
+000004 c000:125e lin=0c125e bytes=e8044e               call     0xc6065                  branch=0x0c6065
+000005 c000:6065 lin=0c6065 bytes=32db                 xor      bl, bl                   branch=-
+000021 io   out port=0cf8 size=4 value=0x80000000
+000024 io   in port=0cfc size=4 value=0x0
+```
+
+Each run writes `<engine>-<captured|rebuilt>.trace` (the header carries the
+engine, image path, sha256, bound and stop reason), a matching `.json` summary,
+and for the qemu engine the `.gdb` command file, the gdb transcript and the
+emulator log, whose first line is the exact `qemu-system-i386` command line.
+
+Stopping is bounded and recorded, never silent:
+
+* `bound` - the step limit was reached (`VBIOS_TRACE_BOUND`, default 2000).
+* `far-transfer` - control left `CS=0xC000`, i.e. outside linear
+  `0xC0000`-`0xCFFFF`, for example a jump through an uninitialised interrupt
+  vector.
+* `loop` - a repeated-PC cycle of at most 32 instructions executed 64 times,
+  which is a hang, not progress. Both stop rules are self-tested against
+  synthetic images (a `jmp far 0x1000:0` and a `jmp $`), see
+  `docs/evidence/vbios-re/06-trace-stops.txt`.
+
+A suffix of steps that introduces no new PC is reported separately as `no
+progress: the N steps after step K executed no new PC (0x...)`, because that is
+a fact about the run and not proof of a loop.
+
+The comparison mode runs the captured image and the rebuilt image through the
+same engine from the same state and diffs the whole step list, then the port
+events, and prints the first divergence with two lines of context on each side
+plus the two differing lines, exiting non-zero. It does not shorten the bound to
+make a difference go away: the transcript
+`docs/evidence/vbios-re/07-trace-divergence.txt` flips one byte of the image
+(`0x125a`: `push ds` -> `push es`) and the tool reports `DIVERGED at step 1` for
+both engines and exits 1.
+
+Result on this host, both engines, 2000 steps:
+
+| Engine | Captured image | Rebuilt image | Port writes |
+| --- | --- | --- | --- |
+| qemu | 2000 steps, `stop=bound`, entered `0xC6065` at step 5 | same | not observable |
+| unicorn | 2000 steps, `stop=bound`, entered `0xC6065` at step 5 | same | 99 OUT, 99 IN |
+
+`compare qemu MATCH: 2000 steps identical, 0 port events identical` and
+`compare unicorn MATCH: 2000 steps identical, 198 port events identical`, then
+`VERDICT: PASS`, exit 0. The 198 events are the PCI configuration accesses of
+the scan at section 6.6: `out 0xcf8` with `0x80000000`, `0x80000800`, ... and
+`in 0xcfc` returning 0.
+
+What the trace does **not** show:
+
+* There is no SM750 in either machine. `0xcfc` reads what the emulated chipset
+  returns, not what this card would return, so the scan for `0x750126f` never
+  matches and the mode-set path behind it is never reached. Nothing here is
+  evidence about hardware behaviour; it is a CPU-level equivalence check.
+* The gdb stub cannot observe I/O, so the qemu engine reports `ports=n/a` and
+  port equivalence rests on the unicorn engine. The instruction stream, which
+  is the part both engines see, is identical between them for all 2000 steps,
+  which is what licenses using the cheaper engine for the side effects.
+* Unicorn's `IN` returns 0 and it has no interrupt controller; the traced path
+  issues no `INT` and no MMIO access, so neither limitation is exercised here.
+  A longer trace would stop being meaningful rather than fail loudly, because
+  the ROM is waiting for a device that is not there.
+
+Evidence: `docs/evidence/vbios-re/05-execution-trace.txt` (the harness run, the
+two engines, the trace excerpt and the comparison) and
+`docs/evidence/vbios-re/06-trace-stops.txt` (skip paths, port collision, both
+stop rules, divergence detection).
 
 ## 11. Provenance
 

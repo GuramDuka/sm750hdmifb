@@ -475,18 +475,21 @@ fbdev client restore its own 1920x1080 mode.
 - [Host root actions](docs/ROOT-ACTIONS.md) - sudoers, helpers, udev rule, recovery
 - [CI recipe](docs/ci/build.yml) - inactive: GitHub Actions is disabled for this repository, the file is a copy-paste recipe
 
-Two verification targets are opt-in and deliberately outside `make check`, so
+Three verification targets are opt-in and deliberately outside `make check`, so
 the default gate stays the same 17 commands on machines without the analysers:
 
 ```sh
-make static     # sparse, smatch, cppcheck, coccinelle, pahole against src/
-make vbios-re   # rebuild the option ROM and compare it byte for byte
+make static       # sparse, smatch, cppcheck, coccinelle, pahole against src/
+make vbios-re     # rebuild the option ROM and compare it byte for byte
+make vbios-trace  # execute both images and compare their instruction traces
 ```
 
-`make vbios-re` needs the captured image (`VBIOS_ROM=...`, or the default path)
-and prints `SKIP` with exit 0 when it is absent, so a fresh checkout without the
-image still passes. `make static` prints a skip message when the analysers are
-missing. Both are documented in [static analysis](docs/STATIC-ANALYSIS.md) and
+`make vbios-re` and `make vbios-trace` need the captured image
+(`VBIOS_ROM=...`, or the default path) and print `SKIP` with exit 0 when it is
+absent, so a fresh checkout without the image still passes; the trace target
+also needs `qemu-system-i386`, `gdb`, `capstone` and `unicorn`. `make static`
+prints a skip message when the analysers are missing. All three are documented
+in [static analysis](docs/STATIC-ANALYSIS.md) and
 [VBIOS reconstruction](docs/VBIOS-REVERSE-ENGINEERING.md).
 
 ### Gates and test scripts

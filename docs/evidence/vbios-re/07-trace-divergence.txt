@@ -1,0 +1,79 @@
+Divergence detection: one flipped instruction byte, T25
+
+The comparison must report a difference instead of reporting success, and it
+must not shorten the bound until the difference disappears. This run flips
+one byte of the captured image in a scratch copy - offset 0x125a, the second
+instruction after the entry point: 0x1e push ds becomes 0x06 push es - and
+compares it against the captured image itself.
+
+--- 1. build the mutated copy ---
+$ cp /mega/tmp/sm750/vbios-01-00-0.bin /mega/tmp/sm750/tr/mut.bin
+
+$ printf '\x06' | dd of=/mega/tmp/sm750/tr/mut.bin bs=1 seek=$((0x125a)) conv=notrunc
+1+0 records in
+1+0 records out
+1 byte copied, 0.000249833 s, 4.0 kB/s
+
+$ sha256sum /mega/tmp/sm750/tr/mut.bin
+83635f1a82d028b6bf4085c34f66a263b3aed69e0903f20b44202beeabfbb7b0  /mega/tmp/sm750/tr/mut.bin
+
+--- 2. compare, both engines, same 2000-step bound ---
+$ python3 tools/vbios-re/trace.py --rom /mega/tmp/sm750/vbios-01-00-0.bin --compare /mega/tmp/sm750/tr/mut.bin --out /mega/tmp/sm750/tr/out-mut
+captured   /mega/tmp/sm750/vbios-01-00-0.bin 49152 bytes sha256 16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551
+rebuilt    /mega/tmp/sm750/tr/mut.bin 49152 bytes sha256 83635f1a82d028b6bf4085c34f66a263b3aed69e0903f20b44202beeabfbb7b0
+engine qemu    captured steps=2000  stop=bound        ports=n/a (gdb stub cannot observe I/O) 0xc6065=yes
+         instruction bound reached
+         no progress: the 1346 steps after step 654 executed no new PC (0xc6047); 24 distinct PCs in 0xc600a-0xc6047
+engine qemu    rebuilt  steps=2000  stop=bound        ports=n/a (gdb stub cannot observe I/O) 0xc6065=yes
+         instruction bound reached
+         no progress: the 1346 steps after step 654 executed no new PC (0xc6047); 24 distinct PCs in 0xc600a-0xc6047
+compare qemu    DIVERGED at step 1
+  context:
+     captured 000000 c000:1256 lin=0c1256 bytes=c80a0000             enter    0xa, 0                   branch=-
+  >> captured 000001 c000:125a lin=0c125a bytes=1e                   push     ds                       branch=-
+     captured 000002 c000:125b lin=0c125b bytes=6660                 pushal                            branch=-
+     captured 000003 c000:125d lin=0c125d bytes=06                   push     es                       branch=-
+step 1 differs:
+    captured : 000001 c000:125a lin=0c125a bytes=1e                   push     ds                       branch=-
+    rebuilt  : 000001 c000:125a lin=0c125a bytes=06                   push     es                       branch=-
+engine unicorn captured steps=2000  stop=bound        ports(out=99 in=99) 0xc6065=yes
+         instruction bound reached
+         no progress: the 1346 steps after step 654 executed no new PC (0xc6047); 24 distinct PCs in 0xc600a-0xc6047
+engine unicorn rebuilt  steps=2000  stop=bound        ports(out=99 in=99) 0xc6065=yes
+         instruction bound reached
+         no progress: the 1346 steps after step 654 executed no new PC (0xc6047); 24 distinct PCs in 0xc600a-0xc6047
+compare unicorn DIVERGED at step 1
+  context:
+     captured 000000 c000:1256 lin=0c1256 bytes=c80a0000             enter    0xa, 0                   branch=-
+  >> captured 000001 c000:125a lin=0c125a bytes=1e                   push     ds                       branch=-
+     captured 000002 c000:125b lin=0c125b bytes=6660                 pushal                            branch=-
+     captured 000003 c000:125d lin=0c125d bytes=06                   push     es                       branch=-
+step 1 differs:
+    captured : 000001 c000:125a lin=0c125a bytes=1e                   push     ds                       branch=-
+    rebuilt  : 000001 c000:125a lin=0c125a bytes=06                   push     es                       branch=-
+VERDICT: FAIL
+  qemu: traces diverged (first divergence at step 1)
+  unicorn: traces diverged (first divergence at step 1)
+exit=1
+
+--- 3. the traces really did differ, and only at the flipped step ---
+$ wc -l /mega/tmp/sm750/tr/out-mut/qemu-captured.trace /mega/tmp/sm750/tr/out-mut/qemu-rebuilt.trace
+  2003 /mega/tmp/sm750/tr/out-mut/qemu-captured.trace
+  2003 /mega/tmp/sm750/tr/out-mut/qemu-rebuilt.trace
+  4006 total
+
+$ diff <(tail -n +2 /mega/tmp/sm750/tr/out-mut/qemu-captured.trace) <(tail -n +2 /mega/tmp/sm750/tr/out-mut/qemu-rebuilt.trace); true
+4c4
+< 000001 c000:125a lin=0c125a bytes=1e                   push     ds                       branch=-
+---
+> 000001 c000:125a lin=0c125a bytes=06                   push     es                       branch=-
+
+--- 4. the mutated image, executed alone, still reaches the bound ---
+$ sed -n '1,4p' /mega/tmp/sm750/tr/out-mut/qemu-rebuilt.trace
+# engine qemu image /mega/tmp/sm750/tr/mut.bin sha256 83635f1a82d028b6bf4085c34f66a263b3aed69e0903f20b44202beeabfbb7b0
+# bound 2000
+# stop bound: instruction bound reached
+000000 c000:1256 lin=0c1256 bytes=c80a0000             enter    0xa, 0                   branch=-
+
+  (a shorter bound would have hidden the difference; the full 2000 steps
+   were compared and the first differing step was reported)

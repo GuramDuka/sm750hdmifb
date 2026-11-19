@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
-.PHONY: all clean check check-deps check-package check-all-kernels module-info package static vbios-re
+.PHONY: all clean check check-deps check-package check-all-kernels module-info package static vbios-re vbios-trace
 
 all:
 	$(MAKE) -C $(KDIR) M=$(CURDIR)/src modules
@@ -68,6 +68,15 @@ module-info: all
 # docs/VBIOS-REVERSE-ENGINEERING.md).
 vbios-re:
 	@./tools/vbios-re/check.sh; rc=$$?; \
+	if [ $$rc -eq 77 ]; then exit 0; fi; \
+	exit $$rc
+
+# Opt-in execution trace of the captured ROM and of the reconstruction this
+# tree generates, compared step by step (docs/VBIOS-REVERSE-ENGINEERING.md
+# section 10.2). Same SKIP rule as vbios-re: the captured image is vendor
+# material and is not in the tree, so an absent image is a successful skip.
+vbios-trace:
+	@./tools/vbios-re/trace.sh; rc=$$?; \
 	if [ $$rc -eq 77 ]; then exit 0; fi; \
 	exit $$rc
 

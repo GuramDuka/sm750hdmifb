@@ -385,7 +385,7 @@ list.
 | `docs/STAGING-BENCHMARK.md` | DMA batch benchmark procedure and analysis rules |
 | `docs/TESTING.md` | validation scope, recovery, live reload |
 | `docs/VBLANK.md` | private vblank timer and its locking |
-| `docs/VBIOS-REVERSE-ENGINEERING.md` | option-ROM structure map and the bit-exact 16-bit reconstruction, with its limits |
+| `docs/VBIOS-REVERSE-ENGINEERING.md` | option-ROM structure map, the bit-exact 16-bit reconstruction, and the execution-trace comparison of both images, with their limits |
 
 ### 5.2 Audit, test and packaging documentation
 
@@ -503,6 +503,9 @@ list.
 | `docs/evidence/vbios-re/02-bitexact.txt` | T17: rebuilt image is byte-identical to the capture, 49152 bytes each |
 | `docs/evidence/vbios-re/03-decode-equality.txt` | T17: `objdump` disassembly of both images compares equal |
 | `docs/evidence/vbios-re/04-toolchain.txt` | T17: why the reconstruction is 16-bit assembly, with the toolchain it was built by |
+| `docs/evidence/vbios-re/05-execution-trace.txt` | T25: `make vbios-trace` - the captured image and the reconstruction executed through qemu's gdb stub and through unicorn, 2000 steps each, identical step lists and 198 identical port events |
+| `docs/evidence/vbios-re/06-trace-stops.txt` | T25: the four SKIP paths, the gdb port collision, and both stop rules proved on synthetic images (far transfer, repeated-PC loop) |
+| `docs/evidence/vbios-re/07-trace-divergence.txt` | T25: one flipped instruction byte makes the comparison report `DIVERGED at step 1` and exit 1 instead of claiming success |
 | `docs/evidence/builds/26-audit-release.log` | T18: `build-package.sh` and `tests/audit-release.sh` after the A29 fix |
 | `docs/evidence/builds/27-source-archive-manifest.log` | T18: tarball manifest after the A29 fix, with the development-only directory counts |
 | `docs/evidence/builds/28-static-determinism.log` | T24: the spatch non-determinism cause, the twelve-patch matrix and the controls |

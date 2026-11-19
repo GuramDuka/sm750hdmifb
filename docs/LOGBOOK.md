@@ -1551,3 +1551,58 @@ we push to `origin`, and only ever pull from `github.com/KodeMunkie/sm750hdmifb`
 - Plan decision 50 appended. No source, test or packaging change.
 - Gates: `check-release-version.sh` and `check-drm-packaging.sh` pass; the
   remaining gates re-run after the edit.
+
+### 2026-11-19T07:55Z | gem-implementer | T25 execution-trace harness: ROM traced by execution, capture and rebuild compared
+
+The reconstruction of the option ROM is byte-identical to the capture
+(`make vbios-re`), which proves the encoding but not the behaviour. T25 adds an
+execution-trace harness so the two images are compared as instruction streams
+from the same reset state.
+
+- New `tools/vbios-re/trace.py` (578 lines) and `tools/vbios-re/trace.sh`
+  (66 lines, POSIX sh, `set -eu`). The shell script checks the captured image,
+  `qemu-system-i386`, `gdb`, `python3` and capstone in that order and exits 77
+  with a `SKIP:` line for each missing one; it then rebuilds
+  `reencode.bin` from the committed model with `tools/vbios-re/reencode.py`
+  and hands both images to the Python harness.
+- Two engines, same start state (CS=0xC000 IP=0x1256, SS=0 SP=0x7C00,
+  DS/ES/FS/GS=0, image at linear 0xC0000): `qemu` loads the image with
+  `-device loader,file=...,addr=0xc0000,force-raw=on`, is paused with `-S`,
+  and is single-stepped over the gdb stub on port 47127 by a generated command
+  file; `unicorn` runs UC_MODE_16 with `UC_HOOK_CODE` and `UC_HOOK_INSN` for
+  IN/OUT, which the gdb stub cannot observe. Stop reasons: `bound`,
+  `far-transfer` outside 0xC0000-0xCFFFF, `loop` (a period of at most 32
+  instructions repeated 64 times), `error`.
+- Comparison mode diffs the full step lists and then the port events, prints
+  the first diverging step with both lines and exits 1; it never shrinks the
+  bound to hide a divergence.
+- New opt-in target `make vbios-trace` next to `make vbios-re`; exit 77 is
+  treated as a skip. Neither target is part of `check`.
+- Measured on this host: captured image reaches 2000 steps under both engines,
+  stop `bound`, 0xC6065 entered at step 5 through `call 0xc6065` at step 4,
+  99 OUT + 99 IN on ports 0cf8/0cfc (unicorn only). The PCI scan never matches
+  because no emulated machine has an SM750, so the later 1346 steps execute no
+  new PC in 0xc600a-0xc6047.
+- Comparison verdict: `MATCH` for both engines, 2000 steps identical,
+  0 port events identical for qemu and 198 port events identical for unicorn.
+  A deliberate one-byte mutation at file offset 0x125a makes both engines
+  report `DIVERGED at step 1` (`push ds` vs `push es`) and `VERDICT: FAIL`, so
+  the comparison is not vacuous.
+- Docs: `docs/VBIOS-REVERSE-ENGINEERING.md` section 10 became
+  `## 10. Reproduction` with `10.1 Rebuild and byte exactness` and new
+  `10.2 Execution trace` (invocations, stop rules, result table, what the
+  trace cannot show); no later section was renumbered. `README.md` lists
+  `make vbios-trace` among the opt-in targets; `docs/DELIVERABLES.md` gained
+  three evidence rows 05..07.
+- Evidence: `docs/evidence/vbios-re/05-execution-trace.txt` (167 lines),
+  `06-trace-stops.txt` (78 lines, skip paths, port collision, synthetic
+  far-jump and self-loop images), `07-trace-divergence.txt` (79 lines).
+- Gates: `make check` (rootless libdrm), `tests/check-release-version.sh`,
+  `tests/check-drm-packaging.sh`, `build-package.sh` and
+  `tests/audit-release.sh` all exit 0. The source tarball still ships no
+  binary image. No `src/`, packaging or gate change; no vendor material in the
+  tree.
+- Outcome: behavioural equivalence of capture and reconstruction is now
+  reproducible. Limitation: this is CPU-level tracing only - neither emulator
+  has an SM750, so no port or MMIO device effect is observed and no mode-set
+  path is reached.

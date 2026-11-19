@@ -1,0 +1,167 @@
+Execution trace of the option ROM: captured image and reconstruction, T25
+
+Harness: tools/vbios-re/trace.sh -> tools/vbios-re/trace.py
+Engines: qemu-system-i386 10.1.5 through its gdb stub, and unicorn 2.1.4
+Both start at CS=0xc000 IP=0x1256, SS:SP=0x0000:0x7c00, DS=ES=FS=GS=0,
+EFLAGS=0x2, image at linear 0xc0000. Bound 2000 steps.
+The captured image stays at /mega/tmp/sm750/vbios-01-00-0.bin; it is not in
+the tree, and neither is the rebuilt image.
+
+--- 1. the harness, end to end ---
+$ ./tools/vbios-re/trace.sh
+captured   /mega/tmp/sm750/vbios-01-00-0.bin 49152 bytes sha256 16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551
+rebuilt    /mega/tmp/sm750/trace/reconstruct/reencode.bin 49152 bytes sha256 16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551
+engine qemu    captured steps=2000  stop=bound        ports=n/a (gdb stub cannot observe I/O) 0xc6065=yes
+         instruction bound reached
+         no progress: the 1346 steps after step 654 executed no new PC (0xc6047); 24 distinct PCs in 0xc600a-0xc6047
+engine qemu    rebuilt  steps=2000  stop=bound        ports=n/a (gdb stub cannot observe I/O) 0xc6065=yes
+         instruction bound reached
+         no progress: the 1346 steps after step 654 executed no new PC (0xc6047); 24 distinct PCs in 0xc600a-0xc6047
+compare qemu    MATCH: 2000 steps identical, 0 port events identical
+engine unicorn captured steps=2000  stop=bound        ports(out=99 in=99) 0xc6065=yes
+         instruction bound reached
+         no progress: the 1346 steps after step 654 executed no new PC (0xc6047); 24 distinct PCs in 0xc600a-0xc6047
+engine unicorn rebuilt  steps=2000  stop=bound        ports(out=99 in=99) 0xc6065=yes
+         instruction bound reached
+         no progress: the 1346 steps after step 654 executed no new PC (0xc6047); 24 distinct PCs in 0xc600a-0xc6047
+compare unicorn MATCH: 2000 steps identical, 198 port events identical
+VERDICT: PASS
+
+exit=0
+
+--- 2. files written ---
+$ ls -1 /mega/tmp/sm750/trace
+qemu-captured.gdb
+qemu-captured.gdb.out
+qemu-captured.json
+qemu-captured.qemu.log
+qemu-captured.trace
+qemu-rebuilt.gdb
+qemu-rebuilt.gdb.out
+qemu-rebuilt.json
+qemu-rebuilt.qemu.log
+qemu-rebuilt.trace
+reconstruct
+unicorn-captured.json
+unicorn-captured.trace
+unicorn-rebuilt.json
+unicorn-rebuilt.trace
+
+--- 3. trace headers ---
+$ head -3 /mega/tmp/sm750/trace/qemu-captured.trace
+# engine qemu image /mega/tmp/sm750/vbios-01-00-0.bin sha256 16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551
+# bound 2000
+# stop bound: instruction bound reached
+
+$ head -3 /mega/tmp/sm750/trace/unicorn-captured.trace
+# engine unicorn image /mega/tmp/sm750/vbios-01-00-0.bin sha256 16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551
+# bound 2000
+# stop bound: instruction bound reached
+
+--- 4. entry, the call into 0xc6065 and the first port access ---
+$ sed -n '1,26p' /mega/tmp/sm750/trace/unicorn-captured.trace
+# engine unicorn image /mega/tmp/sm750/vbios-01-00-0.bin sha256 16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551
+# bound 2000
+# stop bound: instruction bound reached
+000000 c000:1256 lin=0c1256 bytes=c80a0000             enter    0xa, 0                   branch=-
+000001 c000:125a lin=0c125a bytes=1e                   push     ds                       branch=-
+000002 c000:125b lin=0c125b bytes=6660                 pushal                            branch=-
+000003 c000:125d lin=0c125d bytes=06                   push     es                       branch=-
+000004 c000:125e lin=0c125e bytes=e8044e               call     0xc6065                  branch=0x0c6065
+000005 c000:6065 lin=0c6065 bytes=32db                 xor      bl, bl                   branch=-
+000006 c000:6067 lin=0c6067 bytes=32ff                 xor      bh, bh                   branch=-
+000007 c000:6069 lin=0c6069 bytes=e8bdff               call     0xc6029                  branch=0x0c6029
+000008 c000:6029 lin=0c6029 bytes=32c9                 xor      cl, cl                   branch=-
+000009 c000:602b lin=0c602b bytes=32ed                 xor      ch, ch                   branch=-
+000010 c000:602d lin=0c602d bytes=e8daff               call     0xc600a                  branch=0x0c600a
+000011 c000:600a lin=0c600a bytes=b480                 mov      ah, 0x80                 branch=-
+000012 c000:600c lin=0c600c bytes=8ac3                 mov      al, bl                   branch=-
+000013 c000:600e lin=0c600e bytes=66c1e010             shl      eax, 0x10                branch=-
+000014 c000:6012 lin=0c6012 bytes=8ae7                 mov      ah, bh                   branch=-
+000015 c000:6014 lin=0c6014 bytes=c0e403               shl      ah, 3                    branch=-
+000016 c000:6017 lin=0c6017 bytes=80e107               and      cl, 7                    branch=-
+000017 c000:601a lin=0c601a bytes=0ae1                 or       ah, cl                   branch=-
+000018 c000:601c lin=0c601c bytes=8ac5                 mov      al, ch                   branch=-
+000019 c000:601e lin=0c601e bytes=24fc                 and      al, 0xfc                 branch=-
+000020 c000:6020 lin=0c6020 bytes=baf80c               mov      dx, 0xcf8                branch=-
+000021 c000:6023 lin=0c6023 bytes=66ef                 out      dx, eax                  branch=-
+000021 io   out port=0cf8 size=4 value=0x80000000
+
+--- 5. port traffic and instruction statistics ---
+$ grep -c ' io   ' /mega/tmp/sm750/trace/unicorn-captured.trace
+198
+
+$ grep -o 'port=[0-9a-f]*' /mega/tmp/sm750/trace/unicorn-captured.trace | sort | uniq -c
+     99 port=0cf8
+     99 port=0cfc
+
+$ grep -c ' io   ' /mega/tmp/sm750/trace/qemu-captured.trace; true
+0
+
+--- 6. per-run summary ---
+$ cat /mega/tmp/sm750/trace/unicorn-captured.json
+{
+  "bound": 2000,
+  "distinct_pcs": 34,
+  "engine": "unicorn",
+  "entered_0xc6065": true,
+  "io_observable": true,
+  "port_reads": 99,
+  "port_writes": 99,
+  "ports": [
+    "0cf8",
+    "0cfc"
+  ],
+  "rom": "/mega/tmp/sm750/vbios-01-00-0.bin",
+  "sha256": "16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551",
+  "size": 49152,
+  "stalled_region": {
+    "after_step": 654,
+    "distinct_pcs": 24,
+    "max": "0xc6047",
+    "min": "0xc600a",
+    "new_pc": "0xc6047",
+    "steps": 1346
+  },
+  "steps": 2000,
+  "steps_traced": 2000,
+  "stop": "bound",
+  "stop_detail": "instruction bound reached",
+  "trace": "/mega/tmp/sm750/trace/unicorn-captured.trace"
+}
+
+--- 7. the two engines agree instruction for instruction ---
+$ diff <(grep -v ' io   ' /mega/tmp/sm750/trace/unicorn-captured.trace | tail -n +2) <(tail -n +2 /mega/tmp/sm750/trace/qemu-captured.trace)
+(no output: identical)
+
+--- 8. captured and rebuilt traces are identical (header line excluded, it names the image) ---
+$ diff <(tail -n +2 /mega/tmp/sm750/trace/qemu-captured.trace) <(tail -n +2 /mega/tmp/sm750/trace/qemu-rebuilt.trace)
+(no output: identical)
+
+$ diff <(tail -n +2 /mega/tmp/sm750/trace/unicorn-captured.trace) <(tail -n +2 /mega/tmp/sm750/trace/unicorn-rebuilt.trace)
+(no output: identical)
+
+--- 9. the exact emulator invocation, logged by the run ---
+$ head -1 /mega/tmp/sm750/trace/qemu-captured.qemu.log
+qemu-system-i386 -M pc -m 8 -S -gdb tcp:127.0.0.1:47127 -device loader,file=/mega/tmp/sm750/vbios-01-00-0.bin,addr=0xc0000,force-raw=on -display none -monitor none -serial none -no-reboot -no-shutdown
+
+$ head -18 /mega/tmp/sm750/trace/qemu-captured.gdb
+set pagination off
+set confirm off
+set height 0
+set width 0
+target remote 127.0.0.1:47127
+set $cs = 0xc000
+set $eip = 0x1256
+set $ss = 0
+set $sp = 0x7c00
+set $ds = 0
+set $es = 0
+set $fs = 0
+set $gs = 0
+set $n = 0
+while $n < 2000
+  printf "P %d %04x %04x\n", $n, ($cs), ($eip)
+  x/16xb (($cs << 4) + $eip)
+  si
+

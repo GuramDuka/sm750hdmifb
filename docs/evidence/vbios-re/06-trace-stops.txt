@@ -1,0 +1,78 @@
+Stop rules, skip paths and the port collision, T25
+
+Every command runs from the repository root. The synthetic images are two
+scratch files of 0x125b bytes, not in the tree: their bytes at offset 0x1256
+are the whole program, because the harness starts execution there. Cases 6
+to 8 therefore cannot satisfy the real-image acceptance checks (at least 100
+steps, entry into 0xc6065) and exit 1; what those cases test is the stop
+reason and the step count each engine reports.
+
+--- 1. the captured image is absent ---
+$ env VBIOS_ROM=/nonexistent/rom.bin ./tools/vbios-re/trace.sh
+SKIP: captured ROM not present at /nonexistent/rom.bin
+exit=77
+
+--- 2. qemu-system-i386 is absent (PATH holds only sh, dirname, python3, env) ---
+$ env PATH=/mega/tmp/sm750/tr/p1 ./tools/vbios-re/trace.sh
+SKIP: qemu-system-i386 not installed
+exit=77
+
+--- 3. gdb is absent (same PATH plus qemu-system-i386) ---
+$ env PATH=/mega/tmp/sm750/tr/p2 ./tools/vbios-re/trace.sh
+SKIP: gdb not installed
+exit=77
+
+--- 4. capstone is absent (no helper prefix, empty PYTHONPATH) ---
+$ env PYTHONPATH= VBIOS_PYLIB=/nonexistent ./tools/vbios-re/trace.sh
+SKIP: python3 capstone not importable (VBIOS_PYLIB=/nonexistent)
+exit=77
+
+--- 5. the gdb port is already in use ---
+$ python3 -c 'bind 47127 and run the qemu engine'
+captured   /mega/tmp/sm750/vbios-01-00-0.bin 49152 bytes sha256 16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551
+FATAL: gdb port 47127 is already in use; pass --port
+exit=1
+
+--- 6. a far transfer out of the ROM segment ---
+$ truncate -s 4699 /mega/tmp/sm750/tr/synth-far.bin   # 0x125b
+$ printf '\xea\x00\x00\x00\x10' | dd of=/mega/tmp/sm750/tr/synth-far.bin bs=1 seek=$((0x1256)) conv=notrunc
+
+$ python3 tools/vbios-re/trace.py --rom /mega/tmp/sm750/tr/synth-far.bin --engine both --out /mega/tmp/sm750/tr/out-stops
+captured   /mega/tmp/sm750/tr/synth-far.bin 4699 bytes sha256 c6c176d6b2ede662121995a942dd9bdb502c9fb17bf89d7392d46588d80ba879
+engine qemu    captured steps=1     stop=far-transfer ports=n/a (gdb stub cannot observe I/O) 0xc6065=no
+         control left the ROM segment: 1000:0000 linear 0x10000
+engine unicorn captured steps=1     stop=far-transfer ports(out=0 in=0) 0xc6065=no
+         control left the ROM segment: 1000:0000 linear 0x10000
+VERDICT: FAIL
+  qemu: only 1 steps traced (need >= 100)
+  qemu: trace never entered the nested routine at 0xc6065
+  unicorn: only 1 steps traced (need >= 100)
+  unicorn: trace never entered the nested routine at 0xc6065
+exit=1
+
+--- 7. a hang: the repeated-PC loop rule ---
+$ truncate -s 4699 /mega/tmp/sm750/tr/synth-loop.bin   # 0x125b
+$ printf '\xeb\xfe' | dd of=/mega/tmp/sm750/tr/synth-loop.bin bs=1 seek=$((0x1256)) conv=notrunc
+
+$ python3 tools/vbios-re/trace.py --rom /mega/tmp/sm750/tr/synth-loop.bin --engine both --out /mega/tmp/sm750/tr/out-stops
+captured   /mega/tmp/sm750/tr/synth-loop.bin 4699 bytes sha256 cf022f7983d9395c8ee7092db68090aeb1a099b29f67bc717333af72f6464124
+engine qemu    captured steps=1937  stop=loop         ports=n/a (gdb stub cannot observe I/O) 0xc6065=no
+         repeated-PC cycle of 1 instructions at 0xc1256-0xc1256 repeated 64 times without progress
+         no progress: the 1936 steps after step 1 executed no new PC (0xc1256); 1 distinct PCs in 0xc1256-0xc1256
+engine unicorn captured steps=1937  stop=loop         ports(out=0 in=0) 0xc6065=no
+         repeated-PC cycle of 1 instructions at 0xc1256-0xc1256 repeated 64 times without progress
+         no progress: the 1936 steps after step 1 executed no new PC (0xc1256); 1 distinct PCs in 0xc1256-0xc1256
+VERDICT: FAIL
+  qemu: trace never entered the nested routine at 0xc6065
+  unicorn: trace never entered the nested routine at 0xc6065
+exit=1
+
+--- 8. the bound is honoured and reported ---
+$ python3 tools/vbios-re/trace.py --rom /mega/tmp/sm750/vbios-01-00-0.bin --engine unicorn --bound 50 --out /mega/tmp/sm750/tr/out-stops
+captured   /mega/tmp/sm750/vbios-01-00-0.bin 49152 bytes sha256 16796a7b8319c4a798a2225221b4c0ed9b5f52e2c4f1c3841aa4a6f8ba217551
+engine unicorn captured steps=50    stop=bound        ports(out=2 in=2) 0xc6065=yes
+         instruction bound reached
+VERDICT: FAIL
+  unicorn: only 50 steps traced (need >= 100)
+exit=1
+
