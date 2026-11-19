@@ -60,9 +60,12 @@ Known limitations, each with an id in [docs/DEFECTS.md](docs/DEFECTS.md):
 - `kms_addfb_basic size-max` fails by design: the driver declares its real
   limits - maximum height 1152, plus the pitch and window limits - instead of
   accepting a framebuffer the hardware cannot scan out (A26).
-- There is no pixel readback path on this host: no `/dev/fb*` because
-  `CONFIG_FB_DEVICE` is unset (A24), no writeback connector, and no CRC source
-  in the driver.
+- There is no pixel-level readback path on this host: no `/dev/fb*` because
+  `CONFIG_FB_DEVICE` is unset (A24), no writeback connector, and no external
+  capture. The driver does expose a CRTC CRC source and an `sm750_scanout`
+  debugfs dump, but the CRC source is computed over the scanout source bytes in
+  VRAM. It proves the buffer the display engine is fed, not the pixels it
+  emits; AC-3 tier 5 remains partial for that reason.
 - `smatch` reports one shift-versus-mask precedence warning that originates in
   `GENMASK_TYPE()` in the kernel headers, not in this driver (A28).
 
@@ -214,6 +217,7 @@ example, enter `enable_dma=0` as `sm750hdmidrm.enable_dma=0` in GRUB.
 | `sharpen=1`<br>Default: `0` | Recommended with ultrawide modes | Adds fixed 8% contrast sharpening after compression |
 | `double_shadow=1`<br>Default: `0` | Recommended to avoid redundant uploads | Adds source and output comparison snapshots; skips unchanged pixels but uses more system memory. This is not front/back page flipping |
 | `async_updates=1`<br>Default: `1` | No need; enabled by default | Keeps only the latest pending update instead of queuing stale frames |
+| `crc_window_bytes=262144`<br>Default: `262144` | To bound the cost of scanout readback | Bytes read from the visible scanout offset for each CRC and by the `sm750_scanout` debugfs dump; minimum 4096, rounded down to a multiple of 4, clamped to the visible area |
 
 Add options to the existing `GRUB_CMDLINE_LINUX_DEFAULT` value in
 `/etc/default/grub`, then apply them with:
@@ -369,6 +373,44 @@ If an experimental mode gives no signal, boot an older kernel entry or remove
 the added `sm750hdmidrm.*` GRUB options from recovery access. Testing and live
 reload guidance is in [Testing and recovery](docs/TESTING.md).
 
+### If the card stops working after removing the package
+
+`dnf remove sm750hdmifb` runs the RPM `%preun` scriptlet, which calls
+`dkms remove -m sm750hdmifb -v <version> --all`
+(`packaging/sm750hdmifb.spec`). That unregisters the DKMS module for every
+kernel and deletes the built `sm750hdmidrm.ko`, but it cannot unload a module
+that is already resident, so the running display keeps working. At the next
+boot there is no object left to load, card0 does not appear, and a console that
+only has the SM750 output stays dark. Nothing in the source is broken; the file
+the kernel would load is gone.
+
+Recovery, in this order:
+
+1. Do not erase the package on a machine whose only console is the SM750
+   output. If it already happened, get a working console first: SSH over the
+   network, a serial console, or another GPU.
+2. Confirm the state: `dkms status` prints no `sm750hdmifb/<version>` line, and
+   `ls /usr/src | grep sm750hdmifb` is empty because the source tree belongs to
+   the RPM.
+3. Reinstall the same or a newer package. `%post` re-registers the tree and
+   `%posttrans` builds it for every installed kernel with headers:
+   `sudo dnf install ./sm750hdmifb-<version>-<release>.noarch.rpm` (or
+   `sudo dnf reinstall sm750hdmifb` from the repository it came from).
+4. If no package is at hand, reinstall the RPM to restore
+   `/usr/src/sm750hdmifb-<version>` and run what `%posttrans` runs:
+   `sudo dkms build -m sm750hdmifb -v <version>` then
+   `sudo dkms install -m sm750hdmifb -v <version> --force`.
+5. Attach the module without rebooting: `sudo modprobe sm750hdmidrm`, then
+   check `ls /dev/dri/`, `cat /sys/class/drm/card*/status` and
+   `journalctl -k -b | grep -i sm750`. `card0-HDMI-A-1` should be `connected`.
+6. Reboot only if a reboot was the goal; the display is back after step 5.
+
+The ordering is the whole hazard: `%preun` deletes the object while the module
+is resident, and nothing re-runs `modprobe` for a module that is already
+loaded. Reinstalling restores the object and the `depmod` entry; `modprobe`
+then attaches card0 again. Erase-state transcripts are in
+`docs/evidence/runtime/20-rollback.txt`.
+
 ### Boot messages that are not errors
 
 Four lines appear on every boot of the reference host and none of them is a
@@ -386,6 +428,11 @@ copies from now on` (`src/sm750_drm.c:1504`), which means the DMA path was
 abandoned, and `failed to enable HDMI mode`, which is survivable since 0.6.0 -
 the commit is completed and the atomic state stays consistent - but still
 indicates the bridge timeout described in `docs/evidence/EVIDENCE-GAPS.md` as GAP-B8.
+Since T27 that line ends with `at stage <name>`, and `<name>` is the
+`sm750_program_mode` call that failed (`sii902x_begin_mode`,
+`ddk750_set_display_control`, `ddk750_set_mode_timing`,
+`ddk750_set_logical_disp_out` or `sii902x_enable`; `none` means the failure came
+from before those calls) - quote the full line when reporting it.
 
 ### Register dump
 
@@ -475,22 +522,27 @@ fbdev client restore its own 1920x1080 mode.
 - [Host root actions](docs/ROOT-ACTIONS.md) - sudoers, helpers, udev rule, recovery
 - [CI recipe](docs/ci/build.yml) - inactive: GitHub Actions is disabled for this repository, the file is a copy-paste recipe
 
-Three verification targets are opt-in and deliberately outside `make check`, so
+Four verification targets are opt-in and deliberately outside `make check`, so
 the default gate stays the same 17 commands on machines without the analysers:
 
 ```sh
 make static       # sparse, smatch, cppcheck, coccinelle, pahole against src/
 make vbios-re     # rebuild the option ROM and compare it byte for byte
 make vbios-trace  # execute both images and compare their instruction traces
+make crc-check    # live scanout CRC and sm750_scanout readback on the card
 ```
 
 `make vbios-re` and `make vbios-trace` need the captured image
 (`VBIOS_ROM=...`, or the default path) and print `SKIP` with exit 0 when it is
 absent, so a fresh checkout without the image still passes; the trace target
 also needs `qemu-system-i386`, `gdb`, `capstone` and `unicorn`. `make static`
-prints a skip message when the analysers are missing. All three are documented
-in [static analysis](docs/STATIC-ANALYSIS.md) and
-[VBIOS reconstruction](docs/VBIOS-REVERSE-ENGINEERING.md).
+prints a skip message when the analysers are missing. `make crc-check` needs
+the SM750 card, root and a mounted debugfs; without them it prints one
+`SKIP:` line and the target turns its exit code 77 into success. The static,
+VBIOS and scanout checks are documented in
+[static analysis](docs/STATIC-ANALYSIS.md),
+[VBIOS reconstruction](docs/VBIOS-REVERSE-ENGINEERING.md) and
+[test strategy](docs/TEST-STRATEGY.md).
 
 ### Gates and test scripts
 
@@ -502,6 +554,7 @@ in [static analysis](docs/STATIC-ANALYSIS.md) and
 | `tests/check-vblank <card> <hz>` | Live vblank rate against the programmed refresh |
 | `tests/audit-release.sh` | Release tarball contents, version consistency and archive drift |
 | `tests/check-static.sh` | Opt-in static analysis gate with baseline comparison |
+| `make crc-check` | Opt-in live scanout readback: enables the CRTC CRC source `scanout`, checks that entries arrive, stay constant for a static frame, change with the content and agree with the `sm750_scanout` debugfs dump; exits 77 (a skip) without root, card or an active CRTC |
 
 Hardware-side validation uses the standard tools rather than project scripts:
 `modetest` from libdrm for atomic commits and connector state, `kmscube` for the

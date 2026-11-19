@@ -10,6 +10,15 @@ claims a result.
 The denial evidence itself is in `docs/evidence/baseline/09-denials.txt`; the
 working baseline is in `docs/ENVIRONMENT.md`.
 
+## Status of record
+
+This file is the status of record for every gap. The summary table near the end
+holds one authoritative row per gap; where another document states a different
+status, that document is a point-in-time record and the row here wins. Round-1
+narrative in `docs/ACCEPTANCE-REPORT.md` (for example the GAP-B5 dispute at
+:384-391) is kept as history and is not corrected in place; the round-2 closure
+table there and the row here carry the current status.
+
 ## Activation rule
 
 These rows are inert by default. If `sudo` is granted later, re-run the
@@ -693,6 +702,31 @@ trigger does not need the SIGINT shaping to fire - `18-kernel-log-0.6.0.txt`
 holds the window, `/mega/tmp/sm750/t11/minus110-full.txt` the raw lines. The
 stage instrumentation still requires a debug rebuild, so this row stays `GAP`.
 
+Update (T27, 2026-11-19): the driver now names the stage, so the next occurrence
+needs no debug rebuild. `sm750_program_mode()` sets `sdev->mode_stage` before
+each of the five fallible calls and resets it to `SM750_MODE_STAGE_NONE` when
+the last one succeeds; the failure path in `sm750_pipe_enable()` reports it, so
+the next occurrence prints
+
+```
+failed to enable HDMI mode: -110 at stage <name> (commit finished, event consumed)
+```
+
+where `<name>` is one of `sii902x_begin_mode`, `ddk750_set_display_control`,
+`ddk750_set_mode_timing`, `ddk750_set_logical_disp_out`, `sii902x_enable`, or
+`none` when the failure predates the first call. The names are the names of the
+functions the stage precedes, in source order, so a dmesg line maps to one call
+in `src/sm750_drm.c`. Plain `drm_err` is used, not `drm_dbg`, so no dynamic
+debug is needed and no root-only switch exists to miss. There is deliberately no
+retry: a retry of a half-progressed modeset can corrupt state, and this branch
+identifies, it does not recover. `tests/check-drm-policy.sh` asserts that every
+stage has a name and an assignment on the modeset path.
+
+The observation itself has not happened: the module carrying the change has not
+been loaded (loading needs root) and the 1-in-206 trigger has not been re-raised,
+so this row stays `GAP`. The instrumentation is recorded in
+`docs/evidence/gap-b8/01-stage-instrumentation.txt`.
+
 Status: `GAP`.
 
 ---
@@ -703,12 +737,12 @@ Status: `GAP`.
 | --- | --- | --- | --- |
 | B1 | VBIOS ROM (48 KiB) | rom node `0600 root`; captured via allowlisted `sm750-vbios-dump` (T12) | `CLOSED` |
 | B2 | kernel log excerpt | `dmesg` EPERM unprivileged; allowlisted `sudo -n /usr/bin/dmesg` works (T13) | `CLOSED` |
-| B3 | modeset / IGT / kmscube | `/dev/dri/card0` `0660 root:video` + ACL; modeset, kmscube and IGT now captured on both builds (T10, T11); readback and CRC have no path on this host at any privilege level - no `/dev/fb*`, no writeback connector, and no `get_crc_sources` in the driver | `PARTIAL` |
+| B3 | modeset / IGT / kmscube | `/dev/dri/card0` `0660 root:video` + ACL; modeset, kmscube and IGT now captured on both builds (T10, T11); readback and CRC have no path on this host at any privilege level - no `/dev/fb*`, no writeback connector, and at the time no `get_crc_sources` in the driver (T26 added one and T27 removed the `/dev/fb*` dependency from the test, but reading the result still needs `/sys/kernel/debug`, which is 0700 root-only; see `docs/evidence/scanout/03-readback.txt`) | `PARTIAL` |
 | B4 | MMIO register dumps | strict devmem, BAR1 `0600`, debugfs `0700`; `regs` facility (T5) read via allowlisted `sm750-regs` before/during/after a modeset (T11) | `CLOSED` |
 | B5 | config space > 0x40 | `Capabilities: <access denied>` unprivileged; allowlisted `sudo -n /usr/local/sbin/sm750-lspci` returns the full space (T14) | `CLOSED` |
 | B6 | EDID checksum detail | none | `CLOSED` |
 | B7 | RPM install/erase, DKMS hooks | `dkms install` needs root; `rpm -i --root=` cannot chroot; install, `%preun` erase and reinstall all executed as root (T11) | `CLOSED` |
-| B8 | which `sm750_program_mode` call returns `-110` | that path has zero `dev_dbg`/`drm_dbg`, dynamic debug is root-only; the `regs` half is now executable on 0.6.0 (T11) but the stage instrumentation still needs a debug rebuild; trigger itself reproduced 1/206 | `GAP` |
+| B8 | which `sm750_program_mode` call returns `-110` | that path had zero `dev_dbg`/`drm_dbg`, and dynamic debug is root-only; T27 instruments the five calls instead (the next occurrence prints `failed to enable HDMI mode: -110 at stage <name>`, see `docs/evidence/gap-b8/01-stage-instrumentation.txt`), but the instrumented build has not been loaded and the trigger itself reproduced only 1/206 | `GAP` |
 
 One further fact, recorded rather than resolved: the handoff anticipated a
 `journalctl -k -b` substitute for `dmesg`. It exits 0 on this host but yields

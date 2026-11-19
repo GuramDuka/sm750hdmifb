@@ -791,6 +791,14 @@ which is the EDID access shape, but the ROM contains no `EDID` string and no
 caller passes a monitor address, so whether it ever reads a real EDID block is
 UNDETERMINED (section 12).
 
+Correction 2026-11-19 (T27): the "no caller" half of that sentence is wrong.
+`0x6f44` is called from `0x6d91` inside `0x6d7d`, which reads one byte,
+multiplies it by `0x80`, and then calls the accessor; the sibling routine
+`0x6e9e` does pass monitor addresses (`0xa1`, `0xa3`, `0xa7`, `0xa9`, i.e.
+`0x50`/`0x51`/`0x53`/`0x54` shifted left once with the read bit set) before
+reading 0x80-byte blocks. Section 12 item 8 records the answer; the transcript
+is `docs/evidence/vbios-re/07-undetermined-triage.txt`.
+
 ### 6.7 Mode selection (`0x1504`)
 
 `0x1504` reads clock-table index `0x2f`; if the value is 1 it jumps to `0x1543`,
@@ -1134,28 +1142,96 @@ grep-fails. `docs/PROVENANCE.md` records the decision and this reason.
 ## 12. UNDETERMINED
 
 These are measured facts with no answer, and they stay UNDETERMINED rather than
-guessed:
+guessed. Triage state added 2026-11-19 (T27): each item now carries the evidence
+that supports it and whether the ROM image alone can settle the question. "ROM
+alone: yes" means bytes or instructions in `vbios.bin` fix the answer; "no"
+means the image bounds the question but cannot answer it (vendor intent, an
+attached sink, a datasheet name). The transcript of the checks below is
+`docs/evidence/vbios-re/07-undetermined-triage.txt`.
 
 1. **PCIR checksum span.** Byte `0x33` is `0x00` and `sum(0x1c..0x33) = 1`, so
    the structure does not self-validate. The only convention that validates is
    the whole-image sum with the complement at `0x34`. Which span the vendor
    intended `0x34` to cover is unknown.
+   - Evidence: section 2.2, and `docs/evidence/vbios-re/02-bitexact.txt` (the
+     rebuild reproduces byte `0x34` exactly, so the value is data, not a model
+     choice).
+   - ROM alone: no. The image says which sum evaluates to zero; it says nothing
+     about which span the vendor meant, and no header field or string names it.
 2. **Header words `0x0a` = `0x00d9` and `0x0c` = `0x006c`.** Both are below the
    image size and neither is referenced by any decoded instruction.
+   - Evidence: section 2.1 header table; section 3.1 classifies the bytes as
+     header data and no decoded instruction reads them.
+   - ROM alone: partly. That they are unreferenced is decidable by an
+     image-wide xref and was decided; what they were meant to hold is not, and
+     nothing in the image is a candidate consumer.
 3. **VBE mode-list pointer.** `c000:7aac` holds four word pointers
    (`0x7adf`, `0x7ad7`, `0x7acf`, `0x7ac9`) then zeros - not a VBE mode list,
    and no `0xffff` terminator anywhere.
+   - Evidence: section 2.3 (bytes `df 7a d7 7a cf 7a c9 7a` then zeros at
+     `0x7aac`), re-read 2026-11-19; section 5.4 for what the four pointers
+     reach.
+   - ROM alone: partly. The stored words and the missing terminator are
+     decidable; why the vendor wrote four pointers there is not, and no decoded
+     consumer reconstructs a VBE mode list from them.
 4. **VBE total-memory field.** `0x91` is the `S` of the ASCII string `SM750`, so
    no memory size can be read there.
+   - Evidence: section 2.4 string table (`SM750` starts at `0x91`; byte value
+     `0x53`), section 8 for the memory figure the ROM actually derives.
+   - ROM alone: yes, for the negative result: VBE 2.0 field `0x91` is occupied
+     by a string in this image, so a caller reading it gets `0x53`, not a MiB
+     count. Which value the vendor meant to publish is not recoverable from
+     that byte, and no other byte is labelled as the VBE memory field.
 5. **Font cell origin.** Inside `0x349f`-`0x34a9` no candidate base has a
    distinctive zero-last-byte fraction.
+   - Evidence: section 5.1 (cell for `0x01` at `0x349f`, zero-last-byte
+     fractions 0.654 to 0.656 for every candidate base).
+   - ROM alone: no. The table is a flat run of 16-byte cells with no delimiter
+     at the origin; picking a base needs a consumer that sets the font pointer
+     (INT 43h or the like), which the decode has not located, so no evidence
+     path in this repository settles it.
 6. **Mode record field names.** The `0x40` stride from `0x7c80` and the extent
    are measured; which byte is which timing field is not established.
+   - Evidence: section 5.3; `vbios-re/model/mode_table.c` (stride from
+     `shl bx,0x6` at `0xc344c`, row = base + mode * `0x40`, 16 rows tiling
+     `0x7c80`-`0x8080`, consumer `0xc334a` replaying 16 CRTC bytes from
+     `0x7dce`), which states explicitly that it carries the accessors and the
+     layout, not the field semantics.
+   - ROM alone: no. The bytes are fixed but field names need the consumer's
+     intent. The T25 harness does not supply it either: every run starts at
+     `CS=0xc000 IP=0x1256` and stops at `bound 2000`
+     (`docs/evidence/vbios-re/05-execution-trace.txt`), before the replay
+     consumer at `0xc334a` executes. `VBIOS_TRACE_BOUND`
+     (`tools/vbios-re/trace.sh:21`) is the only in-repo lever to reach it, and
+     no run with a raised bound exists yet.
 7. **`0x98000` meaning.** Read-modify-write of bits 13 and 14 only, shaped like
    panel power and backlight; the register has no name in
    `docs/specs/REGISTER-MAP.md`.
+   - Evidence: section 6.5 (`0x5e16`, `0x5e79`); no name in
+     `docs/specs/REGISTER-MAP.md` or `src/ddk750_reg.h`.
+   - ROM alone: no. The operations (bits 13 and 14, read-modify-write) are
+     decidable; what the bits drive needs the pinout or a datasheet, and the
+     image never names a pin.
 8. **Whether the 0x40-byte checksummed block accessor at `0x6f40` ever reads a
-   real EDID.** The shape matches; no caller and no `EDID` string exist.
+   real EDID.** The shape matches; the earlier decode found no caller and no
+   `EDID` string.
+   - ANSWERED 2026-11-19 (T27) for the structural half, and the earlier "no
+     caller" statement was wrong: a caller exists. A near call at `0x6d91` (`e8 b0 01`) enters
+     `0x6f44`, both inside code regions (`0x6cae`-`0x6d9a` and
+     `0x6e86`-`0x7028`). The caller `0x6d7d` reads one byte, multiplies it by
+     `0x80` (`mov $0x80,%al` / `mul %bl`, the EDID block size) and calls the
+     accessor, which reads `0x40`-byte blocks through `0x735d` (a bit-banged
+     byte, GPIO at MMIO `0x10000`/`0x10004`) into `ES:DI`, sums it in `CH` and
+     returns VBE status `0x004f` on a zero sum, `0x014f` with carry otherwise.
+     The sibling routine `0x6e9e` sends DDC addresses `0xa1`, `0xa3`, `0xa7`,
+     `0xa9` (`0x50`, `0x51`, `0x53`, `0x54` shifted left once with the read bit
+     set) via `0x748a` and reads `0x80`-byte blocks with the same checksum. The
+     path is therefore a real DDC/EDID reader, and the `EDID` keyword count of
+     zero (section 2.4) only means the ROM never spells the name.
+   - ROM alone: yes for "the accessor is called by an EDID-shaped DDC read
+     path". What no ROM can settle is whether a monitor answers on a given
+     host; that is a hardware observation, and it is not needed to describe the
+     code.
 
 ## 13. Divergences from the driver
 

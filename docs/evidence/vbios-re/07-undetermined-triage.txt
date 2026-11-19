@@ -1,0 +1,158 @@
+Section 12 triage, T27, 2026-11-19
+
+Host: Linux 7.3.4-100.fc43.x86_64, uid 1005 coder. ROM: /mega/tmp/sm750/vbios.bin, 49152 bytes,
+world-readable, not committed (docs/PROVENANCE.md). All commands run from the
+repository root. Each item names what the ROM can and cannot decide.
+
+--- 1. PCIR checksum span and the whole-image sum ---
+$ python3 -c "d=open(\"/mega/tmp/sm750/vbios.bin\",\"rb\").read(); print(hex(d[0x33]), sum(d[0x1c:0x34])&0xff, sum(d)&0xff, hex(d[0x34]))"
+0x0 1 0 0x6b
+byte 0x33, sum(0x1c..0x33) mod 256, whole-image sum mod 256, byte 0x34
+ROM alone: no. The image fixes which sum is zero, not which span the vendor meant.
+
+--- 2. Header words 0x0a and 0x0c ---
+$ python3 -c "d=open(\"/mega/tmp/sm750/vbios.bin\",\"rb\").read(); print(d[0x0a:0x0e].hex())"
+d9006c00
+little-endian 0x00d9 at 0x0a, 0x006c at 0x0c; no decoded instruction reads them
+(section 3.1 region table classifies both as header data).
+ROM alone: partly. Unreferenced status is decidable; the intent is not.
+
+--- 3. VBE mode-list pointer c000:7aac ---
+$ python3 -c "d=open(\"/mega/tmp/sm750/vbios.bin\",\"rb\").read(); print(d[0x7aac:0x7ac0].hex())"
+df7ad77acf7ac97a000000000000000000000000
+four word pointers then zeros; no 0xffff terminator in the span.
+ROM alone: partly. Stored words are decidable; the vendor's intent is not.
+
+--- 4. VBE total-memory field at 0x91 ---
+$ python3 -c "d=open(\"/mega/tmp/sm750/vbios.bin\",\"rb\").read(); print(hex(d[0x91]), chr(d[0x91]))"
+0x53 S
+0x53 is 'S', the first byte of the ASCII string SM750 at 0x91 (section 2.4).
+ROM alone: yes for the negative result - the VBE field is not populated.
+
+--- 5. Font cell origin inside 0x349f-0x34a9 ---
+Measured in section 5.1: zero-last-byte fraction 0.654 to 0.656 for every
+candidate base; no consumer that sets the font pointer was located.
+ROM alone: no. No evidence path in this repository.
+
+--- 6. Mode record field names ---
+$ grep -n "0x40\|stride" vbios-re/model/mode_table.c | head -4
+7: *   entry size      0x40 bytes        (`shl bx,0x6` in 0xc344c)
+8: *   row address     BIOS mode pointer + mode * 0x40   (0xc344c)
+26: * follows it once to reach the flat table address, and adds mode * 0x40.
+86: * 0xc3382, the register-access selector. A stride-5 table at file offset
+$ sed -n "13,18p" vbios-re/model/mode_table.c
+ * The record body holds a 5-byte zero prefix, a 2-byte field, the byte 0x0f,
+ * then 0xff, then a timing body, an ascending byte mask
+ * (01 02 03 04 05 14 07 38 39 3a 3b 3c 3d 3e 3f), and a trailing
+ * NN 00 0f 0Y 00 00 00 00 00 10 0e 00 group. Which byte is which VBE timing
+ * field is UNDETERMINED, so this model carries the accessors and the layout,
+ * not the record contents. The bytes themselves stay in the ROM.
+The model records accessors and layout, not field semantics.
+$ head -6 docs/evidence/vbios-re/05-execution-trace.txt
+Execution trace of the option ROM: captured image and reconstruction, T25
+
+Harness: tools/vbios-re/trace.sh -> tools/vbios-re/trace.py
+Engines: qemu-system-i386 10.1.5 through its gdb stub, and unicorn 2.1.4
+Both start at CS=0xc000 IP=0x1256, SS:SP=0x0000:0x7c00, DS=ES=FS=GS=0,
+EFLAGS=0x2, image at linear 0xc0000. Bound 2000 steps.
+Every recorded run stops at bound 2000 (the stop=bound lines in that file are
+at step 14 and 21), before the replay consumer at 0xc334a. VBIOS_TRACE_BOUND
+in tools/vbios-re/trace.sh is the only lever; no raised-bound run exists.
+ROM alone: no.
+
+--- 7. MMIO 0x98000 bits 13 and 14 ---
+$ grep -n "98000" docs/specs/REGISTER-MAP.md src/ddk750_reg.h
+src/ddk750_reg.h:1357:#define ZV1_CAPTURE_CTRL                                0x098000
+(no output above means no name in either file). Read-modify-write of bits
+13/14 is decidable from 0x5e16/0x5e79 (section 6.5); the function is not.
+ROM alone: no.
+
+--- 8. The 0x40-byte checksummed accessor at 0x6f40 ---
+scan the whole image for little-endian 0x6f40 and for near call/jmp targets in 0x6f40..0x6f9f:
+literal word 0x6f40 at: []
+call/jmp targets in 0x6f40..0x6f9f: [('0x6d91', '0xe8', '0x6f44')]
+$ awk "\$2<=\"6d91\" && \$3>=\"6d91\" || \$2<=\"6f44\" && \$3>=\"6f44\"" tools/vbios-re/regions.txt
+# 239 regions, contiguous, 0..0xc000
+code 6cae 6d9a
+code 6e86 7028
+$ objdump -D -b binary -mi8086 --start-address=0x6d7d --stop-address=0x6d9a /mega/tmp/sm750/vbios.bin
+    6d7d:	e8 b1 9c             	call   0xa31
+    6d80:	e8 c4 02             	call   0x7047
+    6d83:	e8 5d 02             	call   0x6fe3
+    6d86:	72 0c                	jb     0x6d94
+    6d88:	b0 80                	mov    $0x80,%al
+    6d8a:	f6 e3                	mul    %bl
+    6d8c:	e8 72 01             	call   0x6f01
+    6d8f:	72 03                	jb     0x6d94
+    6d91:	e8 b0 01             	call   0x6f44
+    6d94:	e8 bb 03             	call   0x7152
+    6d97:	e9 74 f9             	jmp    0x670e
+$ objdump -D -b binary -mi8086 --start-address=0x6f44 --stop-address=0x6f6a /mega/tmp/sm750/vbios.bin
+    6f44:	51                   	push   %cx
+    6f45:	52                   	push   %dx
+    6f46:	b9 40 00             	mov    $0x40,%cx
+    6f49:	e8 11 04             	call   0x735d
+    6f4c:	72 4a                	jb     0x6f98
+    6f4e:	8a c3                	mov    %bl,%al
+    6f50:	aa                   	stos   %al,%es:(%di)
+    6f51:	02 e8                	add    %al,%ch
+    6f53:	fe c9                	dec    %cl
+    6f55:	75 f2                	jne    0x6f49
+    6f57:	83 ef 40             	sub    $0x40,%di
+    6f5a:	0a ed                	or     %ch,%ch
+    6f5c:	75 36                	jne    0x6f94
+    6f5e:	b8 4f 00             	mov    $0x4f,%ax
+    6f61:	0b d2                	or     %dx,%dx
+    6f63:	74 33                	je     0x6f98
+    6f65:	26 0f b6 05          	movzbw %es:(%di),%ax
+    6f69:	3b                 	cmp    %dx,%ax
+$ objdump -D -b binary -mi8086 --start-address=0x6e9e --stop-address=0x6ed2 /mega/tmp/sm750/vbios.bin
+    6e9e:	51                   	push   %cx
+    6e9f:	57                   	push   %di
+    6ea0:	8b c2                	mov    %dx,%ax
+    6ea2:	0b c0                	or     %ax,%ax
+    6ea4:	74 03                	je     0x6ea9
+    6ea6:	b8 80 00             	mov    $0x80,%ax
+    6ea9:	e8 f4 00             	call   0x6fa0
+    6eac:	72 4b                	jb     0x6ef9
+    6eae:	e8 5c 02             	call   0x710d
+    6eb1:	b0 a1                	mov    $0xa1,%al
+    6eb3:	0a ff                	or     %bh,%bh
+    6eb5:	74 10                	je     0x6ec7
+    6eb7:	b0 a3                	mov    $0xa3,%al
+    6eb9:	80 ff 01             	cmp    $0x1,%bh
+    6ebc:	74 09                	je     0x6ec7
+    6ebe:	b0 a7                	mov    $0xa7,%al
+    6ec0:	80 ff 02             	cmp    $0x2,%bh
+    6ec3:	74 02                	je     0x6ec7
+    6ec5:	b0 a9                	mov    $0xa9,%al
+    6ec7:	e8 c0 05             	call   0x748a
+    6eca:	72 2d                	jb     0x6ef9
+    6ecc:	b9 80 00             	mov    $0x80,%cx
+    6ecf:	e8 8b 04             	call   0x735d
+$ objdump -D -b binary -mi8086 --start-address=0x735d --stop-address=0x737a /mega/tmp/sm750/vbios.bin
+    735d:	51                   	push   %cx
+    735e:	32 db                	xor    %bl,%bl
+    7360:	b9 08 00             	mov    $0x8,%cx
+    7363:	e8 af ff             	call   0x7315
+    7366:	e8 be ff             	call   0x7327
+    7369:	e8 b0 fc             	call   0x701c
+    736c:	e8 ac ff             	call   0x731b
+    736f:	e8 fb fd             	call   0x716d
+    7372:	72 24                	jb     0x7398
+    7374:	e8 23 00             	call   0x739a
+    7377:	d0 c3                	rol    $1,%bl
+    7379:	0a                 	or     %al,%bl
+
+Reading: the caller at 0x6d91 enters the accessor body at 0x6f44; the caller
+multiplies a block count by 0x80 (EDID block size). The accessor reads 0x40
+bytes through 0x735d (bit-banged, GPIO at MMIO 0x10000/0x10004), sums them in
+CH, and returns 0x004f on a zero sum or 0x014f with carry. The sibling routine
+0x6e9e sends 0xa1/0xa3/0xa7/0xa9 - 0x50/0x51/0x53/0x54 shifted left once with
+the read bit - and reads 0x80-byte blocks with the same checksum.
+ROM alone: yes for 'a called, EDID-shaped DDC read path'; whether a monitor
+answers on a given host is a hardware observation.
+
+--- 9. Keyword count (context for item 8) ---
+Section 2.4 records a whole-image keyword count of EDID 0: the ROM never
+spells the name, but item 8 above shows the device addresses.

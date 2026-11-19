@@ -101,7 +101,12 @@ Listed so the model does not imply knowledge it does not have:
   Index 0 yields 320x200 with `0xc49` supplying the horizontal word, so the
   model follows the call order and does not rename the fields.
 * Whether `0x6f40`'s checksummed `0x40`-byte block accessor ever reads a real
-  EDID: the shape matches, there is no caller and no `EDID` string.
+  EDID: answered 2026-11-19 (T27) for the structural half. The accessor is
+  called from `0x6d91` by a routine that reads a block count and multiplies it
+  by `0x80`, and the sibling routine `0x6e9e` sends DDC addresses `0xa1`,
+  `0xa3`, `0xa7`, `0xa9`; see `docs/VBIOS-REVERSE-ENGINEERING.md` section 12
+  item 8. The earlier "there is no caller" note here was wrong. Whether a
+  monitor answers is a hardware observation, not a property of the image.
 * The keyboard-controller-pair "power and enable" reading of `0x98000` would
   need the pinout; the model records bits, not functions.
 

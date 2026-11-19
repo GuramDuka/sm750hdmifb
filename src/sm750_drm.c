@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/aperture.h>
 #include <linux/completion.h>
+#include <linux/crc32.h>
 #include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
@@ -31,6 +32,7 @@
 #include <drm/drm_connector.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_damage_helper.h>
+#include <drm/drm_debugfs_crc.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
 #include <drm/drm_fbdev_shmem.h>
@@ -48,6 +50,7 @@
 #include <drm/drm_print.h>
 #include <drm/drm_simple_kms_helper.h>
 #include <drm/drm_vblank.h>
+#include <drm/drm_vblank_work.h>
 
 #include "ddk750_chip.h"
 #include "ddk750_display.h"
@@ -204,6 +207,7 @@ static bool backbuffer_staging = true;
 static unsigned int dma_batch_rows = 16;
 static bool staging_timing;
 static unsigned int shadow_dma_min_bytes = 4096;
+static unsigned int crc_window_bytes = 262144;
 module_param(scanout_format, charp, 0444);
 module_param(dither_green_gain, uint, 0444);
 module_param(edid_only, bool, 0444);
@@ -222,6 +226,7 @@ MODULE_PARM_DESC(dma_batch_rows,
 MODULE_PARM_DESC(staging_timing,
 	"Log complete-frame upload and presentation timing for benchmarking");
 module_param(shadow_dma_min_bytes, uint, 0444);
+module_param(crc_window_bytes, uint, 0444);
 MODULE_PARM_DESC(scanout_format,
 	"Scanout backend: xrgb8888, rgb565, or rgb565-bbdither");
 MODULE_PARM_DESC(dither_green_gain,
@@ -244,6 +249,38 @@ MODULE_PARM_DESC(backbuffer_staging,
 	"Stage complete shadow frames off-screen and present them at vblank");
 MODULE_PARM_DESC(shadow_dma_min_bytes,
 	"Minimum aligned shadow span for DMA (default 4096 bytes)");
+MODULE_PARM_DESC(crc_window_bytes,
+	"Bytes of the visible scanout region read per CRC (default 262144, minimum 4096)");
+
+/*
+ * Stages of sm750_program_mode(), in call order. mode_stage holds the last
+ * stage entered, so the pipe-enable error path can name the call that failed
+ * and a dmesg reader can map the name back to the call site.
+ */
+enum sm750_mode_stage {
+	SM750_MODE_STAGE_NONE,		/* failed before or outside program_mode */
+	SM750_MODE_STAGE_SII_BEGIN,	/* before sm750_sii902x_begin_mode() */
+	SM750_MODE_STAGE_DISPLAY_CTRL,	/* before ddk750_set_display_control() */
+	SM750_MODE_STAGE_TIMING,	/* before ddk750_set_mode_timing() */
+	SM750_MODE_STAGE_LOGICAL_OUT,	/* before ddk750_set_logical_disp_out() */
+	SM750_MODE_STAGE_SII_ENABLE,	/* before sm750_sii902x_enable() */
+};
+
+static const char *const sm750_mode_stage_names[] = {
+	[SM750_MODE_STAGE_NONE] = "none",
+	[SM750_MODE_STAGE_SII_BEGIN] = "sii902x_begin_mode",
+	[SM750_MODE_STAGE_DISPLAY_CTRL] = "ddk750_set_display_control",
+	[SM750_MODE_STAGE_TIMING] = "ddk750_set_mode_timing",
+	[SM750_MODE_STAGE_LOGICAL_OUT] = "ddk750_set_logical_disp_out",
+	[SM750_MODE_STAGE_SII_ENABLE] = "sii902x_enable",
+};
+
+static const char *sm750_mode_stage_name(enum sm750_mode_stage stage)
+{
+	if ((unsigned int)stage >= ARRAY_SIZE(sm750_mode_stage_names))
+		return "unknown";
+	return sm750_mode_stage_names[stage];
+}
 
 struct sm750_drm_device {
 	struct drm_device drm;
@@ -259,6 +296,7 @@ struct sm750_drm_device {
 	struct work_struct shadow_work;
 	struct hrtimer vblank_timer;
 	spinlock_t vblank_lock;
+	struct drm_vblank_work crc_work;
 	void __iomem *regs;
 	void __iomem *vram;
 	resource_size_t vram_base;
@@ -315,6 +353,8 @@ struct sm750_drm_device {
 	u16 vblank_start;
 	u16 vblank_vtotal;
 	bool vblank_timer_enabled;
+	bool crc_enabled;
+	enum sm750_mode_stage mode_stage;
 	bool phase_falling;
 	bool shadow_scanout;
 	bool rgb565;
@@ -1281,6 +1321,7 @@ static int sm750_program_mode(struct sm750_drm_device *sdev,
 	u32 width;
 	int ret;
 
+	sdev->mode_stage = SM750_MODE_STAGE_NONE;
 	ret = sm750_softscale_output_mode(drm_mode, &output_mode);
 	if (ret < 0)
 		return ret;
@@ -1309,13 +1350,16 @@ static int sm750_program_mode(struct sm750_drm_device *sdev,
 		timing.horizontal_frequency, timing.vertical_total);
 
 	sm750_mode_to_fb_var(&var, &output_mode, cpp * 8);
+	sdev->mode_stage = SM750_MODE_STAGE_SII_BEGIN;
 	ret = sm750_sii902x_begin_mode(&sdev->pdev->dev, false,
 				       sii9024_scl, sii9024_sda);
 	if (ret)
 		return ret;
+	sdev->mode_stage = SM750_MODE_STAGE_DISPLAY_CTRL;
 	ret = ddk750_set_display_control(SM750_DRM_CONTROLLER, false);
 	if (ret)
 		return ret;
+	sdev->mode_stage = SM750_MODE_STAGE_TIMING;
 	ret = ddk750_set_mode_timing(&timing, SM750_DRM_PLL, true);
 	if (ret)
 		return ret;
@@ -1343,11 +1387,16 @@ static int sm750_program_mode(struct sm750_drm_device *sdev,
 	control |= cpp == 2 ? SM750_DRM_DISPLAY_CTRL_FORMAT_16 :
 		SM750_DRM_DISPLAY_CTRL_FORMAT_32;
 	poke32(SM750_DRM_DISPLAY_CTRL, control);
+	sdev->mode_stage = SM750_MODE_STAGE_LOGICAL_OUT;
 	ret = ddk750_set_logical_disp_out(SM750_DRM_OUTPUT);
 	if (ret)
 		return ret;
-	return sm750_sii902x_enable(&sdev->pdev->dev, &var, false,
-				    sii9024_scl, sii9024_sda);
+	sdev->mode_stage = SM750_MODE_STAGE_SII_ENABLE;
+	ret = sm750_sii902x_enable(&sdev->pdev->dev, &var, false,
+				   sii9024_scl, sii9024_sda);
+	if (!ret)
+		sdev->mode_stage = SM750_MODE_STAGE_NONE;
+	return ret;
 }
 
 static void sm750_dma_irq_disable(void *data)
@@ -2980,6 +3029,145 @@ static void sm750_send_vblank_event(struct drm_simple_display_pipe *pipe)
 	spin_unlock_irqrestore(&pipe->crtc.dev->event_lock, flags);
 }
 
+/*
+ * Scanout readback. Both the CRC source and the sm750_scanout debugfs dump
+ * read the bytes the display engine is pointed at, in VRAM. They prove the
+ * buffer the engine is fed, not the pixels the DAC emits: the RGB565 backends
+ * quantise and dither, so scanout bytes are not a copy of the XRGB source.
+ */
+
+/* Bounded window: crc_window_bytes from the visible scanout offset. */
+static bool sm750_crc_region(struct sm750_drm_device *sdev, u32 *offset,
+			     size_t *length)
+{
+	u64 window = max_t(u64, round_down((u64)READ_ONCE(crc_window_bytes), 4),
+			   4096);
+	u64 visible = sdev->scanout_frame_size;
+
+	if (!sdev->vram || !sdev->scanout_pitch || !visible)
+		return false;
+	if (sdev->scanout_offset >= sdev->vram_size)
+		return false;
+	visible = min_t(u64, visible, sdev->vram_size - sdev->scanout_offset);
+	window = round_down(min(window, visible), 4);
+	if (!window)
+		return false;
+	*offset = sdev->scanout_offset;
+	*length = window;
+	return true;
+}
+
+/* CRC32 (IEEE, zlib-compatible) and nonzero-byte count over the window. */
+static u32 sm750_scanout_crc32(struct sm750_drm_device *sdev, u32 offset,
+			       size_t length, size_t *nonzero_bytes)
+{
+	u8 chunk[256];
+	u32 crc = ~0U;
+	size_t done = 0;
+	size_t nonzero = 0;
+
+	while (done < length) {
+		size_t n = min_t(size_t, length - done, sizeof(chunk));
+		size_t i;
+
+		memcpy_fromio(chunk, sdev->vram + offset + done, n);
+		for (i = 0; i < n; i++)
+			nonzero += chunk[i] != 0;
+		crc = crc32_le(crc, chunk, n);
+		done += n;
+	}
+	if (nonzero_bytes)
+		*nonzero_bytes = nonzero;
+	return crc ^ ~0U;
+}
+
+/* Drop CRC generation: no work pending, no vblank reference, no state. */
+static void sm750_crc_disable(struct sm750_drm_device *sdev)
+{
+	struct drm_crtc *crtc = &sdev->pipe.crtc;
+
+	if (!sdev->crc_enabled)
+		return;
+	sdev->crc_enabled = false;
+	drm_vblank_work_cancel_sync(&sdev->crc_work);
+	drm_crtc_vblank_put(crtc);
+}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+/* Per-vblank readback: one bounded read out of VRAM, one CRC entry. */
+static void sm750_crc_work_fn(struct kthread_work *work)
+{
+	struct sm750_drm_device *sdev = container_of(
+		to_drm_vblank_work(work), struct sm750_drm_device, crc_work);
+	struct drm_crtc *crtc = &sdev->pipe.crtc;
+	size_t length;
+	u32 offset;
+	u32 crc;
+
+	if (!READ_ONCE(sdev->crc_enabled) ||
+	    !sm750_crc_region(sdev, &offset, &length))
+		return;
+	crc = sm750_scanout_crc32(sdev, offset, length, NULL);
+	drm_crtc_add_crc_entry(crtc, true, drm_crtc_vblank_count(crtc), &crc);
+	if (READ_ONCE(sdev->crc_enabled))
+		drm_vblank_work_schedule(&sdev->crc_work,
+					 drm_crtc_vblank_count(crtc) + 1,
+					 false);
+}
+
+static bool sm750_crc_source_is_scanout(const char *source)
+{
+	return source && (!strcmp(source, "scanout") || !strcmp(source, "auto"));
+}
+
+static int sm750_crtc_verify_crc_source(struct drm_crtc *crtc,
+					const char *source, size_t *values_cnt)
+{
+	if (source && *source && strcmp(source, "none") &&
+	    !sm750_crc_source_is_scanout(source))
+		return -EINVAL;
+	*values_cnt = 1;
+	return 0;
+}
+
+static const char *const sm750_crc_sources[] = { "scanout", NULL };
+
+static const char *const *sm750_crtc_get_crc_sources(struct drm_crtc *crtc,
+						     size_t *count)
+{
+	*count = ARRAY_SIZE(sm750_crc_sources) - 1;
+	return sm750_crc_sources;
+}
+
+static int sm750_crtc_set_crc_source(struct drm_crtc *crtc, const char *source)
+{
+	struct sm750_drm_device *sdev = to_sm750_drm(crtc->dev);
+	bool enable = sm750_crc_source_is_scanout(source);
+	int ret;
+
+	if (!enable && source && *source && strcmp(source, "none"))
+		return -EINVAL;
+	if (enable == sdev->crc_enabled)
+		return 0;
+	if (!enable) {
+		sm750_crc_disable(sdev);
+		return 0;
+	}
+
+	ret = drm_crtc_vblank_get(crtc);
+	if (ret)
+		return ret;
+	sdev->crc_enabled = true;
+	ret = drm_vblank_work_schedule(&sdev->crc_work,
+				       drm_crtc_vblank_count(crtc) + 1, false);
+	if (ret) {
+		sm750_crc_disable(sdev);
+		return ret;
+	}
+	return 0;
+}
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0) */
+
 static int sm750_pipe_enable_vblank(struct drm_simple_display_pipe *pipe)
 {
 	struct sm750_drm_device *sdev = pipe_to_sm750(pipe);
@@ -3036,6 +3224,7 @@ static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 	u8 cpp;
 	int ret;
 
+	sdev->mode_stage = SM750_MODE_STAGE_NONE;
 	if (sdev->shadow_scanout) {
 		sm750_async_quiesce(sdev);
 		sdev->backbuffer_ready = false;
@@ -3087,6 +3276,14 @@ static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 			goto fail;
 		pitch = plane_state->fb->pitches[0];
 		cpp = sizeof(u32);
+		frame_size = (u64)pitch * crtc_state->adjusted_mode.vdisplay;
+		if (!frame_size || frame_size > U32_MAX) {
+			ret = -EINVAL;
+			goto fail;
+		}
+		sdev->scanout_offset = offset;
+		sdev->scanout_pitch = pitch;
+		sdev->scanout_frame_size = frame_size;
 	}
 	mutex_lock(&sdev->mode_lock);
 	ret = sm750_program_mode(sdev, &crtc_state->adjusted_mode,
@@ -3115,8 +3312,8 @@ fail:
 	sdev->backbuffer_mirror = false;
 	sdev->shadow_upload_offset = 0;
 	drm_err(&sdev->drm,
-		"failed to enable HDMI mode: %d (commit finished, event consumed)\n",
-		ret);
+		"failed to enable HDMI mode: %d at stage %s (commit finished, event consumed)\n",
+		ret, sm750_mode_stage_name(sdev->mode_stage));
 	/*
 	 * The commit that reached this label has already swapped its state in,
 	 * so crtc_state->event is the event this commit has to deliver.
@@ -3167,9 +3364,11 @@ static void sm750_pipe_update(struct drm_simple_display_pipe *pipe,
 			mutex_unlock(&sdev->shadow_lock);
 		}
 	} else if (state->fb &&
-		 !sm750_scanout_offset(state->fb, &offset))
+		 !sm750_scanout_offset(state->fb, &offset)) {
+		sdev->scanout_offset = offset;
 		poke32(SM750_DRM_FB_ADDRESS, SM750_DRM_FB_ADDRESS_STATUS |
 		       (offset & SM750_DRM_FB_ADDRESS_MASK));
+	}
 event:
 	if (!pipe->crtc.state->mode_changed)
 		sm750_arm_vblank_event(pipe);
@@ -3180,6 +3379,7 @@ static void sm750_pipe_disable(struct drm_simple_display_pipe *pipe)
 	struct sm750_drm_device *sdev = pipe_to_sm750(pipe);
 
 	sm750_async_quiesce(sdev);
+	sm750_crc_disable(sdev);
 	drm_crtc_vblank_off(&pipe->crtc);
 	sm750_send_vblank_event(pipe);
 	if (sdev->hardware_cursor) {
@@ -3252,6 +3452,9 @@ static const struct drm_crtc_funcs sm750_crtc_funcs = {
 	.atomic_destroy_state = drm_atomic_helper_crtc_destroy_state,
 	.enable_vblank = sm750_crtc_enable_vblank,
 	.disable_vblank = sm750_crtc_disable_vblank,
+	.get_crc_sources = sm750_crtc_get_crc_sources,
+	.verify_crc_source = sm750_crtc_verify_crc_source,
+	.set_crc_source = sm750_crtc_set_crc_source,
 };
 #endif
 
@@ -3353,13 +3556,66 @@ static int sm750_regs_show(struct seq_file *m, void *unused)
 }
 DEFINE_SHOW_ATTRIBUTE(sm750_regs);
 
+/*
+ * Full bounded-window readback with a summary. seq_file, so the whole dump is
+ * readable in one read; the summary is over the same bytes the CRC source
+ * hashes, which is how userspace cross-checks the two paths.
+ */
+static int sm750_scanout_show(struct seq_file *m, void *unused)
+{
+	struct drm_device *drm = m->private;
+	struct sm750_drm_device *sdev = to_sm750_drm(drm);
+	u8 line[16];
+	size_t length;
+	size_t nonzero = 0;
+	size_t done = 0;
+	u32 offset;
+	u32 crc;
+	int idx;
+
+	if (!drm_dev_enter(drm, &idx))
+		return -ENODEV;
+	if (!sm750_crc_region(sdev, &offset, &length)) {
+		seq_puts(m, "# no scanout buffer programmed\n");
+		drm_dev_exit(idx);
+		return 0;
+	}
+	crc = sm750_scanout_crc32(sdev, offset, length, &nonzero);
+	seq_printf(m, "# %s scanout readback, %ux%u pitch %u\n",
+		   SM750_DRM_NAME, sdev->pipe.crtc.mode.hdisplay,
+		   sdev->pipe.crtc.mode.vdisplay, sdev->scanout_pitch);
+	seq_printf(m, "offset %u\n", offset);
+	seq_printf(m, "length %zu\n", length);
+	seq_printf(m, "nonzero %zu\n", nonzero);
+	seq_printf(m, "crc32 0x%08x\n", crc);
+	while (done < length) {
+		size_t n = min_t(size_t, length - done, sizeof(line));
+		size_t i;
+
+		memcpy_fromio(line, sdev->vram + offset + done, n);
+		seq_printf(m, "%08zx", done);
+		for (i = 0; i < n; i++)
+			seq_printf(m, " %02x", line[i]);
+		seq_putc(m, '\n');
+		done += n;
+	}
+	drm_dev_exit(idx);
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(sm750_scanout);
+
 static void sm750_regs_debugfs_add(struct drm_minor *minor)
 {
 	debugfs_create_file("regs", 0444, minor->debugfs_root, minor->dev,
 			    &sm750_regs_fops);
+	debugfs_create_file("sm750_scanout", 0444, minor->debugfs_root,
+			    minor->dev, &sm750_scanout_fops);
 }
 
-/* Shadow driver: no vram_mm helper, so only the register snapshot is added. */
+/*
+ * Shadow driver: no vram_mm helper, so the register snapshot and the scanout
+ * readback are the only files added.
+ */
 static void sm750_debugfs_init(struct drm_minor *minor)
 {
 	sm750_regs_debugfs_add(minor);
@@ -3514,6 +3770,10 @@ static int sm750_modeset_init(struct sm750_drm_device *sdev)
 	ret = drm_vblank_init(drm, 1);
 	if (ret)
 		return ret;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+	drm_vblank_work_init(&sdev->crc_work, &sdev->pipe.crtc,
+			     sm750_crc_work_fn);
+#endif
 
 	drm_mode_config_reset(drm);
 	return 0;
@@ -3638,14 +3898,17 @@ static int sm750_pci_probe(struct pci_dev *pdev,
 	ret = sm750_hw_init(sdev, true);
 	if (ret)
 		return ret;
+	/*
+	 * Map VRAM in every mode: the scanout read path (CRC source and the
+	 * sm750_scanout debugfs dump) reads what the engine is fed.
+	 */
+	sdev->vram = pci_iomap_wc(pdev, 0, sdev->vram_size);
+	if (!sdev->vram)
+		return -ENOMEM;
+	ret = devm_add_action_or_reset(&pdev->dev, sm750_unmap_vram, sdev);
+	if (ret)
+		return ret;
 	if (sdev->shadow_scanout) {
-		sdev->vram = pci_iomap_wc(pdev, 0, sdev->vram_size);
-		if (!sdev->vram)
-			return -ENOMEM;
-		ret = devm_add_action_or_reset(&pdev->dev, sm750_unmap_vram,
-					       sdev);
-		if (ret)
-			return ret;
 		sdev->dither_scale_map = devm_kzalloc(&pdev->dev,
 			sizeof(*sdev->dither_scale_map), GFP_KERNEL);
 		sdev->dither_source_line = devm_kmalloc_array(&pdev->dev,

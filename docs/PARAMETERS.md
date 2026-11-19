@@ -25,11 +25,12 @@ fixed once the module is loaded.
 | `disable_hardware_cursor` | `0` | Set to `1` to use a software-rendered cursor instead of the 64x64 hardware plane. |
 | `async_updates` | `1` | Copy reported changed regions into a latest-frame mailbox and perform scaling, dithering and VRAM upload on a dedicated worker. Set to `0` to restore synchronous updates for diagnosis. |
 | `enable_dma` | `1` | Use optimized eight-row DMA1 uploads. Set to `0` to force write-combined CPU uploads. |
-| `dma_batch_rows` | `16` | Writable through sysfs. Sampled once per update, clamped to 1–128 rows. Two staging buffers reserve 512 KiB each to support runtime comparisons. |
+| `dma_batch_rows` | `16` | Writable through sysfs. Sampled once per update, clamped to 1-128 rows. Two staging buffers reserve 512 KiB each to support runtime comparisons. |
 | `staging_timing` | `0` | Writable through sysfs. Log full-frame conversion/upload time and subsequent flip wait separately. Enable only during measurement. |
 | `disable_dma` | `0` | Deprecated safety veto. If set, CPU uploads are forced even when `enable_dma=1`. |
 | `backbuffer_staging` | `1` | Render an exact full-frame update into off-screen VRAM, then present it with the display controller's vblank-synchronised address flip. It is automatically unavailable when two scanout buffers do not fit. |
 | `shadow_dma_min_bytes` | `4096` | Smallest aligned upload span sent through DMA1. The one-RGB565-scanline default avoids DMA setup overhead for small interactive updates. Valid range is checked at probe. |
+| `crc_window_bytes` | `262144` | Bytes read from the visible scanout offset for each CRC entry and by the `sm750_scanout` debugfs dump. Values below 4096 are raised to 4096, the length is rounded down to a multiple of 4 and clamped to the visible area. |
 | `preferred_width` | `0` | Preferred exposed mode width; use with height and refresh. |
 | `preferred_height` | `0` | Preferred exposed mode height. |
 | `preferred_refresh` | `0` | Preferred integer refresh rate in hertz. |

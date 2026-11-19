@@ -1,0 +1,49 @@
+# T26 CRC source state for crtc-0
+# Captured 2026-11-19T09:35Z, actor coder (uid 1005), host kernel 7.3.4-100.fc43.x86_64
+
+SKIP: /sys/kernel/debug is mode 0700 root-only, so the crc/source list of the
+SM750 card cannot be read as uid 1005. The file this record would contain is
+/sys/kernel/debug/dri/<N>/crtc-0/crc/source, plus the enabled state written
+through crc/control.
+
+Probes run, verbatim (captured with LC_ALL=C)
+------------------------------------------------
+$ id
+uid=1005(coder) gid=1006(coder) groups=1006(coder),1007(vtune)
+$ ls -ld /sys/kernel/debug
+drwx------ 52 root root 0 Nov 19 10:25 /sys/kernel/debug
+$ ls /sys/kernel/debug/dri
+ls: cannot access '/sys/kernel/debug/dri': Permission denied
+$ sudo -n ls /sys/kernel/debug/dri
+sudo: a password is required
+
+Why no workaround exists on this host
+-------------------------------------
+The sudoers allowlist holds sm750-regs, sm750-lspci, sm750-vbios-dump, dmesg,
+journalctl -k, dkms, depmod, modprobe -r sm750hdmidrm, dnf for the package and
+dmidecode (docs/ROOT-ACTIONS.md). None of them reads or mounts debugfs, and no
+unprivileged path to /sys/kernel/debug/dri exists, so the source list cannot be
+captured here.
+
+Closing action
+--------------
+One root run of:
+    cat /sys/kernel/debug/dri/<N>/crtc-0/crc/source
+    printf 'scanout' > /sys/kernel/debug/dri/<N>/crtc-0/crc/control
+    cat /sys/kernel/debug/dri/<N>/crtc-0/crc/source
+recorded into this file. Expected first output: "none scanout".
+
+Update (T27, 2026-11-19): unchanged blocker, re-probed in the same session.
+T27 removed the other blocker (the draw path no longer needs /dev/fb0; see
+03-readback.txt), but crc/source, crc/control and crc/data all live under
+/sys/kernel/debug, which is still mode 0700:
+
+$ id
+uid=1005(coder) gid=1006(coder) groups=1006(coder),1007(vtune)
+$ ls -ld /sys/kernel/debug
+drwx------ 52 root root 0 Nov 19 10:25 /sys/kernel/debug
+$ cat /sys/kernel/debug/dri/0/name
+cat: /sys/kernel/debug/dri/0/name: Permission denied
+
+The closing action above is unchanged and is what the new row in
+docs/ROOT-ACTIONS.md asks the host owner to run.

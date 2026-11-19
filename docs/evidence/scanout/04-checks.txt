@@ -1,0 +1,95 @@
+# T26 tests/check-scanout-crc.sh result
+# Captured 2026-11-19T09:41Z, actor coder (uid 1005), host kernel 7.3.4-100.fc43.x86_64
+
+$ make crc-check
+SKIP: root is required: /sys/kernel/debug is mode 0700
+exit status: 0 (a SKIP is exit 77 from the script, turned into success by the target, as with vbios-trace)
+
+$ ./tests/check-scanout-crc.sh
+SKIP: root is required: /sys/kernel/debug is mode 0700
+exit status: 77
+
+SKIP reason, first test in the script
+-------------------------------------
+1. `[ "$(id -u)" -eq 0 ]` fails: uid 1005(coder).
+   -> "SKIP: root is required: /sys/kernel/debug is mode 0700"
+
+The script would next test for /sys/kernel/debug/dri, a dri directory whose
+`name` contains sm750hdmidrm, crtc-0/crc/{control,source}, the sm750_scanout
+file, and a writable sm750 fb node. On this host the fb test would also fail:
+CONFIG_FB_DEVICE is unset, so /sys/class/graphics holds only fbcon and /dev/fb0
+does not exist (A24 in docs/DEFECTS.md).
+
+Gate context, same session and same working tree
+------------------------------------------------
+$ make CC=/usr/bin/gcc check            -> exit 0, "Ran 4 tests in 0.209s / OK",
+                                           0 "warning:" lines, 17 recipe commands
+                                           (sed -n '32,48p' Makefile | grep -cP '^\t' -> 17)
+$ ./tests/check-release-version.sh      -> exit 0, "Release version consistency checks passed: 0.6.0"
+$ ./tests/check-drm-packaging.sh        -> exit 0, "Unified DRM package checks passed"
+
+No PASS/FAIL line was produced: none of the assertions ran.
+
+T27 update, 2026-11-19, same host, same working tree
+----------------------------------------------------
+
+The /dev/fb0 dependency is gone: tests/scanout-pattern.c draws through libdrm
+(dumb buffer, AddFB2, SetCrtc). The T26 paragraphs above are kept as the
+point-in-time record; what follows is the state after that change.
+
+$ make crc-check
+SKIP: root is required: /sys/kernel/debug and its crc files are mode 0700
+exit status: 0
+
+$ ./tests/check-scanout-crc.sh
+SKIP: root is required: /sys/kernel/debug and its crc files are mode 0700
+exit status: 77
+
+Skip guards now, in order:
+
+1. uid 0 -> otherwise skip with the line above. This is the only blocker that
+   stops a full run on this host.
+2. /sys/kernel/debug/dri exists, holds a directory whose `name` contains
+   sm750hdmidrm, that directory has crtc-0/crc/{control,source} and the
+   sm750_scanout file.
+3. libdrm for the draw helper: pkg-config libdrm, else SM750_LIBDRM_DIR, else
+   /mega/tmp/sm750/t3/libdrm (the rootless tree the rest of the suite uses).
+4. build of tests/scanout-pattern.c into build/scanout-pattern with
+   /usr/bin/gcc; a compile failure fails the run and tails the log.
+5. a card node: /dev/dri/cardN whose /sys/class/drm/cardN/device/vendor reads
+   0x126f.
+6. the helper's exit 3 (no DRM master, or no connected connector) is a skip
+   with the helper's own reason; any other nonzero exit fails the run.
+
+No longer a guard: /dev/fb0, /sys/class/graphics, the fb stride and
+virtual_size. CONFIG_FB_DEVICE being unset (A24) no longer blocks the draw.
+
+What was verified without root: the draw path, and only that.
+
+$ /usr/bin/gcc -Wall -Wextra -Werror ... -o build/scanout-pattern tests/scanout-pattern.c
+exit 0
+$ build/scanout-pattern /dev/dri/card0 white
+opened /dev/dri/card0
+filled: 1920x1080 pitch 7680 size 8294400
+added: fb 43
+connector 35 crtc 38 1920x1080 white fb 43
+exit 0
+
+The full transcript is in 03-readback.txt. The frame reaches connector 35 and
+crtc 38 at 1920x1080; the CRC and the sm750_scanout dump stay unreadable
+because /sys/kernel/debug is mode 0700 and this process has no CAP_SYS_ADMIN.
+The remaining blocker for the CRC evidence is debugfs access alone (plus DRM
+master if another client owns the card).
+
+Gate context, T27 session
+-------------------------
+$ make CC=/usr/bin/gcc check            -> exit 0, "Ran 4 tests in 0.217s / OK",
+                                           0 "warning:" lines, 17 recipe commands
+$ ./tests/check-release-version.sh      -> exit 0, "Release version consistency checks passed: 0.6.0"
+$ ./tests/check-drm-packaging.sh        -> exit 0, "Unified DRM package checks passed"
+$ ./tests/check-static.sh               -> exit 0, "static gate: PASS"
+$ sh -n tests/check-scanout-crc.sh      -> exit 0
+
+No PASS/FAIL line was produced: the root guard stops before any assertion runs,
+so the structural checks (12-frame stability, black/white change, dump-vs-CRC
+agreement) are still unexercised.

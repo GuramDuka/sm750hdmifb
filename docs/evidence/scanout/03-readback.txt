@@ -1,0 +1,80 @@
+# T26 sm750_scanout debugfs dump
+# Captured 2026-11-19T09:35Z, actor coder (uid 1005), host kernel 7.3.4-100.fc43.x86_64
+
+SKIP: the dump cannot be read as uid 1005. /sys/kernel/debug is mode 0700
+root-only, and there is no root path to it in the sudoers allowlist
+(docs/ROOT-ACTIONS.md). A second, independent blocker would stop the test even
+with debugfs access: CONFIG_FB_DEVICE is unset on this host (A24 in
+docs/DEFECTS.md), so there is no /dev/fb* node through which the script draws
+its black and white test frames.
+
+Probes run, verbatim (captured with LC_ALL=C)
+---------------------------------------------
+$ ls -ld /sys/kernel/debug
+drwx------ 52 root root 0 Nov 19 10:25 /sys/kernel/debug
+$ ls /sys/kernel/debug/dri
+ls: cannot access '/sys/kernel/debug/dri': Permission denied
+$ ls -l /dev/fb0
+ls: cannot access '/dev/fb0': No such file or directory
+$ ls /sys/class/graphics
+fbcon
+
+What the dump prints when it can be read
+----------------------------------------
+src/sm750_drm.c: sm750_scanout_show() emits a summary and a hex dump of the
+same bounded region the CRC source hashes:
+
+    # sm750hdmidrm scanout readback, 1920x1080 pitch 3840
+    offset 0
+    length 262144
+    nonzero <count>
+    crc32 0x<8 hex digits>
+    00000000: xx xx xx xx xx xx xx xx xx xx xx xx xx xx xx xx
+    ...
+
+offset is the visible scanout offset in VRAM, length is crc_window_bytes
+rounded down to a multiple of 4 and clamped to the visible area (scanout_pitch
+* vdisplay), nonzero is the number of nonzero bytes in that span and crc32 is
+the low 32 bits of the zlib-compatible crc32 of the same span.
+
+No numbers are quoted here: none were measured. Closing action is one root run
+of `make crc-check`, which writes the PASS/FAIL lines to
+docs/evidence/scanout/04-checks.txt and a trimmed dump excerpt to this file.
+
+Update (T27, 2026-11-19): one of the two blockers is gone; the other remains.
+The script now draws its black and white frames through KMS with
+tests/scanout-pattern.c (dumb buffer, mmap, AddFB2, SetCrtc) instead of writing
+/dev/fb0, so CONFIG_FB_DEVICE and the absent /dev/fb* no longer matter.
+
+That draw path was exercised rootless on the live card, verbatim:
+
+$ export PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig \
+         PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm \
+         LD_LIBRARY_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64
+$ /usr/bin/gcc -O2 -Wall -Wextra -Werror $(pkg-config --cflags libdrm) \
+      -o build/scanout-pattern tests/scanout-pattern.c $(pkg-config --libs libdrm)
+[exit 0, no warnings]
+$ ./build/scanout-pattern /dev/dri/card0 white
+scanout-pattern: opened: /dev/dri/card0
+scanout-pattern: filled: 1920x1080 pitch 7680 size 8294400
+scanout-pattern: added: fb 43
+/dev/dri/card0: connector 35 crtc 38 1920x1080 white fb 43
+[exit 0]
+
+So, precisely: the frame is on the CRTC (SETCRTC accepted, connector 35 reports
+connected/enabled) but the readback cannot be checked, because the CRC and the
+dump are only reachable through debugfs:
+
+$ ls -ld /sys/kernel/debug
+drwx------ 52 root root 0 Nov 19 10:25 /sys/kernel/debug
+$ cat /sys/kernel/debug/dri/0/name
+cat: /sys/kernel/debug/dri/0/name: Permission denied
+
+Remaining blockers after T27: (1) /sys/kernel/debug is mode 0700 root-only, so
+crc/{source,control,data} and sm750_scanout cannot be read or written by uid
+1005; (2) the helper needs DRM master only if another client owns the card, and
+that did not occur in this session. Nothing else blocks the draw half.
+
+Consequence for this file: no summary numbers can be recorded. The dump format
+below is taken from src/sm750_drm.c, not from output. Closing action is
+unchanged: one root run of `make crc-check`.

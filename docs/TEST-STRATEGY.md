@@ -287,9 +287,15 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   `No known gpu found for chipset flags 0x129 (other)`; IGT has no device-filter
   entry for `sm750hdmidrm`, and `IGT_FORCE_DRIVER=sm750hdmidrm` did not change
   it. Tooling/capability gap.
-- Caveat: `kms_pipe_crc_basic` cannot prove pixels on this driver. `src/` has
-  no CRC or writeback implementation, so IGT reports SKIP rather than a CRC
-  result.
+- Caveat: `kms_pipe_crc_basic` still cannot prove pixels on this driver, now
+  for a different reason. Round 2 recorded that `src/` implemented no CRC
+  source, so the subtest had nothing to enable. The driver now registers a
+  `scanout` CRTC CRC source (`sm750_crtc_get_crc_sources`,
+  `src/sm750_drm.c`) and a `sm750_scanout` debugfs dump that share one bounded
+  VRAM read path. The `/dev/tty0` blocker that stopped the subtest in
+  `kmstest_set_vt_graphics_mode` (section 8) has since been given an ACL
+  (2026-11-18T12:08Z, `docs/ROOT-ACTIONS.md` section 4.1), so the access part is
+  closed; no post-ACL IGT run is recorded, so the subtest is still unproven.
 - Scope limit: same **stale pre-fix 0.5.9** module as S4; BEFORE half only.
 
 ### S7: `v4l-utils` (excluded)
@@ -434,8 +440,8 @@ pre-fix baseline; the pixel rungs do not.
 | Sysfs connector state and EDID | The driver registered the connector, read a 256-byte EDID, reports `connected`/`enabled`/`dpms: On` and 28 modes with 1920x1080 preferred. This is state description, not a modeset test: it is the state left by whatever configured the display before the test and does not prove this build produced it. | Yes, `docs/evidence/baseline/03-connector.txt`, `02-edid.txt`, `15-edid-decode.txt` (pre-T5 baseline) |
 | `modetest -c` | libdrm can open the KMS device and enumerate connector 35, encoders, CRTCs and planes with their properties. | Yes, `docs/evidence/runtime/02-modetest-connector.txt` (pre-fix baseline, exit 0) |
 | `modetest -s 35@38:1920x1080` | The atomic commit for the requested mode is accepted by the driver and the connector stays enabled with DPMS On. | Yes, `docs/evidence/runtime/04-modeset.txt` (pre-fix baseline; the alternate mode is programmed but reverted on client exit) |
-| Framebuffer content readback | A known pattern written through the driver can be read back from the GEM/dumb buffer. This proves the upload/composition path, not the scanout: the bytes may be correct while the panel shows nothing. | No. Three independent blockers, each checked: `CONFIG_FB_DEVICE` is unset, so there is no `/dev/fb*` node to read (A24 in [DEFECTS.md](DEFECTS.md)); the driver registers no writeback connector (`grep -rn writeback src/` returns nothing), so no CRTC output can be captured through DRM; and a second DRM client cannot map a framebuffer it did not allocate. No unprivileged reader of the scanned-out pixels exists on this host. Closing action: an external capture of the panel, or a future in-driver debugfs pixel dump that reads the staging buffer back through the DMA path. Both are a source or hardware change, not a test command, so this rung stays `GAP`. |
-| Scanout CRC | A CRC of the CRTC output proves the pixel stream at the connector. The driver implements no CRC source (`src/` has no crc/writeback code), so this rung is unavailable even with `/dev/dri` access. | No |
+| Framebuffer content readback | A known pattern written through the driver can be read back. The driver now has a read path (T26): the `sm750_scanout` debugfs dump and the `scanout` CRTC CRC source read the bounded visible scanout region out of VRAM through one function, and `tests/check-scanout-crc.sh` (`make crc-check`) asserts structural properties of that readback - entries arrive, the CRC is stable for a static frame, it changes with the content, and the dump agrees with the CRC path. The readback is of the scanout source buffer, not of the panel. | SKIP on this host: `/sys/kernel/debug` is 0700 root-only and `CONFIG_FB_DEVICE` is unset, so there is no `/dev/fb*` to draw a pattern through (A24 in [DEFECTS.md](DEFECTS.md)). Transcript `docs/evidence/scanout/04-checks.txt`. Closing action: one root run of `make crc-check` with a client drawing on the CRTC, recorded under `docs/evidence/scanout/`. |
+| Scanout CRC | A CRC of the CRTC output proves the pixel stream at the connector; a CRC of the scanout source bytes proves only the buffer fed to the engine. The driver now implements the `scanout` source over VRAM - a vblank work item calls `drm_crtc_add_crc_entry` - which is the second kind. The first is still unavailable: nothing on this host reads the emitted pixel stream. | Partial. Source exists (`docs/evidence/scanout/02-crc-source.txt`); proof of the emitted stream stays `GAP`. |
 | External capture or photograph of the panel | The only end-to-end proof that the requested pixels reached the display. No capture hardware is attached to this host. | No |
 
 Why connector status alone is insufficient: `enabled` and `dpms: On` are
@@ -456,8 +462,9 @@ modetest -c
 modetest -s 35@38:1920x1080
 modetest -s 35@38:1024x768-60
 modetest -s 35@38:1920x1080
-# still blocked: pixel proof needs a CRC source (absent from src/) or an
-# external capture; kms_pipe_crc_basic cannot help without one.
+# still blocked: pixel proof needs an emitted-stream CRC source or an
+# external capture; kms_pipe_crc_basic cannot help without one. (T26 added a
+# scanout-source CRC, which proves the buffer, not the emitted stream.)
 ```
 
 ## 6. Acceptance criterion 5: kernel-range and regression coverage
@@ -514,7 +521,8 @@ module, and no runtime claim is made.
 | Claim | Why it is unproven | Blocking gap |
 | --- | --- | --- |
 | A post-fix build performs a modeset on the panel | The modeset works unprivileged on both builds. The 0.5.9 half is `docs/evidence/runtime/04-modeset.txt`; the after-fix half is `docs/evidence/runtime/16-modeset-0.6.0.txt`, recorded with 0.6.0 loaded, the 1024x768-60 mode set and the original mode restored | closed for the modeset; pixel proof stays GAP-B3 |
-| The panel shows the expected pixels at 1920x1080 | No CRC source in the driver, no `/dev/fb*`, no writeback connector, no external capture; no unprivileged reader of the scanned-out pixels exists (section 5) | GAP-B3 (partly), pixel proof open |
+| The panel shows the expected pixels at 1920x1080 | The `scanout` CRC source (T26) reads the VRAM bytes the engine is fed, not the pixels it emits; there is no `/dev/fb*`, no writeback connector and no external capture, so no unprivileged reader of the emitted pixels exists (section 5) | GAP-B3 (partly), pixel proof open |
+| Which `sm750_program_mode` call returns `-110` (GAP-B8) | T27 instruments the five fallible calls: the ordinary error line now ends with `at stage <name>` and needs no debug rebuild or dynamic debug. Confirmation on recurrence is textual - read the stage name and map it to the call in `src/sm750_drm.c` - but the instrumented module has not been loaded (root-only) and the 1-in-206 trigger has not been re-raised. The driver does not retry by design: a retry of a half-progressed modeset can corrupt state | GAP-B8 |
 | Hotplug detect and the SiI902X workaround behave on hardware | The SiI9024A not-ready warning is now observed on every mode program (`HPD=1 RSEN=0 status=04`), but no hotplug event can be generated | GAP-B2 |
 | Vblank timing meets 60 Hz on hardware | `check-vblank` live probe is still skipped; kmscube reaches 59.01 fps over 299 frames, which is suggestive but not a vblank-timing measurement | GAP-B3 |
 | DMA upload and its failure fallback work on hardware | Software checks only; no device-path execution | GAP-B3 |
@@ -557,7 +565,12 @@ done
 2. `/dev/dri/card0` is denied. **CLOSED** by a udev ACL:
    `getfacl /dev/dri/card0` shows `user:coder:rw-`, and uid 1005 opens the node.
 
-3. `/dev/tty0` is `crw------- root tty`. **OPEN.** IGT's
+3. `/dev/tty0` is `crw------- root tty`. **OPEN when recorded here; an ACL was
+   installed afterwards.** Note added 2026-11-19: `getfacl /dev/tty0` now shows
+   `user:coder:rw-` (installed 2026-11-18T12:08Z, `docs/ROOT-ACTIONS.md`
+   section 4.1) and uid 1005 can open the node, so this blocker is closed for
+   access. No post-ACL IGT run has been recorded, which is the remaining step.
+   The original text follows. IGT's
    `kmstest_set_vt_graphics_mode` (`../lib/igt_kms.c:1558`) opens it to issue
    `KDSETMODE`, gets `errno 13 Permission denied`, and aborts the subtest before
    any KMS ioctl. This blocks `kms_setmode`, `kms_atomic`, `kms_flip`,
@@ -582,9 +595,12 @@ Observed on the pre-fix baseline: `core_getversion` exit 0 (2 SUCCESS),
 (10 SUCCESS, 2 SKIP, 2 FAIL, both `igt_drop_root` needing uid 0).
 
 Pass criterion: every selected test exits 0 with `SUCCESS`. SKIP is not a
-pass. `kms_pipe_crc_basic` is listed as optional only: the driver has no CRC
-source, so it would skip for a reason unrelated to device access - and on this
-host it currently fails earlier, at the VT blocker.
+pass. `kms_pipe_crc_basic` is listed as optional only: the driver now registers
+a `scanout` CRC source (T26), so the subtest has something to enable. The
+`/dev/tty0` VT blocker recorded in section 8 has since been given an ACL, so
+access is no longer the obstacle; no post-ACL IGT run is recorded, which is the
+remaining step. Even when it runs, its comparison covers the buffer the CRTC
+scans, not the panel.
 
 ## 9. Post-T5 blocked-suite probes (historical) and the T10 unblocked run
 

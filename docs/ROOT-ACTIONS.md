@@ -18,6 +18,12 @@ staged sources under `/mega/tmp/sm750/` are kept as the reference bodies and as
 the recovery path if that directory is ever rebuilt. The installed state of each
 artefact, with the read-only command that proves it, is in section 5.
 
+Row 8 is different: it is **proposed, not performed**. It needs a root run that
+no agent may make, and it is what closes the readback half of GAP-B3. The exact
+commands are in section 7. Related operational hazard: an erase followed by a
+reboot leaves the card with no driver; the recovery runbook is in `README.md`,
+section "If the card stops working after removing the package".
+
 | # | Date (UTC) | Action | Closes |
 | --- | --- | --- | --- |
 | 1 | 2026-11-18T06:15Z | install `/etc/udev/rules.d/99-sm750-coder-acl.rules` | GAP-B3 (partial) |
@@ -27,6 +33,7 @@ artefact, with the read-only command that proves it, is in section 5.
 | 5 | 2026-11-18T10:12Z | reinstall the VBIOS helper with the v2 body | GAP-B1 (superseded by row 6, which closed it; v2's size constant was stale) |
 | 6 | 2026-11-18T12:07Z | reinstall the VBIOS helper with the v3 body: 1725 B, sha256 `07fe5499de1b320fc593f5e33db8f865bb867a40da3d35a956ee4511eeaa3a7e`, `EXPECT=49152`, exit 2 on size mismatch, exit 3 on a bad `55aa` signature, success prints `signature 55aa, checksum ok` | GAP-B1 CLOSED (capture byte-identical to the 48 KiB image) |
 | 7 | 2026-11-18T12:08Z | install the `/dev/tty0` ACL rule (`99-sm750-coder-tty0-acl.rules`, 762 B, sha256 `248d76743dd1fa5aca03e55432e53bf02647900038b330439033f569117f7c4b`) and its tmpfiles companion (`sm750-tty0-acl.conf`, 299 B, sha256 `3072aa4ecfd3f67d3c85be6076574d8d1b5afb47e5f4910df15d7f11c3f14538`) | GAP-B3 (IGT VT subset) unblocked: `/dev/tty0` is `crw-rw----+` with `user:coder:rw-` |
+| 8 | proposed | run `tests/check-scanout-crc.sh` once as root and store the transcript (section 7) | GAP-B3 readback/CRC half; GAP-B8 if the `-110` recurs during the run |
 
 Sections below are ordered by subject, not by date: allowlist, recovery recipe,
 helpers, udev rule, installed state and re-verification, gap map.
@@ -653,6 +660,62 @@ udev as root, and the tmpfiles entry runs from `systemd-tmpfiles` as root.
 | `/dev/tty0` ACL rule (`99-sm750-coder-tty0-acl.rules` + `sm750-tty0-acl.conf`) | GAP-B3 IGT VT subset | CLOSED for the permission blocker: both files installed 2026-11-18T12:08Z, `/dev/tty0` is `crw-rw----+` with `user:coder:rw-` (`getfacl -p`). The five IGT binaries that aborted at `kmstest_set_vt_graphics_mode` with `errno 13` can now open the VT |
 | `sudo -n dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm` | GAP-B7 RPM install | CLOSED (T11): exit 0; `%post`/`%posttrans` built, signed with the machine MOK and installed for 7.2.15-100, 7.3.3-100 and 7.3.4-100; `rpm -q` -> `sm750hdmifb-0.6.0-1.fc43.noarch` |
 | `sudo -n dnf remove -y sm750hdmifb` (erase; note `dkms status -m ... -v ...` is NOT allowlisted, only bare `dkms status`) | GAP-B7 RPM erase | CLOSED (T11): exit 0, `%preun` ran `dkms remove --all`, `rpm -q` -> not installed, on-disk object deleted; the resident module stays loaded until `modprobe -r`, so 0.6.0 was reinstalled immediately. See `docs/evidence/runtime/20-rollback.txt`, `21-final-state.txt` |
+| `tests/check-scanout-crc.sh` as root (row 8) | GAP-B3 readback/CRC | OUTSTANDING: not run. The draw path is proven unprivileged (`docs/evidence/scanout/03-readback.txt`), the read half needs root |
 
 The authoritative per-gap text is `docs/evidence/EVIDENCE-GAPS.md`; this table
 records what the root actions themselves achieved.
+
+## 7. Outstanding root action: scanout CRC and readback transcript
+
+This is row 8, proposed and not performed. It closes the readback half of
+GAP-B3, and it is the observation half of GAP-B8: if the `-110` appears while
+the check runs, the error line now names the failing stage.
+
+The script resolves the card through debugfs, builds
+`tests/scanout-pattern.c` (libdrm), draws a black and a white frame with
+`SETCRTC`, reads the CRC stream and the `sm750_scanout` dump, and compares them.
+It exits 77 with a `SKIP:` line rather than passing when anything is missing.
+
+Run at the console as root, from the repository:
+
+```sh
+cd /home/coder/sm750hdmifb
+export PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig
+export PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm
+./tests/check-scanout-crc.sh 2>&1 | tee /mega/tmp/sm750/scanout-crc.txt
+echo "exit: ${PIPESTATUS[0]}"
+```
+
+The two exports are the documented rootless libdrm tree (`docs/ENVIRONMENT.md`
+section 4); the script falls back to the same path on its own, so they only
+matter if it is rebuilt elsewhere. The script writes `build/scanout-pattern`
+into the tree; `rm -rf build` afterwards keeps the tree owned by `coder`.
+
+Store the transcript as `docs/evidence/scanout/05-crc-run.txt`, replace the SKIP
+sentence in `docs/evidence/scanout/04-checks.txt` with the PASS/FAIL lines it
+prints, and quote the `sm750_scanout` summary line (offset, length, nonzero,
+`crc32`) in `docs/evidence/scanout/03-readback.txt`. If `dmesg` shows
+`failed to enable HDMI mode: -110 at stage <name>` during the run, copy that
+line into `docs/evidence/gap-b8/`.
+
+Without a root shell, the same four accesses can be allowlisted. The lines obey
+the zero-colon rule of section 1; `tee` writes `scanout` and `none` into
+`crc/control` when the run needs the source enabled by hand:
+
+```sudoers
+coder ALL=(root) NOPASSWD: /usr/bin/cat /sys/kernel/debug/dri/0/crtc-0/crc/source
+coder ALL=(root) NOPASSWD: /usr/bin/cat /sys/kernel/debug/dri/0/crtc-0/crc/data
+coder ALL=(root) NOPASSWD: /usr/bin/cat /sys/kernel/debug/dri/0/sm750_scanout
+coder ALL=(root) NOPASSWD: /usr/bin/tee /sys/kernel/debug/dri/0/crtc-0/crc/control
+```
+
+Caveat, and it is the reason the script is the primary path: `dri/0` is the DRM
+minor index from `drm_dev->primary`, not a constant, and section 3.1 shows why
+the helpers resolve it through the stable by-path link instead of hardcoding it.
+If the SM750 is not minor 0 on the boot in question, adjust the four paths after
+checking `ls /sys/kernel/debug/dri` as root. Enabling and disabling by hand:
+
+```sh
+printf 'scanout' | sudo -n tee /sys/kernel/debug/dri/0/crtc-0/crc/control
+printf 'none'    | sudo -n tee /sys/kernel/debug/dri/0/crtc-0/crc/control
+```

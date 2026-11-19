@@ -190,4 +190,39 @@ for excluded in 2432x1080 2496x1080 2540x1080 \
 		exit 1
 	fi
 done
+# GAP-B8: the pipe-enable error path names the sm750_program_mode() call that
+# failed. A stage with no name renders as "unknown"; a call site without its
+# stage assignment makes the report name the previous stage. Both drift modes
+# are checked here.
+grep -F 'failed to enable HDMI mode: %d at stage %s' "$source_file" >/dev/null || {
+	echo "GAP-B8: the pipe-enable error does not name the failing mode stage." >&2
+	exit 1
+}
+stage_enum=$(awk '
+	/^enum sm750_mode_stage \{/ { in_enum = 1 }
+	in_enum { print }
+	in_enum && /^\};/ { exit }
+' "$source_file")
+if [[ -z $stage_enum ]]; then
+	echo "GAP-B8: enum sm750_mode_stage is missing." >&2
+	exit 1
+fi
+stage_count=0
+while read -r stage; do
+	[[ -n $stage ]] || continue
+	stage_count=$((stage_count + 1))
+	grep -F "[$stage] = \"" "$source_file" >/dev/null || {
+		echo "GAP-B8: stage $stage has no name in sm750_mode_stage_names." >&2
+		exit 1
+	}
+	grep -F "sdev->mode_stage = $stage;" "$source_file" >/dev/null || {
+		echo "GAP-B8: stage $stage is never assigned on the modeset path." >&2
+		exit 1
+	}
+done < <(sed -n 's/^[[:space:]]*\(SM750_MODE_STAGE_[A-Z_]*\),.*/\1/p' <<<"$stage_enum")
+# Five fallible calls plus the NONE state: anything less is a lost stage.
+test "$stage_count" -ge 6 || {
+	echo "GAP-B8: expected at least 6 mode stages, found $stage_count." >&2
+	exit 1
+}
 echo "DRM mode policy checks passed"

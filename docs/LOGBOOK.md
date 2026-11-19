@@ -1606,3 +1606,154 @@ from the same reset state.
   reproducible. Limitation: this is CPU-level tracing only - neither emulator
   has an SM750, so no port or MMIO device effect is observed and no mode-set
   path is reached.
+
+### 2026-11-19T09:35Z | gem-implementer | T26 scanout read path: CRTC CRC source `scanout` and `sm750_scanout` debugfs dump
+
+- Added the driver-side read path over VRAM in `src/sm750_drm.c`: the CRC
+  source callbacks `sm750_crtc_get_crc_sources` (`{"scanout", NULL}`),
+  `sm750_crtc_verify_crc_source` and `sm750_crtc_set_crc_source` registered in
+  `sm750_crtc_funcs`; a `struct drm_vblank_work crc_work` initialised next to
+  `drm_vblank_init` and scheduled one vblank ahead, calling
+  `drm_crtc_add_crc_entry(crtc, true, drm_crtc_vblank_count(crtc), &crc)`;
+  `sm750_crc_region()` and `sm750_scanout_crc32()` shared by the CRC work item
+  and the new `sm750_scanout` debugfs file.
+- Bounded, not full frame: new `crc_window_bytes` parameter (uint, default
+  262144, floor 4096, rounded down to 4, clamped to
+  `scanout_pitch * vdisplay`). Zero cost when disabled: no work scheduled, no
+  reads; `sm750_crc_disable()` runs from `sm750_pipe_disable()`.
+- Probe change: the `pci_iomap_wc()` VRAM window was mapped only in shadow
+  mode. It is now mapped unconditionally and released by the same devm action,
+  because the read path needs it in `xrgb8888` mode too.
+- Direct `xrgb8888` path now records `scanout_offset`, `scanout_pitch` and
+  `scanout_frame_size` in `sm750_pipe_enable()` and refreshes the offset in
+  `sm750_pipe_update()`; without that the CRC and the dump would have had no
+  geometry to bound.
+- New opt-in test `tests/check-scanout-crc.sh` and target `make crc-check`
+  (exit 77 turned into success like `vbios-trace`). It enables the source
+  through `crtc-0/crc/control` (crc/source is the read-only source list in
+  this kernel generation), draws black and white frames through the fbdev
+  node and asserts structural properties only: entries arrive, one distinct
+  CRC over 12 frames, the dump crc32 equals the CRC path, the CRC changes with
+  the content, and the nonzero count is monotonic. Not part of `check`, whose
+  17 recipe commands are unchanged.
+- Docs: `README.md` (opt-in target, gates row, `crc_window_bytes` row,
+  limitation text), `docs/PARAMETERS.md`, `docs/TEST-STRATEGY.md` sections 5,
+  6 and 8 (the "no CRC source" claims at the old lines 290 and 585 replaced),
+  `docs/ACCEPTANCE-REPORT.md` dated addendum, `docs/DELIVERABLES.md`.
+- Evidence: `docs/evidence/scanout/01-build.txt` (builds against 7.2.15-100,
+  7.3.3-100 and 7.3.4-100, exit 0, 0 warnings each),
+  `02-crc-source.txt`, `03-readback.txt` and `04-checks.txt` (all three `SKIP`:
+  /sys/kernel/debug is mode 0700 and the sudoers allowlist has no path into
+  it, and `CONFIG_FB_DEVICE` is unset so there is no `/dev/fb*`).
+- Gates: `make CC=/usr/bin/gcc check` exit 0 with `Ran 4 tests ... OK`,
+  `tests/check-release-version.sh` exit 0, `tests/check-drm-packaging.sh`
+  exit 0. `make crc-check` exit 0 after a single `SKIP:` line.
+- Outcome: the mechanism round 2 said was missing now exists and builds on all
+  three trees. AC-3 tier 4 stays `GAP` until a root run records the readback
+  transcript; tier 5 stays partial because the CRC covers the scanout source
+  bytes in VRAM, not the pixels the display engine emits.
+
+### 2026-11-19T09:44Z | gem-implementer | Correction to the T26 entry: section numbers in `docs/TEST-STRATEGY.md`
+
+- The T26 entry above says the replaced "no CRC source" claims were in
+  "sections 5, 6 and 8". That is wrong. The claims replaced were in section 2
+  (the S6 IGT caveat, old line 290), section 5 (the acceptance ladder rows),
+  section 7 (the "panel shows the expected pixels" row) and section 8 (the IGT
+  pass criterion, old line 585). Section 6 was not edited.
+- Section 8 blocker 3 also gained a dated note: `getfacl /dev/tty0` shows
+  `user:coder:rw-` (ACL installed 2026-11-18T12:08Z per
+  `docs/ROOT-ACTIONS.md` section 4.1) and uid 1005 can open the node, so the VT
+  blocker is closed for access; no post-ACL IGT run is recorded.
+- Everything else in that entry stands. Evidence: `docs/evidence/scanout/`
+  01..04, gates re-run at `make CC=/usr/bin/gcc check` exit 0,
+  `tests/check-release-version.sh` and `tests/check-drm-packaging.sh` exit 0,
+  `tests/check-static.sh` exit 0 (`static gate: PASS`).
+
+### 2026-11-19T10:50Z | gem-implementer | T27: GAP-B8 stage names, libdrm draw path, recoveries and VBIOS triage
+
+- GAP-B8 (branch B): `src/sm750_drm.c` gained `enum sm750_mode_stage` (line
+  260) and `sm750_mode_stage_name()` (line 278); `struct sm750_drm_device` has
+  an `enum sm750_mode_stage mode_stage` member; `sm750_program_mode()` sets it
+  before each of its five fallible calls (lines 1353/1358/1362/1390/1394) and
+  resets it on success; the only message became
+  `failed to enable HDMI mode: %d at stage %s (commit finished, event consumed)`
+  (line 3315). No retry was added: a retry of a half-progressed modeset can
+  corrupt state (plan decision, unchanged). `tests/check-drm-policy.sh` now
+  fails when an enumerator has no name or no assignment; two negative controls
+  exit 1 as intended.
+- `tests/scanout-pattern.c` is new: it draws a black or white frame through
+  libdrm (dumb buffer, map, fill, AddFB2, SetCrtc) on the card whose PCI vendor
+  is 0x126f. `tests/check-scanout-crc.sh` compiles it into `build/` with
+  `/usr/bin/gcc` and no longer needs `/dev/fb0`, so `CONFIG_FB_DEVICE` being
+  unset (A24) stopped blocking the draw. All T26 structural assertions are
+  unchanged. The helper was run unprivileged and set a 1920x1080 frame on
+  connector 35 / crtc 38; the CRC and the `sm750_scanout` dump remain
+  unreadable because `/sys/kernel/debug` is mode 0700.
+- Docs: `docs/evidence/EVIDENCE-GAPS.md` gained a `## Status of record`
+  section and a dated GAP-B8 note (status stays `GAP`) plus corrected B3/B8
+  summary rows; `README.md` gained `### If the card stops working after
+  removing the package` and the `at stage <name>` troubleshooting text;
+  `docs/ROOT-ACTIONS.md` gained proposed row 8 and section 7 with the root
+  recipe for the CRC/readback transcript; `docs/ACCEPTANCE-REPORT.md:455` links
+  the runbook, its round-1 GAP-B5 lines carry dated supersede notes, and an
+  addendum records the T27 state; `docs/TEST-STRATEGY.md` gained the stage
+  identification row and the corrected section-5 comment.
+- VBIOS: section 12 items each carry an evidence pointer and a ROM-alone
+  verdict; item 8 was answered and its premise corrected. A near call at
+  `0x6d91` enters the `0x40`-byte checksummed accessor at `0x6f44`, its caller
+  multiplies a block count by `0x80`, and the sibling routine `0x6e9e` sends
+  DDC addresses `0xa1`/`0xa3`/`0xa7`/`0xa9` - a real EDID-shaped read path.
+  Item 6 stays undetermined: every recorded trace stops at bound 2000 before
+  the replay consumer at `0xc334a`, and no run with a raised
+  `VBIOS_TRACE_BOUND` exists.
+- Evidence: `docs/evidence/gap-b8/01-stage-instrumentation.txt` (enum extract,
+  message, four builds, a userspace harness that renders the message for all
+  six stages and for an out-of-range value),
+  `docs/evidence/scanout/04-checks.txt` (T27 update: new skip line, guards,
+  rootless draw, gates), `docs/evidence/scanout/02-crc-source.txt` and
+  `03-readback.txt` (T27 probes and the rootless draw transcript),
+  `docs/evidence/vbios-re/07-undetermined-triage.txt` (all eight items with
+  commands and output).
+- Gates: `make CC=/usr/bin/gcc check` exit 0 (17 recipe commands, 4 python
+  tests), `tests/check-release-version.sh` 0, `tests/check-drm-packaging.sh` 0,
+  `tests/check-static.sh` 0 (`static gate: PASS`), `make crc-check` 0 after one
+  `SKIP:` line, `sh -n tests/check-scanout-crc.sh` 0, `bash -n
+  tests/check-drm-policy.sh` 0; builds on 7.2.15-100, 7.3.3-100, 7.3.4-100 and
+  the 6.17.1-300 tree exit 0 with no driver warning (the 6.17.1 tree prints the
+  build-system compiler-mismatch line).
+- Outcome: identification exists but has not fired, so GAP-B8 stays `GAP`; the
+  CRC readback path is drawable but unreadable without root, so AC-3 tier 4
+  stays `GAP` with debugfs as the single remaining blocker.
+
+### 2026-11-19T11:01Z | orchestrator | T26 and T27 accepted: software CRC source, scanout readback, GAP-B8 stage instrumentation
+
+Three branches from the gap-closing evaluation landed in the worktree.
+
+T26 (branch A) adds a CRC source and a readback dump because AC-3 tiers 4 and 5
+had no path at all: no /dev/fb*, no writeback connector, no get_crc_sources.
+The driver now owns a drm_vblank_work that reads a bounded window of the
+scanout region out of VRAM and feeds crc32_le through drm_crtc_add_crc_entry,
+plus a sm750_scanout debugfs file printing offset, length, nonzero count and
+crc32 with a hex dump. crc_window_bytes bounds the cost, and the path costs
+nothing while disabled. Compiles on 6.17.1, 7.2.15, 7.3.3 and 7.3.4 with zero
+warnings.
+
+T27 (branches B and C) makes GAP-B8 self-identifying: an enum of stages is set
+before each of the five fallible calls in sm750_program_mode and the stage name
+is appended to the error that previously said only which errno arrived. No
+retry was added, because replaying a half-progressed modeset risks corrupting
+state. The same task removed the /dev/fb0 dependency from the scanout test by
+drawing through libdrm, added the recovery runbook for the package-removal
+hazard, and triaged the eight UNDETERMINED VBIOS items, answering one of them
+and correcting an earlier claim in section 6.6.
+
+The delivered CRC test still SKIPs its runtime half: /sys/kernel/debug is root
+only, no allowlisted helper reads it, and the first attempt to drive the
+interface failed because DRM never created crtc-0/crc. The driver swaps
+sdev->pipe.crtc.funcs in after drm_simple_display_pipe_init, which is too late
+for the framework to notice the new callbacks, and drm_debugfs_crtc_crc_add is
+not exported. Fix under way: create the three files under the driver's own
+debugfs root with the same names and semantics.
+
+Checks: make check, check-release-version, check-drm-packaging, check-static
+and make crc-check all exit 0; four kernel builds exit 0.

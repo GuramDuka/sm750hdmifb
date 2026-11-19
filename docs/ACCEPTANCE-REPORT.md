@@ -389,6 +389,13 @@ empty result.
   (`docs/evidence/baseline/07-pci-config-space.txt` stops at `0x3f`, 452 bytes)
   and the 9465-byte artefact exists only in scratch. This claim is refused as
   PASS; the GAP-PARTIAL status is the accurate one.
+  Note (2026-11-19, T27): this bullet is the round-1 record and is left as
+  written. Round 2 closed the finding: the 9465-byte capture is now tracked as
+  `docs/evidence/baseline/19-pci-config-space-full.txt`, `docs/evidence/EVIDENCE-GAPS.md`
+  records `Status: `CLOSED`` for GAP-B5, and `docs/DELIVERABLES.md` and
+  `docs/ROOT-ACTIONS.md` name the same file (round-2 closure table, row (e)).
+  Where documents disagree, the "Status of record" line at the top of
+  `docs/evidence/EVIDENCE-GAPS.md` decides.
 - AC-2 and AC-4 counts in `docs/DELIVERABLES.md` section 1 and section 2.4:
   contradicted by the source documents and by direct count. Refused as stated;
   the source documents are correct.
@@ -426,6 +433,10 @@ Every root-required gap and its closing command, as of this report:
 - PCI config space above 0x40 (GAP-B5, still GAP-PARTIAL):
   `sudo /usr/local/sbin/sm750-lspci > /mega/tmp/sm750/lspci-$(date -u +%Y%m%dT%H%M%SZ).txt`
   then store the transcript under `docs/evidence/` and flip the row.
+  Note (2026-11-19, T27): superseded. This is the round-1 state; GAP-B5 is
+  `CLOSED` against `docs/evidence/baseline/19-pci-config-space-full.txt`
+  (round-2 closure table, row (e), and the GAP-B5 row in
+  `docs/evidence/EVIDENCE-GAPS.md`).
 - Scanout CRC (GAP, blocked by missing driver support): implement a
   `get_crc_sources` callback before any
   `sudo cat /sys/kernel/debug/dri/<N>/crtc-<M>/crc/data` can return data.
@@ -450,9 +461,9 @@ Every root-required gap and its closing command, as of this report:
 | --- | --- | --- | --- |
 | No pixel correctness proof: no scanout CRC, no external capture, no `/dev/dri` readback transcript | High | The driver registers no CRC source (`src/` has no `get_crc_sources`), no capture hardware is attached, and the monitor has not been visually inspected. Connector, modeset and client-attachment state are proven; what appears on the panel is not | Add a CRC source or capture the panel externally, then record the transcript under `docs/evidence/` and promote AC-3 tiers 4-6 |
 | Untested kernels outside the three installed header trees (7.2.15-100, 7.3.3-100, 7.3.4-100) plus the 6.17.1 floor tree | Medium | The build matrix covers the 6.17 floor and the three installed trees only; `dkms.conf` `BUILD_EXCLUSIVE_KERNEL` admits 6.17 and newer, and A20 records that DKMS will auto-install on a kernel the release notes call untested | State the tested set in the release notes (already partly done at `docs/RELEASE-NOTES.md:14-19`) and re-run `tests/build-all-kernels.sh` against each new header tree before a distribution upgrade |
-| GAP-B8: the source of the `-110` return among the five fallible `sm750_program_mode` calls is unidentified | Medium | A27 is fixed by surviving the failed-modeset vblank event (`src/sm750_drm.c:3105-3133`, `drm_crtc_vblank_on` at `:3131`, `sm750_arm_vblank_event` at `:3132`, 108/108 clean reproductions), but the failure still occurs; the fix removes the symptom, not the cause | Instrument the five call sites and record which one returns `-110`, then either retry or downgrade the mode explicitly |
+| GAP-B8: the source of the `-110` return among the five fallible `sm750_program_mode` calls is unidentified | Medium | A27 is fixed by surviving the failed-modeset vblank event (`src/sm750_drm.c:3105-3133`, `drm_crtc_vblank_on` at `:3131`, `sm750_arm_vblank_event` at `:3132`, 108/108 clean reproductions), but the failure still occurs; the fix removes the symptom, not the cause | Instrument the five call sites and record which one returns `-110`, then either retry or downgrade the mode explicitly. Note (2026-11-19, T27): the five sites are instrumented and the message names the stage (`docs/evidence/gap-b8/01-stage-instrumentation.txt`); the recording step waits on a recurrence, and no retry was added because a retry of a half-progressed modeset can corrupt state |
 | IGT conformance limited to `kms_addfb_basic` | Medium | `docs/evidence/runtime/19-igt-0.6.0.txt` records 26 SUCCESS / 14 SKIP / 1 FAIL on one subtest family only; `kms_setmode`, `kms_cursor`, `kms_plane` and the rest of the IGT KMS suite are not run, and the VT ACL was installed late in the plan | Run the wider IGT KMS set as an unprivileged user now that the `/dev/tty0` ACL exists, and record the transcript |
-| Reboot hazard after a package erase | Medium | `dnf remove` runs `%preun` `dkms remove --all`, which deletes the object file while the module stays loaded; a reboot in that state leaves card0 with no driver and the SM750 HDMI output dark (recorded at `docs/DELIVERABLES.md:167` and `docs/evidence/EVIDENCE-GAPS.md:591`) | Document the recovery in the README (`dnf install` the RPM, or `modprobe sm750hdmidrm` from a rebuilt object) and avoid erasing the package on a machine whose only console is the SM750 output |
+| Reboot hazard after a package erase | Medium | `dnf remove` runs `%preun` `dkms remove --all`, which deletes the object file while the module stays loaded; a reboot in that state leaves card0 with no driver and the SM750 HDMI output dark (recorded at `docs/DELIVERABLES.md:167` and `docs/evidence/EVIDENCE-GAPS.md:591`) | Documented in [README.md](../README.md) section "If the card stops working after removing the package" (T27): ordered recovery from `dkms status` through `dnf install`/`dkms install` to `modprobe sm750hdmidrm`. The operational advice stands: avoid erasing the package on a machine whose only console is the SM750 output |
 | Orphan source tree `/usr/src/sm750hdmifb-0.5.9` | Low | No RPM owns it (`rpm -ql sm750hdmifb` names no 0.5.9 path) and no task may remove it without root; it is inert but confuses anyone reading `/usr/src` | `sudo rm -rf /usr/src/sm750hdmifb-0.5.9` by the host owner; already documented in `docs/ROOT-ACTIONS.md` |
 | Stale unowned directory `/lib/modules/6.18.13-200.fc43.x86_64` | None (cosmetic) | Left by the NVIDIA driver, owned by no package, containing only `extra/nvidia/*.ko` with no `build` link. It is not an installed kernel and no SM750 object was ever built for it. It makes `dkms` print "skipping 6.18.13-200.fc43.x86_64: matching kernel headers are absent" on every run, which reads like a packaging defect to a new reader | Documented at `docs/ENVIRONMENT.md:79-84`; the host owner may delete the directory, and nothing in the package needs to change |
 | Optional static gate is not deterministic on this host | Low | `PATH=/usr/bin:/bin ./tests/check-static.sh` returned exit 0 on one run and exit 1 on another with `coccinelle: exit 255` / `spatch failed`, while sparse, smatch, cppcheck and pahole were stable | Treat the gate as advisory (as documented), or pin the coccinelle version and re-record `docs/evidence/builds/20`-`25` |
@@ -534,3 +545,53 @@ To REJECT: a failed `make check` or build-matrix run, a packaging mismatch
 between spec and RPM, evidence that the running module is not the installed
 object, or a hardware observation contradicting a claimed behaviour. None
 occurred. AC-3 becomes PASS only with an external capture of the panel.
+
+### Addendum 2026-11-19 (T26): driver-side scanout read path
+
+The driver now owns a read path over the scanout region in VRAM: a CRTC CRC
+source named `scanout` (`src/sm750_drm.c`:
+`sm750_crtc_get_crc_sources`, `sm750_crtc_verify_crc_source`,
+`sm750_crtc_set_crc_source`, and a vblank work item that calls
+`drm_crtc_add_crc_entry`) and an `sm750_scanout` debugfs dump. Both read
+through `sm750_crc_region()` and `sm750_scanout_crc32()`, both are bounded by
+the `crc_window_bytes` parameter, and `tests/check-scanout-crc.sh` (opt-in
+`make crc-check`) asserts their structural agreement on a live card.
+
+Status after this addendum:
+
+- AC-3 tier 4: the closing mechanism that round 2 listed as missing now
+  exists. It is not yet evidenced on this host: `docs/evidence/scanout/04-checks.txt`
+  records a `SKIP` because `/sys/kernel/debug` is mode 0700 and the run needs
+  root, and `CONFIG_FB_DEVICE` is unset so there is no `/dev/fb*` to draw a
+  pattern through. One root run produces the transcript; tier 4 stays `GAP`
+  until that transcript exists.
+- AC-3 tier 5: partial, and unchanged in substance. The CRC source is computed
+  over the scanout source bytes in VRAM. It proves the buffer the display
+  engine is fed, not the pixels it emits; the emitted stream is still not
+  observable on this host. Tier 5 is not closed.
+
+The round-2 text above is left as the historical record, including its
+`get_crc_sources` -> 0 measurement, which was true of the tree it measured.
+Two round-2 statements are therefore superseded rather than deleted: the
+"still open" bullet that says the driver has no CRC source, and the defect row
+that calls the absence of a readback path high risk.
+
+### Addendum 2026-11-19 (T27): draw path without fbdev, and stage names
+
+Two changes narrow the AC-3 tier-4 blocker to one item:
+
+- The check no longer needs `/dev/fb*`. `tests/scanout-pattern.c` draws the
+  black and the white frame through KMS (dumb buffer, `AddFB2`, `SetCrtc`), and
+  that path was exercised unprivileged on the live card
+  (`docs/evidence/scanout/03-readback.txt`). `CONFIG_FB_DEVICE` being unset
+  (A24) therefore no longer blocks the tier-4 run; the only remaining blocker
+  is that `/sys/kernel/debug` is mode 0700, so `crc/*` and `sm750_scanout`
+  cannot be read or written as `uid 1005`. One root run of
+  `tests/check-scanout-crc.sh` now produces the transcript; the row for it is
+  proposed as row 8 in `docs/ROOT-ACTIONS.md` section 7.
+- GAP-B8 identification no longer needs a debug rebuild. The `-110` line now
+  reads `failed to enable HDMI mode: -110 at stage <name>`; the observation
+  itself is still missing (`docs/evidence/gap-b8/01-stage-instrumentation.txt`).
+
+Tier 4 and tier 5 stay `GAP`/partial: this addendum changes what blocks them,
+not whether they are observed.

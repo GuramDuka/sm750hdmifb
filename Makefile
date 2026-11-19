@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
-.PHONY: all clean check check-deps check-package check-all-kernels module-info package static vbios-re vbios-trace
+.PHONY: all clean check check-deps check-package check-all-kernels module-info package static vbios-re vbios-trace crc-check
 
 all:
 	$(MAKE) -C $(KDIR) M=$(CURDIR)/src modules
@@ -77,6 +77,14 @@ vbios-re:
 # material and is not in the tree, so an absent image is a successful skip.
 vbios-trace:
 	@./tools/vbios-re/trace.sh; rc=$$?; \
+	if [ $$rc -eq 77 ]; then exit 0; fi; \
+	exit $$rc
+
+# Opt-in scanout readback check: needs the SM750 card, root and a mounted
+# debugfs, so it is not part of `check` (the harness exits 77 when it cannot
+# run and the recipe turns that into a skip), same rule as vbios-trace.
+crc-check:
+	@./tests/check-scanout-crc.sh; rc=$$?; \
 	if [ $$rc -eq 77 ]; then exit 0; fi; \
 	exit $$rc
 
