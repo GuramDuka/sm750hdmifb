@@ -685,6 +685,7 @@ the two builds:
 cd /home/coder/sm750hdmifb
 make CC=/usr/bin/gcc
 modprobe -r sm750hdmidrm
+modprobe drm_vram_helper
 insmod src/sm750hdmidrm.ko
 export PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig
 export PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm
@@ -695,6 +696,12 @@ modprobe -r sm750hdmidrm
 modprobe sm750hdmidrm
 rm -rf build
 ```
+
+`modprobe drm_vram_helper` is not optional. `modprobe -r sm750hdmidrm` also
+unloads the dependency modules that `modprobe` had auto-loaded for the DKMS
+module, and `insmod` resolves no dependencies at all, so the load fails with
+`ERROR: could not insert module ...: Unknown symbol in module` from the six
+`drm_gem_vram_*` / `drmm_vram_helper_init` / `drm_vram_mm_debugfs_init` imports.
 
 The last three commands return the host to the packaged DKMS module and keep
 the tree owned by `coder`. The exports are the documented rootless libdrm tree
