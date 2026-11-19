@@ -1,0 +1,146 @@
+T30: one owner for crtc-N/crc -- DRM core, not the driver
+=========================================================
+
+Host:      Fedora 43, kernel 7.3.4-100.fc43.x86_64 (running)
+Driver:    sm750hdmidrm 0.6.0, srcversion 96DC3034FCB9A092269CE76
+           vermagic 7.3.4-100.fc43.x86_64 (matches the running kernel)
+Captured:  2026-11-19T15:22Z
+Author:    gem-implementer (T30)
+
+Section 1 -- ownership evidence that decided the design
+--------------------------------------------------------
+
+Gathered while the driver's own debugfs creation was temporarily disabled and
+the module was freshly loaded. It shows that DRM core, not the driver, creates
+crtc-0/crc and its two files, and routes them to the driver callbacks.
+
+  /sys/kernel/debug/dri/0/crtc-0/
+    7861761 drwxr-xr-x 2 root root crc
+    crc/control   (reads: "scanout")
+    crc/data
+    (no crc/source)
+
+  dmesg:
+    debugfs: 'control' already exists in 'crc'
+    debugfs: 'data' already exists in 'crc'
+
+The EEXIST pair names control and data and never source: core creates exactly
+those two and does not create a source file when the source list comes from
+get_crc_sources(). The T28 driver-owned copies therefore shadowed core state
+that was never set through core's own control write, which is what made a fresh
+open of crc/data fail with EINVAL (see section 4).
+
+Section 2 -- deleted from src/sm750_drm.c
+-----------------------------------------
+
+Removed (driver-hosted uapi and its ring):
+
+  SM750_CRC_ENTRIES, SM750_CRC_COUNT_LINE, SM750_CRC_LINE_LEN
+  struct sm750_crc_entry
+  crc_entries[], crc_head, crc_tail, crc_count, crc_count_sent, crc_opened
+  sm750_crc_push()
+  sm750_crc_source_fops, sm750_crc_control_fops, sm750_crc_data_fops
+  sm750_crc_data_open(), sm750_crc_data_read(), sm750_crc_data_poll(),
+  sm750_crc_data_release()
+  sm750_crc_control_read(), sm750_crc_control_write()
+  sm750_crc_source_show(), sm750_crc_source_read()
+  sm750_crc_debugfs_create()
+  sm750_crtc_late_register(), .late_register in sm750_crtc_funcs
+  the sm750_crc_debugfs_create(minor->dev) call in sm750_regs_debugfs_add()
+  the PROBE-ONLY early return and its function
+
+Kept and now the whole driver side of the contract:
+
+  sm750_crc_arm() / sm750_crc_halt() / sm750_crc_enable() /
+  sm750_crc_suspend() / sm750_crc_resume() / sm750_crc_work_fn()
+  sm750_crtc_get_crc_sources() -> static { "scanout", NULL }, *count = 1
+  sm750_crtc_verify_crc_source() -> "scanout" and "auto" both accepted,
+    *values_cnt = 1, NULL / "" / "none" disable, anything else -EINVAL
+  sm750_crtc_set_crc_source() -> "auto" treated exactly like "scanout"
+  the frame push: drm_crtc_add_crc_entry(crtc, true, frame, &crc), one value
+
+No crc debugfs_create_file()/debugfs_create_dir() call remains in src/; the
+gate asserts that (tests/check-crc-uapi.sh, negative control debugfs_shim).
+
+Section 3 -- two defects found while validating the stock path
+--------------------------------------------------------------
+
+3a. Positive return from drm_vblank_work_schedule()
+
+  /usr/src/kernels/7.3.4-100.fc43.x86_64/include/drm/drm_vblank_work.h:65-66
+  declares the function int; the binary of drm_vblank_work_schedule() shows it
+  returning 1 on its normal queued paths and only negative values for errors.
+  sm750_crc_arm() treated any non-zero as a failure, so
+  sm750_crtc_set_crc_source() returned 1, crtc_crc_open() propagated it and
+  userspace saw:
+
+    openat(AT_FDCWD, "/sys/kernel/debug/dri/0/crtc-0/crc/data", O_RDONLY) = -1 EINVAL
+
+  Fix: arm tests ret < 0, and the work item's re-arm does the same. After the
+  fix the same open returns a descriptor and entries arrive (section 5).
+
+3b. The frame has to survive the drawer's exit
+
+  tests/check-scanout-crc.sh draws through a short-lived client and then
+  samples. DRM runs lastclose -- which restores the fbdev console mode, and the
+  console client owns the frame that gets restored -- when the last file on the
+  device closes, so the drawn pattern was replaced by the console's own black
+  frame before the first sample. The check now starts the drawer with a hold
+  and samples while it still holds the device and master; the sampling logic
+  (black frame, write scanout to crc/control, read crc/data) is unchanged.
+
+Section 4 -- gate transcript (make check: 7.3.4-100 in-tree)
+-----------------------------------------------------------
+
+  ./tests/check-crc-uapi.sh                               exit 0
+    negative control set_crc_source: rejected (exit 1)
+    negative control debugfs_shim: rejected (exit 1)
+    negative control early_return: rejected (exit 1)
+    negative control enable_without_region: rejected (exit 1)
+    negative control no_frame_counter: rejected (exit 1)
+    negative control no_auto_source: rejected (exit 1)
+    negative control two_values: rejected (exit 1)
+    CRC uapi gate and negative controls passed
+  ./tests/check-drm-policy.sh                             exit 0
+    ... CRC uapi gate and negative controls passed
+    DRM mode policy checks passed
+  make CC=/usr/bin/gcc check                              exit 0
+    (PKG_CONFIG_PATH to the documented rootless libdrm tree; 4 tests OK)
+  ./tests/check-release-version.sh                        exit 0
+    Release version consistency checks passed: 0.6.0
+  ./tests/check-drm-packaging.sh                          exit 0
+    Unified DRM package checks passed
+  ./tests/check-static.sh                                 exit 0
+    static gate: PASS
+  ./tests/check-rpm-dkms.sh                               exit 0
+    RPM/DKMS checks passed: sm750hdmifb 0.6.0, sandbox built,
+    root-only steps skipped
+
+Builds: make CC=/usr/bin/gcc in-tree for 7.3.4-100 exit 0, no driver warning;
+out-of-tree for 6.17.1-300 exit 0, no driver warning (kbuild prints only its
+"the compiler differs from the one used to build the kernel" notice).
+
+Section 5 -- root run, one helper, stock uapi
+---------------------------------------------
+
+  sudo -n /usr/local/sbin/sm750-crc-cycle --diag
+
+  --- crc files
+    source: absent
+    control: scanout
+  --- debugfs listing
+    -rw-r--r-- 1 root root 0 ... control
+    -r--r--r-- 1 root root 0 ... data
+  openat(AT_FDCWD, ".../crtc-0/crc/data", O_RDONLY) = 3
+
+  PASS: crc/control lists scanout as the active source
+  PASS: CRC entries arrive and are stable over 12 static frames (crc 0xe20eea22)
+  PASS: dump and CRC path agree for a black frame (offset 4147200, length 262144, crc 0xe20eea22)
+  PASS: CRC changes with frame content (black 0xe20eea22, white 0x06cf606c)
+  PASS: nonzero scanout bytes are monotonic (black 0, white 262144 of 262144)
+  PASS: scanout CRC source and sm750_scanout dump agree (/sys/kernel/debug/dri/0, drawn through /dev/dri/card0)
+  RESULT: scanout CRC check passed
+
+Helper exit 0. crc/control reads "scanout*" while the source is active and
+"scanout" when it is not, which is core's own marking of the selected source;
+there is no crc/source file in either state.

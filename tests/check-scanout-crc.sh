@@ -16,6 +16,12 @@
 # is not removed: rmfb on a scanned-out fb disables the CRTC and stops vblanks,
 # so each run leaves one dumb buffer and one active frame behind.
 #
+# The crc files are DRM core's, not the driver's (T30): core creates
+# crtc-N/crc/control and crtc-N/crc/data for a CRTC whose funcs carry the CRC
+# callbacks and routes both to them. There is no crc/source file; control
+# reports the selected source, so scanout is proven by reading it back after
+# the write.
+#
 # Exit 77 with a single SKIP: line when the check cannot run: no root (the
 # debugfs files this check reads are mode 0700), no debugfs, no SM750 card, no
 # CRC directory, no libdrm headers, or no DRM master.
@@ -40,6 +46,7 @@ pass() {
 }
 
 cleanup() {
+	stop_draw
 	if [ -n "${crc:-}" ] && [ -w "${crc:-}/control" ]; then
 		printf 'none' > "$crc/control" 2>/dev/null || true
 	fi
@@ -61,21 +68,11 @@ done
 
 crc=$card/crtc-0/crc
 [ -d "$crc" ] || skip "$card has no crtc-0/crc directory"
-[ -e "$crc/control" ] || skip "$crc/control is missing (no CRC source registered)"
-[ -r "$crc/source" ] || skip "$crc/source is missing"
+[ -e "$crc/control" ] || skip "$crc/control is missing (DRM core registered no CRC source)"
+[ -e "$crc/data" ] || skip "$crc/data is missing"
 [ -r "$card/sm750_scanout" ] || skip "$card/sm750_scanout is missing"
 
 trap cleanup EXIT
-
-sources=$(cat "$crc/source")
-case " $sources " in
-*" scanout "*)
-	pass "crc source list exposes scanout: $sources"
-	;;
-*)
-	fail "crc source list does not expose scanout: $sources"
-	;;
-esac
 
 # libdrm headers and .pc are not installed system-wide on the reference host.
 # The documented rootless tree (docs/ENVIRONMENT.md section 4) is the fallback;
@@ -115,21 +112,57 @@ for dev in /dev/dri/card*; do
 done
 [ -n "$card_node" ] || skip "no /dev/dri/card* backed by the SM750 (PCI vendor 0x126f)"
 
-# draw <black|white>: one SETCRTC with a solid frame. Exit 3 means the process
-# could not become DRM master, which is an environment condition.
+
+# draw <black|white>: one SETCRTC with a solid frame.
+#
+# The drawer stays alive after its SETCRTC. DRM runs its lastclose -- which
+# restores the fbdev console mode and so replaces the drawn frame -- when the
+# last file on the device closes, and the console client owns the fb otherwise
+# restored. A drawer that exited before the samples would leave the console's
+# own frame on screen, and the CRC would legitimately read that instead of the
+# pattern. Exit 3 means the process could not become DRM master, which is an
+# environment condition.
+draw_log=
+draw_pid=
+
+stop_draw() {
+	if [ -n "$draw_pid" ]; then
+		kill "$draw_pid" 2>/dev/null || true
+		wait "$draw_pid" 2>/dev/null || true
+		draw_pid=
+		draw_log=
+	fi
+}
+
 draw() {
-	out=$("$pattern" "$card_node" "$1" 2>&1) && rc=0 || rc=$?
+	stop_draw
+	draw_log=$here/build/scanout-pattern-$1.log
+	"$pattern" "$card_node" "$1" 45 >"$draw_log" 2>&1 &
+	draw_pid=$!
+	n=0
+	while [ "$n" -lt 200 ]; do
+		grep -q " $1 fb " "$draw_log" 2>/dev/null && return 0
+		kill -0 "$draw_pid" 2>/dev/null || break
+		n=$((n + 1))
+		sleep 0.1
+	done
+	wait "$draw_pid" && rc=0 || rc=$?
+	draw_pid=
+	out=$(cat "$draw_log")
 	case $rc in
-	0) echo "$out" ;;
+	0) fail "scanout-pattern $1 exited before it stayed up: $out" ;;
 	3) skip "cannot become DRM master on $card_node: $out" ;;
 	*) fail "cannot draw a $1 frame on $card_node: $out" ;;
 	esac
 }
 
-# A sample is a fresh open of crc/data, so it only contains new frames. The
-# read blocks until entries arrive, hence the timeout plus head.
+# A sample is a fresh open of crc/data, so it only contains new frames. Core's
+# uapi starts each open with the values-per-entry count ("1"), then one line
+# per frame, so the count line is dropped and only entry lines are summarised.
+# The read blocks until entries arrive, hence the timeout plus head.
 sample() {
-	timeout 20 cat "$crc/data" 2>/dev/null | head -n "$1"
+	timeout 20 cat "$crc/data" 2>/dev/null | head -n "$(( $1 + 1 ))" |
+		tail -n +2
 }
 
 dump_field() {
@@ -148,23 +181,37 @@ summarize() {
 		}'
 }
 
-# Enable the source. Failure here means the CRTC cannot start vblanks, which is
-# the "no DRM master / display off" case.
-if ! printf 'scanout' > "$crc/control" 2>/dev/null; then
-	skip "cannot enable the scanout CRC source (CRTC-0 not active: no DRM master or display off)"
-fi
-
+# The source can only be armed on a CRTC that already scans out: the driver
+# refuses with -ENODEV when the scanout geometry is not recorded, because a
+# stream armed before the first modeset has nothing to read and no vblanks to
+# tick on. The first frame therefore comes first, then the arm.
 draw black
 sleep 1
+
+if ! printf 'scanout' > "$crc/control" 2>/dev/null; then
+	skip "cannot enable the scanout CRC source (no active mode on CRTC-0: scanout geometry not recorded)"
+fi
+
+active=$(cat "$crc/control")
+case $active in
+scanout*)
+	;;
+*)
+	fail "crc/control does not list scanout as the active source (expected 'scanout*'): $active"
+	;;
+esac
+pass "crc/control lists scanout as the active source"
+
 sample 4 >/dev/null
 
 stats=$(sample 12 | summarize)
 set -- $stats
-[ $# -eq 3 ] || fail "CRC data yielded no entries in 20 s"
+[ $# -eq 3 ] || fail "CRC data yielded no entries in 20 s: $(timeout 2 head -n 3 "$crc/data" 2>&1 | tr '\n' ' ')"
 count=$1
 uniq=$2
 black_crc=$3
-[ "$count" -eq 12 ] || fail "CRC data yielded $count of 12 lines in 20 s"
+[ "$count" -eq 12 ] ||
+	fail "CRC data yielded $count of 12 lines in 20 s: $(timeout 2 head -n 3 "$crc/data" 2>&1 | tr '\n' ' ')"
 [ "$uniq" -eq 1 ] || fail "CRC is not stable for a static frame: $uniq distinct values in 12 frames"
 pass "CRC entries arrive and are stable over 12 static frames (crc $black_crc)"
 
@@ -177,7 +224,7 @@ case $dump_crc in
 0x*) ;;
 *) fail "sm750_scanout has no crc32 summary" ;;
 esac
-[ "${dump_crc#0x}" = "$black_crc" ] ||
+[ "${dump_crc#0x}" = "${black_crc#0x}" ] ||
 	fail "dump crc32 $dump_crc does not match the CRC path $black_crc"
 pass "dump and CRC path agree for a black frame (offset $(dump_field offset), length $dump_length, crc $black_crc)"
 
@@ -199,7 +246,7 @@ pass "CRC changes with frame content (black $black_crc, white $white_crc)"
 
 white_nonzero=$(dump_field nonzero)
 dump_crc=$(dump_field crc32)
-[ "${dump_crc#0x}" = "$white_crc" ] ||
+[ "${dump_crc#0x}" = "${white_crc#0x}" ] ||
 	fail "dump crc32 $dump_crc does not match the CRC path $white_crc"
 [ "$white_nonzero" -ge "$dump_nonzero" ] ||
 	fail "nonzero scanout bytes decreased from black ($dump_nonzero) to white ($white_nonzero)"

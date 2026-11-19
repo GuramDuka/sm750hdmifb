@@ -460,34 +460,52 @@ comparable. The dump is a stable `0x<offset> <name> 0x<value>` table; see
 
 ### Scanout CRC
 
-The driver publishes the DRM CRC uapi for its CRTC under `crtc-<index>/crc/` in
-the same debugfs directory as `regs` (resolve `<index>` and the minor as above):
+DRM core publishes the CRC uapi for the CRTC under `crtc-<index>/crc/` in the
+same debugfs directory as `regs` (resolve `<index>` and the minor as above) and
+routes it to the driver's `drm_crtc_funcs` hooks. Core creates two files:
 
-- `source` (mode `0444`) lists the supported sources: `scanout`.
 - `control` (mode `0644`) reads `none` or `scanout`. Writing `scanout` or `auto`
   enables the source, `none` or an empty write disables it; anything else fails
-  with `EINVAL`.
+  with `EINVAL`. The write fails with `ENODEV` when the CRTC has no scanout
+  geometry yet, which is the case before the first modeset: arm the source after
+  `drmModeSetCrtc`, not before, because the tick rides the vblank that the mode
+  produces. The stream then survives modesets by itself: `sm750_pipe_disable()`
+  parks it and `sm750_pipe_enable()` re-arms it.
 - `data` (mode `0444`) emits the number of CRC values per entry, `1`, on the
   first read after open, then one line per frame of the form `<frame> <crc>`:
   a decimal vblank count followed by the CRC of the visible scanout bytes in
   hex (bounded by `crc_window_bytes`), for example `12345 a1b2c3d4`. A read
-  blocks until the next frame arrives, one reader at a time, and the ring keeps
-  the newest 128 entries.
+  blocks until the next frame arrives, one reader at a time, and core's ring
+  keeps the newest 128 entries.
+
+Core does not create a `source` file for a driver that reports its list through
+`get_crc_sources`; `control` names the selected source, so reading it back after
+the write is how the selection is confirmed.
+
+If the geometry the source reads is not recorded, the driver logs one `crc:`
+warning per enable cycle naming the missing field (`vram`, `pitch`, `frame
+size` or `offset bound`) and keeps the tick running, so the stream starts
+producing entries as soon as a modeset records the geometry instead of dying
+silently.
 
 ```sh
 minor=${card##*/card}
-sudo cat /sys/kernel/debug/dri/$minor/crtc-0/crc/source
+# draw a frame first (drmModeSetCrtc): the arm needs scanout geometry
 printf scanout | sudo tee /sys/kernel/debug/dri/$minor/crtc-0/crc/control
+sudo cat /sys/kernel/debug/dri/$minor/crtc-0/crc/control
 sudo cat /sys/kernel/debug/dri/$minor/crtc-0/crc/data
 printf none | sudo tee /sys/kernel/debug/dri/$minor/crtc-0/crc/control
 ```
 
-DRM normally creates these files, but only if the CRTC already carries the CRC
-callbacks when it is registered. This driver swaps `sm750_crtc_funcs` in after
-`drm_simple_display_pipe_init()`, and `drm_debugfs_crtc_crc_add()` is not
-exported, so the driver creates `crc/` itself. The CRC covers the scanout source
-buffer in VRAM, not the pixels the encoder emits; `sm750_scanout` prints the
-same `crc32` for a frame, and `make crc-check` compares the two on the card.
+The driver owns no file here: `crtc-N/crc/` with `control` and `data` is
+created by `drm_debugfs_crtc_crc_add()` inside `drm_dev_register()` because
+`sm750_crtc_funcs` is in place by then, and core's `control` write calls the
+same `sm750_crtc_set_crc_source()` hook. A driver-owned copy of those files
+would shadow core's and leave core's CRC state unset, so a write through it
+enables nothing and a read of core's `data` fails; that shim was removed in
+T30. The CRC covers the scanout source buffer in VRAM, not the pixels the
+encoder emits; `sm750_scanout` prints the same `crc32` for a frame, and
+`make crc-check` compares the two on the card.
 
 ### Framebuffer console
 

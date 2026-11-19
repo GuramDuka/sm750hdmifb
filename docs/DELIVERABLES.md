@@ -184,7 +184,7 @@ bodies and the recovery recipe for a broken allowlist are in
 | PCI config space > 0x40 | `sudo /usr/local/sbin/sm750-lspci` | **CLOSED, GAP-B5.** Exit 0, 9465 bytes, capability list above 0x40 present; stored as `docs/evidence/baseline/19-pci-config-space-full.txt`. |
 | KMS clients | `modetest -c -M sm750hdmidrm`, `kmscube -D /dev/dri/card0 -c 60`, IGT `kms_setmode` | **PARTIAL, GAP-B3.** The card node opens unprivileged through the udev ACL; `modetest` and `kmscube` pass as pre-fix baselines (`docs/evidence/runtime/04-modeset.txt`, `05-kmscube.txt`), IGT on 0.6.0 (`docs/evidence/runtime/19-igt-0.6.0.txt`) runs `kms_addfb_basic` to completion with 26 SUCCESS / 14 SKIP / 1 FAIL, the single failure being `size-max` at `tests/kms_addfb_basic.c:594` which A26 records as correct by design. The `/dev/tty0` ACL in `docs/ROOT-ACTIONS.md` section 4.1 was installed on 2026-11-18T12:08Z, so the five binaries that used to abort at `kmstest_set_vt_graphics_mode` with `errno 13` can open the VT. No scanout CRC or external capture. |
 | RPM install | `sudo -n dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm` | **CLOSED, GAP-B7.** Executed 2026-11-18; `%posttrans` built and installed the module for 7.2.15-100, 7.3.3-100 and 7.3.4-100 (`docs/evidence/runtime/12-rpmbuild-0.6.0.txt`). |
-| Scanout readback | `sudo make crc-check` (or `sudo ./tests/check-scanout-crc.sh`) with a client drawing on CRTC-0 | **OPEN.** The mechanism exists (T26: CRC source `scanout`, `sm750_scanout` dump) but uid 1005 cannot read `/sys/kernel/debug`, which is mode 0700, and the sudoers allowlist has no path into it. `docs/evidence/scanout/04-checks.txt` records the `SKIP`, and `06-crc-debugfs-runtime.txt` records that the driver-hosted `crc/{source,control,data}` files are equally unobserved. One root run of `tests/check-scanout-crc.sh` on a rebuilt module produces `02-crc-source.txt`, `03-readback.txt` and `07-crc-debugfs-run.txt`. |
+| Scanout readback | `sudo make crc-check` (or `sudo ./tests/check-scanout-crc.sh`) with a client drawing on CRTC-0 | **PASS.** `docs/evidence/scanout/09-crc-single-owner.txt` section 5: with DRM core owning `crtc-0/crc/{control,data}`, `crc/control` lists `scanout` (and `scanout*` while armed), `crc/data` yields twelve stable entries for a static frame, the CRC changes between a black and a white frame and the `sm750_scanout` dump agrees with both. The single root entry point is `/usr/local/sbin/sm750-crc-cycle`; it exits 0 and prints `RESULT: scanout CRC check passed`. |
 | Installed-state assertion | `sudo -n dkms status -m sm750hdmifb -v 0.6.0` (expected `: installed`) and `sudo -n modprobe sm750hdmidrm` | **CLOSED, GAP-B7.** `dkms status` reports 0.6.0 `installed` for all three kernels, the module loads, and `/sys/module/sm750hdmidrm/version` reads 0.6.0. The only remaining stale rows are two `0.5.9 ... built` registrations, which task T22 removes. |
 | RPM erase | `sudo -n dnf remove -y sm750hdmifb` then `sudo -n dkms status -m sm750hdmifb -v 0.6.0` (expected no output) | **CLOSED, GAP-B7.** Executed as the rollback proof: `%preun` ran `dkms remove --all`, the object file was deleted and the display survived (`docs/evidence/runtime/20-rollback.txt`). Recorded hazard: the erase leaves the module loaded with no file on disk, so a reboot in that state would leave card0 driverless; 0.6.0 was reinstalled and a `modprobe -r`/`modprobe` cycle proved the fresh package loads. |
 
@@ -412,6 +412,7 @@ list.
 | `docs/ENVIRONMENT.md` | host, header trees, tool matrix, privilege state |
 | `docs/ci/build.yml` | inactive CI recipe: GitHub Actions is disabled, the file is kept outside `.github/workflows/` |
 | `docs/DELIVERABLES.md` | this index and the reproduction guide |
+| `tools/sm750-crc-cycle.sh` | single root entry point for the CRC/readback check: reloads the locally built module after a vermagic guard, waits for scanout geometry, runs `tests/check-scanout-crc.sh` and prints the transcript; `--diag` adds an strace of `crc/data`, `--dump` prints the crc file set |
 
 ### 5.3 Specification archive
 
@@ -447,8 +448,10 @@ list.
 | `docs/evidence/scanout/02-crc-source.txt` | `crc/source` list and enabled state for `crtc-0`, or the skip reason |
 | `docs/evidence/scanout/03-readback.txt` | `sm750_scanout` dump excerpt with offset, length, nonzero count and crc32, or the skip reason |
 | `docs/evidence/scanout/04-checks.txt` | PASS/FAIL/SKIP lines of `tests/check-scanout-crc.sh` |
-| `docs/evidence/scanout/05-crc-debugfs-build.txt` | four-kernel build of the CRC debugfs hosting change (7.2.15, 7.3.3, 7.3.4, 6.17.1), zero driver warnings |
-| `docs/evidence/scanout/06-crc-debugfs-runtime.txt` | SKIP: the hosted `crc/{source,control,data}` files cannot be read as uid 1005; names the single remaining root run |
+| `docs/evidence/scanout/05-crc-debugfs-build.txt` | four-kernel build record of the T28 hosting attempt; the hosting itself was removed in T30, kept as history |
+| `docs/evidence/scanout/06-crc-debugfs-runtime.txt` | SKIP record for the T28 hosted files as uid 1005; superseded by `09-crc-single-owner.txt` |
+| `docs/evidence/scanout/09-crc-single-owner.txt` | T30: core owns `crtc-N/crc/{control,data}`, the deleted driver symbols, the two defects found (positive return from `drm_vblank_work_schedule()`, lastclose console restore), the seven gate exit codes and the root run ending in `RESULT: scanout CRC check passed` |
+| `docs/evidence/scanout/08-crc-stream-fix.txt` | T29: the stalled stream diagnosis (a failed region check returned before the re-arm), the fix, the gate transcript, and the runtime run that still produced no entries |
 | `docs/evidence/baseline/11-journalctl.txt` | whether `journalctl -k` substitutes for `dmesg` |
 | `docs/evidence/baseline/12-external-suites.txt` | repository availability of the external suites |
 | `docs/evidence/baseline/13-make-check-count.txt` | the 17 recipe lines of the `check` target |

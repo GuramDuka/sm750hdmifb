@@ -63,8 +63,10 @@ int main(int argc, char **argv)
 	void *map = MAP_FAILED;
 	char detail[128];
 
-	if (argc != 3) {
-		fprintf(stderr, "usage: %s <card-node> <black|white>\n", argv[0]);
+	if (argc != 3 && argc != 4) {
+		fprintf(stderr,
+			"usage: %s <card-node> <black|white> [hold-seconds]\n",
+			argv[0]);
 		return 1;
 	}
 	node = argv[1];
@@ -180,7 +182,11 @@ int main(int argc, char **argv)
 	}
 	printf("%s: connector %u crtc %u %ux%u %s fb %u\n", node, conn_id,
 	       crtc_id, mode.hdisplay, mode.vdisplay, argv[2], fb);
+	fflush(stdout);
 	ret = 0;
+	/* Keep the frame and the master while a caller samples it. */
+	if (argc == 4)
+		sleep(atoi(argv[3]));
 
 out:
 	if (map != MAP_FAILED)

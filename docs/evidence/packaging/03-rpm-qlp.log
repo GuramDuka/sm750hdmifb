@@ -1,4 +1,4 @@
-# utc: 2026-11-19T05:35:23Z
+# utc: 2026-11-19T15:19:25Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
 # command: rpm -qlp / -qplv / -qpc /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
@@ -99,14 +99,14 @@ drwxr-xr-x    2 root     root                        0 ноя 18 03:00 /usr/lib/
 -rw-r--r--    1 root     root                      252 ноя 18 03:00 /usr/share/X11/xorg.conf.d/20-sm750hdmidrm.conf
 drwxr-xr-x    2 root     root                        0 ноя 18 03:00 /usr/share/doc/sm750hdmifb
 -rw-r--r--    1 root     root                    17984 ноя 17 18:40 /usr/share/doc/sm750hdmifb/LICENSE
--rw-r--r--    1 root     root                    28753 ноя 18 03:00 /usr/share/doc/sm750hdmifb/README.md
+-rw-r--r--    1 root     root                    35254 ноя 18 03:00 /usr/share/doc/sm750hdmifb/README.md
 -rw-r--r--    1 root     root                     6931 ноя 18 03:00 /usr/share/doc/sm750hdmifb/RELEASE-NOTES.md
 -rw-r--r--    1 root     root                     4173 ноя 18 03:00 /usr/share/doc/sm750hdmifb/TESTING.md
 -rw-r--r--    1 root     root                      686 ноя 17 18:40 /usr/share/doc/sm750hdmifb/copyright
 drwxr-xr-x    2 root     root                        0 ноя 18 03:00 /usr/src/sm750hdmifb-0.6.0
 -rw-r--r--    1 root     root                    17984 ноя 18 03:00 /usr/src/sm750hdmifb-0.6.0/LICENSE
--rw-r--r--    1 root     root                     3622 ноя 18 03:00 /usr/src/sm750hdmifb-0.6.0/Makefile
--rw-r--r--    1 root     root                    28753 ноя 18 03:00 /usr/src/sm750hdmifb-0.6.0/README.md
+-rw-r--r--    1 root     root                     4377 ноя 18 03:00 /usr/src/sm750hdmifb-0.6.0/Makefile
+-rw-r--r--    1 root     root                    35254 ноя 18 03:00 /usr/src/sm750hdmifb-0.6.0/README.md
 -rw-r--r--    1 root     root                      381 ноя 18 03:00 /usr/src/sm750hdmifb-0.6.0/dkms.conf
 drwxr-xr-x    2 root     root                        0 ноя 18 03:00 /usr/src/sm750hdmifb-0.6.0/src
 -rw-r--r--    1 root     root                      385 ноя 18 03:00 /usr/src/sm750hdmifb-0.6.0/src/Kconfig
@@ -129,7 +129,7 @@ drwxr-xr-x    2 root     root                        0 ноя 18 03:00 /usr/src/
 -rw-r--r--    1 root     root                      993 ноя 18 03:00 /usr/src/sm750hdmifb-0.6.0/src/sii902x.h
 -rw-r--r--    1 root     root                    17855 ноя 18 03:00 /usr/src/sm750hdmifb-0.6.0/src/sm750_dither.c
 -rw-r--r--    1 root     root                     3155 ноя 18 03:00 /usr/src/sm750hdmifb-0.6.0/src/sm750_dither.h
--rw-r--r--    1 root     root                   127689 ноя 18 03:00 /usr/src/sm750hdmifb-0.6.0/src/sm750_drm.c
+-rw-r--r--    1 root     root                   141688 ноя 18 03:00 /usr/src/sm750hdmifb-0.6.0/src/sm750_drm.c
 -rw-r--r--    1 root     root                     2305 ноя 18 03:00 /usr/src/sm750hdmifb-0.6.0/src/sm750_drm_mode.c
 -rw-r--r--    1 root     root                      658 ноя 18 03:00 /usr/src/sm750hdmifb-0.6.0/src/sm750_drm_mode.h
 --- config files ---

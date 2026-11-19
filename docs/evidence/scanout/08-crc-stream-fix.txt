@@ -1,0 +1,181 @@
+# T26 follow-up: the scanout CRC stream died after one failed region check
+# Captured 2026-11-19T13:08Z, actor gem-implementer, tree at d3fbc65 + this change.
+# Host kernel 7.3.4-100.fc43.x86_64. No root was used: the runtime half of the
+# gate is a separate root step (section 5).
+
+1. The defect that was reproduced
+--------------------------------
+Root run of tests/check-scanout-crc.sh on a module rebuilt from d3fbc65
+(/mega/tmp/sm750/scanout-crc.txt, 15:34Z):
+
+  PASS: crc source list exposes scanout: scanout
+  scanout-pattern: opened: /dev/dri/card0
+  scanout-pattern: filled: 1920x1080 pitch 7680 size 8294400
+  scanout-pattern: added: fb 45
+  /dev/dri/card0: connector 35 crtc 38 1920x1080 black fb 45
+  FAIL: CRC data yielded no entries in 20 s
+
+`crc/control` accepted the write (a refused write makes the script print SKIP
+and exit 77, and no SKIP line is present), `crc/source` listed `scanout`, and
+two 20 s samples of `crc/data` returned nothing.
+
+2. Code as committed before this change, and what it makes inevitable
+--------------------------------------------------------------------
+Before the change, src/sm750_drm.c had:
+
+  sm750_crc_work_fn():  first statement
+      if (!READ_ONCE(sdev->crc_enabled) ||
+          !sm750_crc_region(sdev, &offset, &length))
+              return;
+  ... crc32, drm_crtc_add_crc_entry(), sm750_crc_push() ...
+  last statement
+      if (READ_ONCE(sdev->crc_enabled))
+              drm_vblank_work_schedule(&sdev->crc_work,
+                                       drm_crtc_vblank_count(crtc) + 1, false);
+
+so the only re-arm sat behind the region check. One tick that met an unreadable
+window returned and never scheduled the next tick: the stream stopped for the
+lifetime of the enable, while `crc/control` kept reading `scanout` and nothing
+was logged anywhere. That is, by construction, exactly the observed symptom.
+
+`sm750_crc_enable()` did not validate the region, so it returned success for a
+stream that could not produce a single entry.
+
+3. Which hypothesis explains the run
+-----------------------------------
+(a) the non-re-arming early return - PROVEN as a defect (section 2), and proven
+    to be indistinguishable from the observed transcript. It is also the reason
+    the driver could not heal itself: with no tick there is no re-arm, and with
+    the early return in front of the re-arm a failed tick ends the stream.
+(b) geometry never recorded for a legacy drmModeSetCrtc - REFUTED by the code:
+    sm750_pipe_enable() records scanout_pitch/scanout_offset/scanout_frame_size
+    unconditionally on both the shadow path (offset 0, computed pitch) and the
+    direct path, before sm750_program_mode() is called, and DRM routes
+    drmModeSetCrtc through the same atomic commit and the same pipe->enable
+    callback. The same transcript shows that SetCrtc succeeded at 1920x1080 and
+    the same tree measures 60.11 DRM vblanks/s (docs/evidence/.../g-check.txt
+    15:21Z), which needs a programmed mode.
+(c) the work item not firing at all - PROVEN for this run as the *state* the
+    arm was made in, hypothesis for the core behaviour that ended it: the
+    script wrote `crc/control` before its first SetCrtc, and the arm was
+    accepted on a CRTC with no mode (fresh module load; the driver applies no
+    initial mode; CONFIG_FB_DEVICE is unset on this host, so the fbdev client
+    never sets one). sm750_pipe_enable_vblank() cannot start the vblank hrtimer
+    without a mode (it returns -EINVAL on mode->clock == 0), and the vblank work
+    is driven by drm_crtc_handle_vblank(), so no tick could run against that
+    arm. The transcript cannot separate "no tick ran" from "one tick ran and
+    hit the region check", because both end in silence; but the fix removes both
+    states, and the arm that produced the run is now refused at the door.
+
+Explicitly: yes, the new tick continues under (a). The re-arm is no longer
+behind the region check, so a tick that finds no window warns once, keeps
+ticking, and starts producing entries as soon as the geometry is recorded (the
+same vblank or the next).
+
+4. The change (src/sm750_drm.c)
+------------------------------
+struct sm750_drm_device (:374-375)
+  bool crc_warned;  once-per-enable-cycle warning latch
+  bool crc_vblank;  true while the vblank reference is held by the CRC source
+
+sm750_crc_region_missing() (:3075-3086) names the unreadable field: "vram",
+  "pitch", "frame size", "offset bound".
+sm750_crc_region() (:3089-3112) same bounds as before, now also hands the
+  reason back to the caller through `const char **missing`.
+sm750_crc_region_warn() (:3120-3129) READ_ONCE/WRITE_ONCE latch plus one
+  drm_warn naming the missing field; the text says the source keeps running.
+sm750_crc_halt() (:3160-3169) cancel_sync plus a vblank_put only when the
+  reference is actually held. Caller holds crc_mutex.
+sm750_crc_stop() (:3172-3177) clears crc_enabled and the warn latch, then halts.
+sm750_crc_disable() (:3179-3184) user path, unchanged shape.
+sm750_crc_suspend() (:3194-3200) parks the stream on pipe disable and keeps
+  crc_enabled, so a modeset can resume it; cancels before drm_crtc_vblank_off()
+  in sm750_pipe_disable() (:3845) because vblank work waits on an absolute count
+  that the vblank off/on pair rebuilds.
+sm750_crc_arm() (:3208-3222) the single vblank_get + schedule point.
+sm750_crc_enable() (:3230-3257) validates the region first and returns -ENODEV
+  with one drm_err line when the geometry is missing; clears the latch and arms
+  through sm750_crc_arm().
+sm750_crc_resume() (:3267-3282) called from sm750_pipe_enable() at :3756
+  (success path) and :3790 (the A27 fail path), both directly after
+  drm_crtc_vblank_on(), with a comment on why that order matters: the work is
+  scheduled against drm_crtc_vblank_count(), which vblank-on rebuilds. The
+  crc_vblank latch keeps a second enable from leaking a reference.
+sm750_crc_work_fn() (:3314-3349) the unconditional tick: region check decides
+  what the tick does (warn once, or crc32 + drm_crtc_add_crc_entry() +
+  sm750_crc_push()), then the re-arm outside that check, guarded only by
+  crc_enabled, warning once if the core refuses the schedule.
+sm750_scanout_show() (:4044) now prints which field is missing instead of a
+  bare "# no scanout buffer programmed".
+
+What enable returns now: -ENODEV (with "crc: scanout source not armed, cannot
+read the window: <field> missing") when vram, pitch, frame size or the offset
+bound is not recorded; the control write fails instead of reporting success.
+
+tests/check-scanout-crc.sh now draws the first frame before it arms the source,
+because the arm is only honest once the CRTC scans out; its SKIP text names the
+unrecorded geometry. The rest of the script is unchanged, so the assertions are
+unchanged.
+
+5. Gate transcript (verbatim, LC_ALL=C)
+--------------------------------------
+Builds, `make -C <kdir> M=$PWD/src CC=/usr/bin/gcc modules`, logs in
+/mega/tmp/sm750/crcfix/build-*.log:
+
+  7.2.15-100.fc43.x86_64   exit=0 warnings=0
+  7.3.3-100.fc43.x86_64    exit=0 warnings=0
+  7.3.4-100.fc43.x86_64    exit=0 warnings=0
+  6.17.1-300.fc43.x86_64   exit=0 warnings=1
+
+The single 6.17.1 warning is the kernel's own "the compiler differs from the
+one used to build the kernel" (build-6.17.1-300.fc43.x86_64.log:3); no driver
+warning in any log.
+
+  $ export PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig
+  $ export PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm
+  $ export LD_LIBRARY_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64
+  $ make CC=/usr/bin/gcc check                     exit 0
+  $ ./tests/check-release-version.sh                exit 0
+  $ ./tests/check-drm-packaging.sh                  exit 0
+  $ ./tests/check-static.sh                         exit 0
+      last lines: coccinelle: exit 0, 0 finding(s)
+                  pahole: exit 0 (informational, struct layout in ...)
+                  static gate: PASS (raw logs in /tmp/sm750-static.t8NRnz)
+  $ ./tests/check-drm-policy.sh                     exit 0
+      last line: DRM mode policy checks passed
+  $ ./tests/check-crc-uapi.sh                       exit 0
+  $ make crc-check                                  exit 0, skipped at runtime
+      SKIP: root is required: /sys/kernel/debug and its crc files are mode 0700
+      (the Makefile maps exit 77 to 0; recorded here, not counted as a pass)
+
+`make CC=/usr/bin/gcc check` without the rootless libdrm exports stops at
+check-deps ("libdrm development files are required by tests/check-vblank"), as
+documented in docs/ENVIRONMENT.md; the exports above are the documented recipe.
+
+tests/check-crc-uapi.sh now asserts the four new invariants and rejects seven
+new planted defects (its own output):
+
+  negative control early_return: rejected (exit 1): the CRC tick can return
+    before it re-arms: one region failure ends the stream
+  negative control enable_without_region: rejected (exit 1): sm750_crc_enable
+    does not fail with -ENODEV on missing geometry
+  negative control no_warn_latch: rejected (exit 1): sm750_crc_region_warn has
+    no latch: it would warn every vblank
+  negative control latch_not_cleared: rejected (exit 1): disabling the source
+    does not clear the warn-once latch
+  negative control no_modeset_rearm: rejected (exit 1): sm750_pipe_enable never
+    re-arms the CRC stream after a modeset
+  negative control rearm_before_vblank_on: rejected (exit 1): sm750_pipe_enable
+    re-arms the CRC stream before drm_crtc_vblank_on()
+  negative control source_not_parked: rejected (exit 1): sm750_pipe_disable
+    stops the CRC source instead of parking it
+
+The six earlier controls (callbacks, control file, count line, field order, 0x
+prefix, ring depth) still reject, so the gate is not decorative.
+
+6. Still open
+-------------
+One root run of `make crc-check` on a module rebuilt from this tree. With this
+change the arm happens after the first frame, so a pass now also proves that
+the vblank work fires from drm_crtc_handle_vblank() on this card; if the arm is
+refused the SKIP line names the geometry instead of the stream dying silently.

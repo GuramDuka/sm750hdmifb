@@ -1831,6 +1831,44 @@ and make crc-check all exit 0; four kernel builds exit 0.
   absence of `0x` in the data path and rejects six planted defects, and the
   strip of a `0x` prefix in `tests/check-scanout-crc.sh` was reverted because
   the crc field no longer carries one.
+- Follow-up (2026-11-19T13:08Z, live defect): a root run on a module built from
+  d3fbc65 read `scanout` from `crc/control`, listed `scanout` in `crc/source`,
+  and still got no `crc/data` entry in 20 s (`FAIL: CRC data yielded no entries
+  in 20 s`, `/mega/tmp/sm750/scanout-crc.txt`). Cause, proven by the code:
+  `sm750_crc_work_fn()` had the region check in an early `return` and its only
+  re-arm as the last statement, so a single tick that could not read the window
+  ended the stream for the life of the enable while `control` kept reporting
+  `scanout`; `sm750_crc_enable()` did not validate the region, so the write
+  succeeded on a CRTC that could not produce an entry. Geometry-not-recorded
+  (hypothesis b) is refuted: `sm750_pipe_enable()` records pitch, offset and
+  frame size on both the shadow and the direct path before `sm750_program_mode()`,
+  and `drmModeSetCrtc` reaches the same callback. The transcript is also
+  consistent with an arm accepted before the first modeset (the script wrote
+  `control` before its first SetCrtc, the driver sets no initial mode, and the
+  fbdev client is inert because `CONFIG_FB_DEVICE` is unset), where
+  `sm750_pipe_enable_vblank()` cannot start the vblank hrtimer without a mode;
+  which of the two states the run hit cannot be separated from the transcript,
+  and the fix removes both.
+- Change: `sm750_crc_work_fn()` (src/sm750_drm.c:3314-3349) is now an
+  unconditional tick - the region check only decides what the tick does (warn
+  once, or crc32 + `drm_crtc_add_crc_entry()` + `sm750_crc_push()`), and the
+  re-arm sits outside it, guarded only by `crc_enabled`, so no failure can stop
+  the stream. `sm750_crc_enable()` (:3230-3257) validates the region first and
+  returns `-ENODEV` with one `drm_err` naming the missing field.
+  `sm750_crc_region_missing()` (:3075-3086) and `sm750_crc_region_warn()`
+  (:3120-3129, `crc_warned` latch cleared by disable) make the silence
+  diagnosable; `sm750_crc_suspend()` (:3194-3200) parks the stream in
+  `sm750_pipe_disable()` (:3845) and `sm750_crc_resume()` (:3267-3282) re-arms it
+  right after `drm_crtc_vblank_on()` in `sm750_pipe_enable()` (:3756, :3790),
+  because the work is scheduled against `drm_crtc_vblank_count()`, which
+  vblank-on rebuilds. `tests/check-crc-uapi.sh` asserts the four invariants and
+  rejects seven new planted defects; `tests/check-scanout-crc.sh` now draws the
+  first frame before arming the source. Evidence:
+  `docs/evidence/scanout/08-crc-stream-fix.txt`. Builds 7.2.15-100, 7.3.3-100,
+  7.3.4-100 and 6.17.1-300 compile the module with zero driver warnings (the
+  6.17.1 log carries only the kernel's own compiler-differs note); `make check`
+  and the five gate scripts pass, and `make crc-check` still stops at the root
+  check (exit 77 mapped to 0). Version stays 0.6.0; tree left dirty for review.
 
 ### 2026-11-19T12:41Z | gem-implementer | Correction to the 11:54Z T26 entry: bounds fix in the control write
 
@@ -1869,3 +1907,47 @@ and make crc-check all exit 0; four kernel builds exit 0.
   check-static, check-crc-uapi, check-drm-policy, make crc-check all exit 0.
 - Still owed: one root run of tests/check-scanout-crc.sh on a module rebuilt and
   reloaded from this tree (AC-3 tiers 4 and 5). Version stays 0.6.0.
+
+### 2026-11-19T15:22Z | gem-implementer | T30: DRM core owns crtc-N/crc, the driver shim is deleted
+
+- Corrects the 11:54Z T26 entry and the 12:25Z T28 acceptance: the `crtc-N/crc`
+  directory and its `control` and `data` files are DRM core's, not the driver's.
+  With the driver's own creation disabled, a fresh load shows
+  `crtc-0/crc/{control,data}` and no `source`, plus dmesg
+  `debugfs: 'control' already exists in 'crc'` and
+  `debugfs: 'data' already exists in 'crc'` - core creates both and routes them
+  to `drm_crtc_funcs`.
+- Deleted from `src/sm750_drm.c`: `SM750_CRC_ENTRIES`, `SM750_CRC_COUNT_LINE`,
+  `SM750_CRC_LINE_LEN`, `struct sm750_crc_entry`, the ring fields
+  (`crc_entries`, `crc_head`, `crc_tail`, `crc_count`, `crc_count_sent`,
+  `crc_opened`), `sm750_crc_push()`, `sm750_crc_source_fops`,
+  `sm750_crc_control_fops`, `sm750_crc_data_fops`,
+  `sm750_crc_data_open/read/poll/release`, `sm750_crc_control_read/write`,
+  `sm750_crc_source_show/read`, `sm750_crc_debugfs_create()`,
+  `sm750_crtc_late_register()` with its `.late_register` assignment, and the
+  `sm750_crc_debugfs_create(minor->dev)` call in `sm750_regs_debugfs_add()`.
+  Kept: arm/halt/enable/suspend/resume, `sm750_crc_work_fn()` (one
+  `drm_crtc_add_crc_entry(crtc, true, frame, &crc)` per frame) and the three CRC
+  hooks; `"auto"` is accepted exactly like `"scanout"`, `verify_crc_source()`
+  sets `*values_cnt = 1`, `get_crc_sources()` returns one name with
+  `*count = 1`. No crc `debugfs_create_*` call is left in `src/`.
+- Defect found on the stock path and fixed: `drm_vblank_work_schedule()` returns
+  1 on its queued paths, and `sm750_crc_arm()` treated any non-zero return as a
+  failure, so `set_crc_source()` returned 1, `crtc_crc_open()` propagated it and
+  userspace saw `openat(crtc-0/crc/data) = -1 EINVAL`. Arm and re-arm now test
+  `ret < 0`.
+- Defect found while validating content: the check's drawer exited before
+  sampling and DRM's lastclose restored the fbdev console frame over the
+  pattern (the driver registers an fbdev client with `drm_client_setup()` at
+  `src/sm750_drm.c:4280`). `tests/check-scanout-crc.sh` now keeps the drawer
+  alive while it samples; its sampling logic is unchanged.
+- Gates, all exit 0: `tests/check-crc-uapi.sh` (seven planted defects rejected),
+  `tests/check-drm-policy.sh`, `make CC=/usr/bin/gcc check`,
+  `tests/check-release-version.sh` (0.6.0), `tests/check-drm-packaging.sh`,
+  `tests/check-static.sh`, `tests/check-rpm-dkms.sh`. Builds: 7.3.4-100 in-tree
+  and 6.17.1-300 out-of-tree, no driver warning.
+- Runtime: one root helper run, `sudo -n /usr/local/sbin/sm750-crc-cycle --diag`,
+  exit 0, `RESULT: scanout CRC check passed`, black 0xe20eea22 against white
+  0x06cf606c, 262144 of 262144 nonzero bytes for the white frame. Transcript
+  `docs/evidence/scanout/09-crc-single-owner.txt`. Version stays 0.6.0; tree
+  left dirty for review, no commit.

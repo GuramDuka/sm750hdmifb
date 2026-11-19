@@ -285,19 +285,6 @@ static const char *sm750_mode_stage_name(enum sm750_mode_stage stage)
 	return sm750_mode_stage_names[stage];
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
-/* One CRC entry per vblank, same depth as the DRM core ring. */
-#define SM750_CRC_ENTRIES 128
-/* The UAPI count line: one CRC value per entry, sent once per open. */
-#define SM750_CRC_COUNT_LINE "1\n"
-/* "%u %08x\n": decimal frame counter, one hex CRC, no 0x prefix. */
-#define SM750_CRC_LINE_LEN 20
-
-struct sm750_crc_entry {
-	u32 frame;
-	u32 crc;
-};
-#endif
 
 struct sm750_drm_device {
 	struct drm_device drm;
@@ -371,17 +358,9 @@ struct sm750_drm_device {
 	u16 vblank_vtotal;
 	bool vblank_timer_enabled;
 	bool crc_enabled;
+	bool crc_warned;
+	bool crc_vblank;
 	struct mutex crc_mutex;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
-	struct sm750_crc_entry crc_ring[SM750_CRC_ENTRIES];
-	unsigned int crc_head;
-	unsigned int crc_tail;
-	unsigned int crc_count;
-	spinlock_t crc_lock;
-	wait_queue_head_t crc_wait;
-	bool crc_opened;
-	bool crc_count_sent;
-#endif
 	enum sm750_mode_stage mode_stage;
 	bool phase_falling;
 	bool shadow_scanout;
@@ -3064,25 +3043,66 @@ static void sm750_send_vblank_event(struct drm_simple_display_pipe *pipe)
  * quantise and dither, so scanout bytes are not a copy of the XRGB source.
  */
 
+/*
+ * Name the field that keeps the scanout window unreadable, or NULL when the
+ * window can be read. The modeset records the geometry, so the CRC tick can
+ * run while one of these is still unset; naming it is what turns a silent
+ * empty stream into a diagnosable one.
+ */
+static const char *sm750_crc_region_missing(struct sm750_drm_device *sdev)
+{
+	if (!sdev->vram)
+		return "vram";
+	if (!sdev->scanout_pitch)
+		return "pitch";
+	if (!sdev->scanout_frame_size)
+		return "frame size";
+	if (sdev->scanout_offset >= sdev->vram_size)
+		return "offset bound";
+	return NULL;
+}
+
 /* Bounded window: crc_window_bytes from the visible scanout offset. */
 static bool sm750_crc_region(struct sm750_drm_device *sdev, u32 *offset,
-			     size_t *length)
+			     size_t *length, const char **missing)
 {
+	const char *why = sm750_crc_region_missing(sdev);
 	u64 window = max_t(u64, round_down((u64)READ_ONCE(crc_window_bytes), 4),
 			   4096);
-	u64 visible = sdev->scanout_frame_size;
+	u64 visible;
 
-	if (!sdev->vram || !sdev->scanout_pitch || !visible)
+	if (missing)
+		*missing = why;
+	if (why)
 		return false;
-	if (sdev->scanout_offset >= sdev->vram_size)
-		return false;
-	visible = min_t(u64, visible, sdev->vram_size - sdev->scanout_offset);
+	visible = min_t(u64, sdev->scanout_frame_size,
+			sdev->vram_size - sdev->scanout_offset);
 	window = round_down(min(window, visible), 4);
-	if (!window)
+	if (!window) {
+		if (missing)
+			*missing = "frame size";
 		return false;
+	}
 	*offset = sdev->scanout_offset;
 	*length = window;
 	return true;
+}
+
+/*
+ * One warning per enable cycle: the tick never stops for a missing window, so
+ * without a latch a card whose geometry is not recorded would fill dmesg at
+ * the refresh rate. The latch is cleared by disable and by every re-arm, so a
+ * later cycle reports its own reason.
+ */
+static void sm750_crc_region_warn(struct sm750_drm_device *sdev,
+				  const char *missing)
+{
+	if (READ_ONCE(sdev->crc_warned))
+		return;
+	WRITE_ONCE(sdev->crc_warned, true);
+	drm_warn(&sdev->drm,
+		 "crc: scanout source is enabled but cannot read the window: %s missing; it keeps running and recovers once the modeset records the geometry\n",
+		 missing ? missing : "reason");
 }
 
 /* CRC32 (IEEE, zlib-compatible) and nonzero-byte count over the window. */
@@ -3109,19 +3129,30 @@ static u32 sm750_scanout_crc32(struct sm750_drm_device *sdev, u32 offset,
 	return crc ^ ~0U;
 }
 
-/* Stop CRC generation: caller holds crc_mutex. */
-static void sm750_crc_stop(struct sm750_drm_device *sdev)
+/*
+ * Cancel the work and drop the vblank reference it holds. Caller holds
+ * crc_mutex: cancel_sync waits for a running tick, so no path reachable from
+ * the work item may take that mutex.
+ */
+static void sm750_crc_halt(struct sm750_drm_device *sdev)
 {
 	struct drm_crtc *crtc = &sdev->pipe.crtc;
 
-	if (!sdev->crc_enabled)
-		return;
-	sdev->crc_enabled = false;
 	drm_vblank_work_cancel_sync(&sdev->crc_work);
-	drm_crtc_vblank_put(crtc);
+	if (sdev->crc_vblank) {
+		sdev->crc_vblank = false;
+		drm_crtc_vblank_put(crtc);
+	}
 }
 
-/* Drop CRC generation: no work pending, no vblank reference, no state. */
+/* User disabled the source: no work pending, no vblank reference, no state. */
+static void sm750_crc_stop(struct sm750_drm_device *sdev)
+{
+	sdev->crc_enabled = false;
+	sdev->crc_warned = false;
+	sm750_crc_halt(sdev);
+}
+
 static void sm750_crc_disable(struct sm750_drm_device *sdev)
 {
 	mutex_lock(&sdev->crc_mutex);
@@ -3129,15 +3160,61 @@ static void sm750_crc_disable(struct sm750_drm_device *sdev)
 	mutex_unlock(&sdev->crc_mutex);
 }
 
+/*
+ * The pipe is about to go away but the user still wants CRCs: park the stream
+ * and keep crc_enabled set so sm750_crc_resume() re-arms it on the next enable.
+ * The work item is cancelled here, before drm_crtc_vblank_off() runs in
+ * sm750_pipe_disable(): vblank work waits for an absolute vblank count, which
+ * the vblank off/on pair rebuilds, so an item left queued across that pair
+ * would wait on a count that no longer exists.
+ */
+static void sm750_crc_suspend(struct sm750_drm_device *sdev)
+{
+	mutex_lock(&sdev->crc_mutex);
+	if (sdev->crc_enabled)
+		sm750_crc_halt(sdev);
+	mutex_unlock(&sdev->crc_mutex);
+}
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
 /*
- * Arm the scanout CRC source: one vblank reference keeps vblanks coming, one
- * work item per vblank produces the entries. Shared by the CRTC callback and
- * the crc/control debugfs file so there is a single arm path.
+ * Start the tick: one vblank reference keeps vblanks coming, one work item per
+ * vblank produces the entries. Shared by enable and the modeset re-arm so
+ * there is a single schedule point.
+ */
+static int sm750_crc_arm(struct sm750_drm_device *sdev)
+{
+	struct drm_crtc *crtc = &sdev->pipe.crtc;
+	int ret;
+
+	ret = drm_crtc_vblank_get(crtc);
+	if (ret) {
+		drm_err(&sdev->drm,
+			"crc: scanout source cannot take a vblank reference: %d\n",
+			ret);
+		return ret;
+	}
+	sdev->crc_vblank = true;
+	ret = drm_vblank_work_schedule(&sdev->crc_work,
+				       drm_crtc_vblank_count(crtc) + 1, false);
+	if (ret < 0) {
+		sm750_crc_halt(sdev);
+		return ret;
+	}
+	return 0;
+}
+
+/*
+ * Arm the scanout CRC source. Refusing here is the honest answer: a stream
+ * whose window is not recorded would otherwise report success and never
+ * produce an entry, which is indistinguishable from a broken tick. Shared by
+ * the CRTC callback and the crc/control debugfs file.
  */
 static int sm750_crc_enable(struct sm750_drm_device *sdev)
 {
-	struct drm_crtc *crtc = &sdev->pipe.crtc;
+	const char *missing = NULL;
+	size_t length;
+	u32 offset;
 	int ret;
 
 	mutex_lock(&sdev->crc_mutex);
@@ -3145,12 +3222,16 @@ static int sm750_crc_enable(struct sm750_drm_device *sdev)
 		ret = 0;
 		goto out_unlock;
 	}
-	ret = drm_crtc_vblank_get(crtc);
-	if (ret)
+	if (!sm750_crc_region(sdev, &offset, &length, &missing)) {
+		drm_err(&sdev->drm,
+			"crc: scanout source not armed, cannot read the window: %s missing\n",
+			missing ? missing : "reason");
+		ret = -ENODEV;
 		goto out_unlock;
+	}
 	sdev->crc_enabled = true;
-	ret = drm_vblank_work_schedule(&sdev->crc_work,
-				       drm_crtc_vblank_count(crtc) + 1, false);
+	sdev->crc_warned = false;
+	ret = sm750_crc_arm(sdev);
 	if (ret)
 		sm750_crc_stop(sdev);
 out_unlock:
@@ -3159,51 +3240,70 @@ out_unlock:
 }
 
 /*
- * Copy one entry into the driver ring. CRC generation runs in the vblank work
- * item, so the ring is spinlock protected: nothing here may sleep.
+ * The pipe is enabled again with CRC still selected: re-arm. Ordering matters:
+ * drm_vblank_work_schedule() targets an absolute count derived from
+ * drm_crtc_vblank_count(), so this must run after drm_crtc_vblank_on() has
+ * rebuilt the vblank counter - arming before it would queue the work on a stale
+ * count and it would fire at once or never - and the item was already
+ * cancelled by sm750_crc_suspend() in the disable path.
  */
-static void sm750_crc_push(struct sm750_drm_device *sdev, u32 frame, u32 crc)
+static void sm750_crc_resume(struct sm750_drm_device *sdev)
 {
-	unsigned long flags;
+	int ret;
 
-	spin_lock_irqsave(&sdev->crc_lock, flags);
-	if (sdev->crc_opened) {
-		if (sdev->crc_count == SM750_CRC_ENTRIES) {
-			sdev->crc_tail = (sdev->crc_tail + 1) %
-					 SM750_CRC_ENTRIES;
-			sdev->crc_count--;
-		}
-		sdev->crc_ring[sdev->crc_head].frame = frame;
-		sdev->crc_ring[sdev->crc_head].crc = crc;
-		sdev->crc_head = (sdev->crc_head + 1) % SM750_CRC_ENTRIES;
-		sdev->crc_count++;
-	}
-	spin_unlock_irqrestore(&sdev->crc_lock, flags);
-	wake_up_interruptible(&sdev->crc_wait);
+	mutex_lock(&sdev->crc_mutex);
+	if (!sdev->crc_enabled || sdev->crc_vblank)
+		goto out_unlock;
+	sdev->crc_warned = false;
+	ret = sm750_crc_arm(sdev);
+	if (ret)
+		drm_warn(&sdev->drm,
+			 "crc: cannot re-arm the scanout source after a modeset: %d\n",
+			 ret);
+out_unlock:
+	mutex_unlock(&sdev->crc_mutex);
 }
 
-/* Per-vblank readback: one bounded read out of VRAM, one CRC entry. */
+/*
+ * Per-vblank readback: one bounded read out of VRAM, one CRC entry. The tick is
+ * unconditional while the source is enabled: the region check decides what this
+ * tick can do, never whether the stream continues. Re-arming as the last
+ * statement behind that check is what let one failed check kill CRC for good.
+ */
 static void sm750_crc_work_fn(struct kthread_work *work)
 {
 	struct sm750_drm_device *sdev = container_of(
 		to_drm_vblank_work(work), struct sm750_drm_device, crc_work);
 	struct drm_crtc *crtc = &sdev->pipe.crtc;
+	const char *missing = NULL;
 	size_t length;
 	u32 offset;
 	u32 frame;
 	u32 crc;
+	int ret;
 
-	if (!READ_ONCE(sdev->crc_enabled) ||
-	    !sm750_crc_region(sdev, &offset, &length))
-		return;
-	crc = sm750_scanout_crc32(sdev, offset, length, NULL);
-	frame = drm_crtc_vblank_count(crtc);
-	drm_crtc_add_crc_entry(crtc, true, frame, &crc);
-	sm750_crc_push(sdev, frame, crc);
-	if (READ_ONCE(sdev->crc_enabled))
-		drm_vblank_work_schedule(&sdev->crc_work,
-					 drm_crtc_vblank_count(crtc) + 1,
-					 false);
+	if (READ_ONCE(sdev->crc_enabled)) {
+		if (!sm750_crc_region(sdev, &offset, &length, &missing)) {
+			sm750_crc_region_warn(sdev, missing);
+		} else {
+			crc = sm750_scanout_crc32(sdev, offset, length, NULL);
+			frame = drm_crtc_vblank_count(crtc);
+			drm_crtc_add_crc_entry(crtc, true, frame, &crc);
+		}
+	}
+	/*
+	 * Re-arm outside the region check: a transient or persistent geometry
+	 * loss must not stop the stream.
+	 */
+	if (READ_ONCE(sdev->crc_enabled)) {
+		ret = drm_vblank_work_schedule(&sdev->crc_work,
+					       drm_crtc_vblank_count(crtc) + 1,
+					       false);
+		if (ret < 0)
+			drm_warn_once(&sdev->drm,
+				      "crc: cannot re-arm the vblank work: %d\n",
+				      ret);
+	}
 }
 
 static bool sm750_crc_source_is_scanout(const char *source)
@@ -3226,7 +3326,7 @@ static const char *const sm750_crc_sources[] = { "scanout", NULL };
 static const char *const *sm750_crtc_get_crc_sources(struct drm_crtc *crtc,
 						     size_t *count)
 {
-	*count = ARRAY_SIZE(sm750_crc_sources) - 1;
+	*count = 1;
 	return sm750_crc_sources;
 }
 
@@ -3244,241 +3344,6 @@ static int sm750_crtc_set_crc_source(struct drm_crtc *crtc, const char *source)
 	return sm750_crc_enable(sdev);
 }
 
-/*
- * Documented DRM CRC UAPI: crc/source lists the sources, crc/control selects
- * one, crc/data streams a count line ("1\n") and then "%u %08x" entry lines
- * (decimal frame counter, hex CRC). The driver hosts
- * these files because DRM creates the CRTC crc directory while it registers
- * the CRTC - before sm750_modeset_init() swaps sm750_crtc_funcs in for the
- * simple-pipe funcs - and drm_debugfs_crtc_crc_add() is not exported.
- */
-static ssize_t sm750_crc_source_read(struct file *file, char __user *ubuf,
-				     size_t count, loff_t *ppos)
-{
-	char buf[64];
-	size_t len = 0;
-	int i;
-
-	for (i = 0; sm750_crc_sources[i] && len < sizeof(buf); i++)
-		len += scnprintf(buf + len, sizeof(buf) - len, "%s\n",
-				 sm750_crc_sources[i]);
-	return simple_read_from_buffer(ubuf, count, ppos, buf, len);
-}
-
-static ssize_t sm750_crc_control_read(struct file *file, char __user *ubuf,
-				      size_t count, loff_t *ppos)
-{
-	struct drm_crtc *crtc = file_inode(file)->i_private;
-	struct sm750_drm_device *sdev = to_sm750_drm(crtc->dev);
-	const char *active = READ_ONCE(sdev->crc_enabled) ?
-			     "scanout\n" : "none\n";
-
-	return simple_read_from_buffer(ubuf, count, ppos, active,
-				       strlen(active));
-}
-
-static ssize_t sm750_crc_control_write(struct file *file,
-				       const char __user *ubuf, size_t count,
-				       loff_t *ppos)
-{
-	struct drm_crtc *crtc = file_inode(file)->i_private;
-	struct sm750_drm_device *sdev = to_sm750_drm(crtc->dev);
-	char buf[16];
-	int len;
-	int ret;
-
-	/* strncpy_from_user also bounds the copy; a longer name is truncated
-	 * and then rejected by the source check below. */
-	len = strncpy_from_user(buf, ubuf, sizeof(buf) - 1);
-	if (len < 0)
-		return len;
-	buf[len] = '\0';
-	if (len && buf[len - 1] == '\n')
-		buf[len - 1] = '\0';
-
-	if (!buf[0] || !strcmp(buf, "none")) {
-		sm750_crc_disable(sdev);
-		return count;
-	}
-	if (!sm750_crc_source_is_scanout(buf))
-		return -EINVAL;
-	ret = sm750_crc_enable(sdev);
-	return ret ? ret : count;
-}
-
-/*
- * Documented DRM CRC UAPI, as userspace parses it: the first read after open
- * returns the number of CRC values per entry ("1\n"), every later read returns
- * one entry line "%u %08x\n" - decimal frame counter, hex CRC, no 0x prefix.
- * A read blocks until an entry exists, as the DRM implementation does; the
- * ring keeps the newest entries and drops the oldest.
- */
-static ssize_t sm750_crc_data_read(struct file *file, char __user *ubuf,
-				   size_t count, loff_t *ppos)
-{
-	struct drm_crtc *crtc = file_inode(file)->i_private;
-	struct sm750_drm_device *sdev = to_sm750_drm(crtc->dev);
-	struct sm750_crc_entry entry;
-	unsigned long flags;
-	char buf[SM750_CRC_LINE_LEN];
-	size_t hdr_len = strlen(SM750_CRC_COUNT_LINE);
-	bool send_hdr;
-	int len;
-
-	if (count < SM750_CRC_LINE_LEN)
-		return -EINVAL;
-
-	/* The count line comes first, exactly once per open. */
-	spin_lock_irqsave(&sdev->crc_lock, flags);
-	send_hdr = !sdev->crc_count_sent;
-	sdev->crc_count_sent = true;
-	spin_unlock_irqrestore(&sdev->crc_lock, flags);
-	if (send_hdr) {
-		if (copy_to_user(ubuf, SM750_CRC_COUNT_LINE, hdr_len))
-			return -EFAULT;
-		*ppos += hdr_len;
-		return hdr_len;
-	}
-
-	for (;;) {
-		spin_lock_irqsave(&sdev->crc_lock, flags);
-		if (sdev->crc_count)
-			break;
-		spin_unlock_irqrestore(&sdev->crc_lock, flags);
-		if (!READ_ONCE(sdev->crc_enabled))
-			return 0;
-		if (file->f_flags & O_NONBLOCK)
-			return -EAGAIN;
-		if (wait_event_interruptible_timeout(sdev->crc_wait,
-				READ_ONCE(sdev->crc_count),
-				msecs_to_jiffies(1000)) < 0)
-			return -ERESTARTSYS;
-	}
-	entry = sdev->crc_ring[sdev->crc_tail];
-	sdev->crc_tail = (sdev->crc_tail + 1) % SM750_CRC_ENTRIES;
-	sdev->crc_count--;
-	spin_unlock_irqrestore(&sdev->crc_lock, flags);
-
-	len = scnprintf(buf, sizeof(buf), "%u %08x\n", entry.frame, entry.crc);
-	if (copy_to_user(ubuf, buf, len))
-		return -EFAULT;
-	*ppos += len;
-	return len;
-}
-
-/* A fresh open starts a fresh sample; one reader at a time. */
-static int sm750_crc_data_open(struct inode *inode, struct file *file)
-{
-	struct drm_crtc *crtc = inode->i_private;
-	struct sm750_drm_device *sdev = to_sm750_drm(crtc->dev);
-	unsigned long flags;
-
-	spin_lock_irqsave(&sdev->crc_lock, flags);
-	if (sdev->crc_opened) {
-		spin_unlock_irqrestore(&sdev->crc_lock, flags);
-		return -EBUSY;
-	}
-	sdev->crc_opened = true;
-	sdev->crc_count_sent = false;
-	sdev->crc_head = 0;
-	sdev->crc_tail = 0;
-	sdev->crc_count = 0;
-	spin_unlock_irqrestore(&sdev->crc_lock, flags);
-	return 0;
-}
-
-static int sm750_crc_data_release(struct inode *inode, struct file *file)
-{
-	struct drm_crtc *crtc = inode->i_private;
-	struct sm750_drm_device *sdev = to_sm750_drm(crtc->dev);
-
-	spin_lock_irq(&sdev->crc_lock);
-	sdev->crc_opened = false;
-	spin_unlock_irq(&sdev->crc_lock);
-	wake_up_interruptible(&sdev->crc_wait);
-	return 0;
-}
-
-static __poll_t sm750_crc_data_poll(struct file *file, poll_table *wait)
-{
-	struct drm_crtc *crtc = file_inode(file)->i_private;
-	struct sm750_drm_device *sdev = to_sm750_drm(crtc->dev);
-
-	poll_wait(file, &sdev->crc_wait, wait);
-	if (READ_ONCE(sdev->crc_count))
-		return EPOLLIN | EPOLLRDNORM;
-	return 0;
-}
-
-static const struct file_operations sm750_crc_source_fops = {
-	.owner = THIS_MODULE,
-	.read = sm750_crc_source_read,
-};
-
-static const struct file_operations sm750_crc_control_fops = {
-	.owner = THIS_MODULE,
-	.read = sm750_crc_control_read,
-	.write = sm750_crc_control_write,
-};
-
-static const struct file_operations sm750_crc_data_fops = {
-	.owner = THIS_MODULE,
-	.open = sm750_crc_data_open,
-	.release = sm750_crc_data_release,
-	.read = sm750_crc_data_read,
-	.poll = sm750_crc_data_poll,
-};
-
-/*
- * Create crc/{source,control,data} below the CRTC debugfs directory. Called
- * from the debugfs hook when the kernel created that directory first, and
- * from ->late_register for kernels that create it after the hook; an entry
- * that already exists (the DRM core created control/data) is left alone.
- */
-static void sm750_crc_debugfs_create(struct drm_device *drm)
-{
-	struct sm750_drm_device *sdev = to_sm750_drm(drm);
-	struct drm_crtc *crtc = &sdev->pipe.crtc;
-	bool dir_ref = false;
-	struct dentry *dir;
-	struct dentry *ent;
-
-	if (IS_ERR_OR_NULL(crtc->debugfs_entry))
-		return;
-
-	dir = debugfs_lookup("crc", crtc->debugfs_entry);
-	if (dir) {
-		dir_ref = true;
-	} else {
-		dir = debugfs_create_dir("crc", crtc->debugfs_entry);
-		if (IS_ERR(dir)) {
-			drm_dbg(drm, "crc: no debugfs directory (%pe)\n", dir);
-			return;
-		}
-	}
-
-	ent = debugfs_create_file("source", 0444, dir, crtc,
-				  &sm750_crc_source_fops);
-	if (IS_ERR(ent) && PTR_ERR(ent) != -EEXIST)
-		drm_dbg(drm, "crc: no source file (%pe)\n", ent);
-	ent = debugfs_create_file("control", 0644, dir, crtc,
-				  &sm750_crc_control_fops);
-	if (IS_ERR(ent) && PTR_ERR(ent) != -EEXIST)
-		drm_dbg(drm, "crc: no control file (%pe)\n", ent);
-	ent = debugfs_create_file("data", 0444, dir, crtc,
-				  &sm750_crc_data_fops);
-	if (IS_ERR(ent) && PTR_ERR(ent) != -EEXIST)
-		drm_dbg(drm, "crc: no data file (%pe)\n", ent);
-
-	if (dir_ref)
-		dput(dir);
-}
-
-static int sm750_crtc_late_register(struct drm_crtc *crtc)
-{
-	sm750_crc_debugfs_create(crtc->dev);
-	return 0;
-}
 #endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0) */
 
 static int sm750_pipe_enable_vblank(struct drm_simple_display_pipe *pipe)
@@ -3609,6 +3474,10 @@ static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 				 "full-frame backbuffer staging enabled (%u bytes per buffer)\n",
 				 sdev->scanout_frame_size);
 		drm_crtc_vblank_on(&pipe->crtc);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+		/* After vblank_on(): the re-arm targets the rebuilt count. */
+		sm750_crc_resume(sdev);
+#endif
 		sm750_arm_vblank_event(pipe);
 		return;
 	}
@@ -3639,6 +3508,10 @@ fail:
 	 * be started, so either branch is terminal.
 	 */
 	drm_crtc_vblank_on(&pipe->crtc);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+	/* After vblank_on(): the re-arm targets the rebuilt count. */
+	sm750_crc_resume(sdev);
+#endif
 	sm750_arm_vblank_event(pipe);
 }
 
@@ -3692,7 +3565,7 @@ static void sm750_pipe_disable(struct drm_simple_display_pipe *pipe)
 	struct sm750_drm_device *sdev = pipe_to_sm750(pipe);
 
 	sm750_async_quiesce(sdev);
-	sm750_crc_disable(sdev);
+	sm750_crc_suspend(sdev);
 	drm_crtc_vblank_off(&pipe->crtc);
 	sm750_send_vblank_event(pipe);
 	if (sdev->hardware_cursor) {
@@ -3758,7 +3631,6 @@ static const struct drm_crtc_funcs sm750_crtc_funcs = {
 #else
 	.reset = drm_atomic_helper_crtc_reset,
 #endif
-	.late_register = sm750_crtc_late_register,
 	.destroy = drm_crtc_cleanup,
 	.set_config = drm_atomic_helper_set_config,
 	.page_flip = drm_atomic_helper_page_flip,
@@ -3879,6 +3751,7 @@ static int sm750_scanout_show(struct seq_file *m, void *unused)
 {
 	struct drm_device *drm = m->private;
 	struct sm750_drm_device *sdev = to_sm750_drm(drm);
+	const char *missing = NULL;
 	u8 line[16];
 	size_t length;
 	size_t nonzero = 0;
@@ -3889,8 +3762,9 @@ static int sm750_scanout_show(struct seq_file *m, void *unused)
 
 	if (!drm_dev_enter(drm, &idx))
 		return -ENODEV;
-	if (!sm750_crc_region(sdev, &offset, &length)) {
-		seq_puts(m, "# no scanout buffer programmed\n");
+	if (!sm750_crc_region(sdev, &offset, &length, &missing)) {
+		seq_printf(m, "# no scanout buffer programmed: %s missing\n",
+			   missing ? missing : "reason");
 		drm_dev_exit(idx);
 		return 0;
 	}
@@ -3924,9 +3798,6 @@ static void sm750_regs_debugfs_add(struct drm_minor *minor)
 			    &sm750_regs_fops);
 	debugfs_create_file("sm750_scanout", 0444, minor->debugfs_root,
 			    minor->dev, &sm750_scanout_fops);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
-	sm750_crc_debugfs_create(minor->dev);
-#endif
 }
 
 /*
@@ -4202,10 +4073,6 @@ static int sm750_pci_probe(struct pci_dev *pdev,
 	mutex_init(&sdev->crc_mutex);
 	INIT_WORK(&sdev->shadow_work, sm750_async_shadow_work);
 	spin_lock_init(&sdev->vblank_lock);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
-	spin_lock_init(&sdev->crc_lock);
-	init_waitqueue_head(&sdev->crc_wait);
-#endif
 	hrtimer_setup(&sdev->vblank_timer, sm750_vblank_timer_fn,
 		      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 
