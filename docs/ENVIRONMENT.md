@@ -356,6 +356,10 @@ The three failures are the other DRM cards in `cardN` scan order, not a
 permission error. `version 0.1.0` is the stale installed module; 0.6.0 fixes
 the reported version but needs a module reload (root) to be visible live.
 
+Update (2026-11-18 14:44Z, T11): the module was reinstalled and reloaded on
+0.6.0, so the same command now prints `(version 0.6.0 at 0)`. The capture above
+is kept as the pre-upgrade state.
+
 The three mechanisms and their state:
 
 | Mechanism | Path | State 2026-11-18 |

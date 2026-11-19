@@ -18,6 +18,23 @@
 The SM750 provides panel/DVO and analog output, not a native HDMI PHY. This
 board's separate SiI9024A converts its 24-bit parallel RGB/DVO stream to HDMI.
 
+## Observed board quirks
+
+Three behaviours of the reference board differ from what the datasheet implies.
+The driver handles each one and keeps it non-fatal:
+
+| Behaviour | Observed detail | Driver response |
+|---|---|---|
+| DMA1 completion interrupt not routed | The transfer completes and the `INT_1` bit in `DMA_ABORT_INTERRUPT` is set, but no interrupt arrives. | The first transfer is verified by polling, the interrupt is disabled and all later uploads poll the completion bit (`src/sm750_drm.c:1494-1502`). Reported once as `drm_info`. |
+| SiI9024A receiver sense absent while hot-plug is present | Register `0x3d` reads `0x04`: plug/DDC (bit 2) set, receiver sense (bit 3) clear, consistently. Behind the reference KVM chain the transmitter never asserts receiver sense. | The probe waits 2000 ms for 100 ms of stable receiver sense, then programs a forced mode anyway because DDC is not needed for it (`src/sii902x.c:540-582`). Reported as `dev_warn`. |
+| PCI cache-line-size mismatch | The kernel logs `CLS mismatch (64 != 32), using 64 bytes` for `0000:01:00.0`, as configured by the firmware. | No action; the kernel picks 64 bytes. |
+
+A timeout in either DMA or the HDMI bridge path is the real failure signal:
+`DMA1 shadow upload timed out` (CPU copies from then on) or
+`failed to enable HDMI mode`. The latter is survivable since 0.6.0 - the atomic
+commit is completed and the state stays consistent - but the underlying bridge
+timeout is still open as GAP-B8 in `docs/evidence/EVIDENCE-GAPS.md`.
+
 ## Official specification versus this driver
 
 The official SM750 specification is known to be wrong for at least one

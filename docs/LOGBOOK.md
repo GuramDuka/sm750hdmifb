@@ -1514,3 +1514,40 @@ we push to `origin`, and only ever pull from `github.com/KodeMunkie/sm750hdmifb`
   `make check`, `check-rpm-dkms.sh`, `build-package.sh` + `audit-release.sh`
   all exit 0. Archive is 116 entries, one under `docs/ci/`, none `.github`.
 - Plan decision 49 appended; `check:` recipe still 17 commands.
+
+### 2026-11-19T05:30Z | orchestrator | README and docs actualized: status, verified results, limitations, boot messages, publishing
+
+- Owner instruction (m01937): update the README and the docs, because the
+  README does not state what has been built (paraphrased; the logbook is
+  ASCII-only).
+- `README.md`: intro states release 0.6.0 and the acceptance verdict; new
+  `Status` section with a verified-state table (DKMS-built for 7.2.15-100,
+  7.3.3-100 and 7.3.4-100, loaded and exercised on 7.3.4-100; 9-combination
+  build matrix 6.17.1 through the 7.4 daily headers; atomic modeset 1920x1080;
+  60.43 vblanks/s over 120 events; IGT 26 pass / 14 skip / 1 fail by design;
+  kmscube 299 frames in 5.07 s; RPM and DKMS packaging; specification archive;
+  static analysis), the 6 PASS / 0 FAIL / 1 GAP verdict, and four limitations
+  with defect ids.
+- `README.md` corrections: the "kernels >= 7.1 are untested at runtime" claim
+  replaced by the real coverage (built 6.17-7.4, booted on 7.3.4-100);
+  `KodeMunkie` clone links and the GitHub Releases pointer replaced by the
+  GuramDuka repository and the no-prebuilt-package policy; new
+  `Boot messages that are not errors` table quoting the four boot lines with
+  their source locations; Developers gains a gate and test entry-point table
+  and the three-remote publishing policy.
+- `docs/HARDWARE.md`: new `Observed board quirks` section - unrouted DMA1
+  completion interrupt, SiI9024A receiver sense absent while plug/DDC is
+  present (register 0x3d reads 0x04), PCI cache-line-size mismatch - with the
+  driver response and the two real failure messages.
+- `docs/DELIVERABLES.md`: README, HARDWARE and RELEASE-NOTES rows updated; the
+  reproduction clone URL points at the GuramDuka repository.
+- `docs/DEFECTS.md`: A20 rationale repointed to the current release-notes
+  lines and restated (the risk is now limited to kernels newer than the last
+  validated one).
+- `docs/ENVIRONMENT.md`: the pre-upgrade `modetest` capture is marked as such,
+  with the 0.6.0 reload noted.
+- `docs/RELEASE-NOTES.md`: the 0.5.9 "kernels >= 7.1 are untested" bullet is
+  marked superseded by 0.6.0's runtime coverage.
+- Plan decision 50 appended. No source, test or packaging change.
+- Gates: `check-release-version.sh` and `check-drm-packaging.sh` pass; the
+  remaining gates re-run after the edit.

@@ -5,12 +5,15 @@
 ultrawide desktop, with bandwidth-saving colour conversion and update
 optimisations for smoother performance.**
 
-Linux display driver for the single-HDMI `SE-DP750A-HDMI` PCIe card.
+Linux display driver for the single-HDMI `SE-DP750A-HDMI` PCIe card. Current
+release **0.6.0**: atomic KMS, dithered 16-bit scanout, hardware cursor, DMA and
+polling upload paths, DKMS packages for `.deb` and `.rpm`, and an acceptance
+verdict of 6 PASS / 0 FAIL / 1 GAP.
 
-> **Experimental:** this driver is for one specific SM750 board. Optional modes
-> can exceed published GPU or monitor clock limits and may produce no signal,
-> distortion, or an unstable display. Keep SSH or another recovery route
-> available when trying non-EDID modes.
+> **Scope and risk:** this out-of-tree driver supports one specific SM750
+> board. Optional non-EDID modes can exceed published GPU or monitor clock
+> limits and may produce no signal, distortion, or an unstable display. Keep
+> SSH or another recovery route available when trying them.
 
 ## Is my card supported?
 
@@ -25,6 +28,44 @@ The tested board is sold or marked as `SE-DP750A-HDMI` and has all of these:
 The PCI ID alone is not enough. Other SM750 cards may use VGA, a different
 transmitter, or different GPIO wiring and are not currently supported.
 
+## Status
+
+Release 0.6.0. The driver is feature-complete for this board and meets the
+project's production criteria except for one item that needs a person at the
+panel; see the [acceptance report](docs/ACCEPTANCE-REPORT.md).
+
+| Area | Verified state |
+|---|---|
+| Module | `sm750hdmidrm` 0.6.0, built by DKMS from one source tree |
+| Runtime | built and installed by DKMS for kernels 7.2.15-100, 7.3.3-100 and 7.3.4-100 (Fedora 43), loaded and exercised on 7.3.4-100 |
+| Build matrix | 9 kernel and scanout-format combinations, 6.17.1 through the 7.4 daily headers |
+| Modeset | atomic commit verified with `modetest`, 1920x1080 at 60 Hz |
+| Vblank | 60.43 vblanks/s measured over 120 events |
+| IGT subset | 26 pass, 14 skip, 1 fail by design (see the limitation list below) |
+| GL path | `kmscube` 299 frames in 5.07 s, 59.01 fps on llvmpipe |
+| Packaging | RPM payload, scriptlets, DKMS sandbox build, install, erase, reinstall and stale-version purge |
+| Specifications | datasheet and product brief archived with hashes; every MMIO register the source uses is cross-referenced |
+| Static analysis | sparse clean (four findings fixed); smatch, cppcheck, coccinelle and pahole triaged |
+
+Acceptance verdict: **6 PASS, 0 FAIL, 1 GAP**. The gap is AC-3, pixel-level
+proof at the panel, which needs a human looking at the monitor or capture
+hardware, neither of which exists on the reference host. Everything up to the
+panel is evidenced.
+
+Known limitations, each with an id in [docs/DEFECTS.md](docs/DEFECTS.md):
+
+- A failed modeset no longer becomes a kernel WARNING plus stalled commits, but
+  the underlying `-110` bridge timeout is survived rather than prevented
+  (GAP-B8 in `docs/evidence/EVIDENCE-GAPS.md`).
+- `kms_addfb_basic size-max` fails by design: the driver declares its real
+  limits - maximum height 1152, plus the pitch and window limits - instead of
+  accepting a framebuffer the hardware cannot scan out (A26).
+- There is no pixel readback path on this host: no `/dev/fb*` because
+  `CONFIG_FB_DEVICE` is unset (A24), no writeback connector, and no CRC source
+  in the driver.
+- `smatch` reports one shift-versus-mask precedence warning that originates in
+  `GENMASK_TYPE()` in the kernel headers, not in this driver (A28).
+
 ## Install
 
 ### Debian and Ubuntu
@@ -34,7 +75,7 @@ Ubuntu 24.04 and Linux Mint 22 users can build a DKMS package locally:
 ```sh
 sudo apt update
 sudo apt install build-essential dkms linux-headers-$(uname -r) libdrm-dev ripgrep git
-git clone https://github.com/KodeMunkie/sm750hdmifb.git
+git clone https://github.com/GuramDuka/sm750hdmifb.git
 cd sm750hdmifb
 make check
 ./build-package.sh
@@ -54,7 +95,7 @@ each installed kernel:
 
 ```sh
 sudo dnf install rpm-build gcc make dkms kernel-devel libdrm-devel pkgconf-pkg-config ripgrep git tar
-git clone https://github.com/KodeMunkie/sm750hdmifb.git
+git clone https://github.com/GuramDuka/sm750hdmifb.git
 cd sm750hdmifb
 
 work=$(mktemp -d) && topdir=$work/rpmbuild
@@ -73,8 +114,8 @@ sudo reboot
 The RPM build needs no root; only `dnf install` and the reboot do. The package
 carries no compiled module: DKMS builds `src/` for every installed kernel that
 satisfies `BUILD_EXCLUSIVE_KERNEL` in `dkms.conf` (6.17 and newer, the same
-floor as the `.deb`). Kernels 7.1 and newer are untested at runtime, exactly as
-described under [Kernel compatibility](#kernel-compatibility).
+floor as the `.deb`). Runtime validation covers the 7.2 and 7.3 kernels listed
+under [Kernel compatibility](#kernel-compatibility).
 
 `./tests/check-rpm-dkms.sh` re-verifies the package without root - fresh
 `rpmbuild`, payload against `git ls-files`, scriptlets, dependencies and a
@@ -100,9 +141,14 @@ module is `sm750hdmidrm.ko` so it cannot be confused with `sm750fb.ko`.
 
 ### Kernel compatibility
 
-**Kernels >= 7.1 are untested.** Offline compilation checks are available,
-but boot and runtime behavior have not been validated on those kernels.
-See the [0.6.0 release notes](docs/RELEASE-NOTES.md).
+**Built on 6.17 through 7.4, runtime-validated on 7.3.4.** Release 0.6.0 is
+installed by DKMS for the Fedora 43 kernels 7.2.15-100, 7.3.3-100 and
+7.3.4-100, and was loaded and exercised on 7.3.4-100, the reference host
+kernel. The other two are built and installed but have not been booted. Linux
+7.4 is still in development: only its headers have been compiled against, so it
+remains untested at runtime. See the
+[0.6.0 release notes](docs/RELEASE-NOTES.md) and the
+[acceptance report](docs/ACCEPTANCE-REPORT.md).
 
 The driver is intended for **Linux 6.17 and newer**. DKMS deliberately refuses
 older kernels because the required DRM interfaces are not supported by this
@@ -112,7 +158,8 @@ series and for Linux 7.0 onward, including the atomic transaction rename in
 old CRTC reset API in 7.4. The compatibility matrix covers Ubuntu 6.17 and
 7.0 headers, mainline 6.18, 7.1 and 7.2 headers, 7.3-rc3 headers, and the
 2026-10-28 mainline daily headers from the 7.4 merge window. All three scanout
-defaults are built; these are offline checks, not hardware boot tests.
+defaults are built. That matrix is offline compilation; the kernels named above
+are the ones boot-tested with the live module.
 See [Testing and recovery](docs/TESTING.md) for the exact validation scope.
 
 All supported kernels use the driver's private vblank timer to avoid a restart
@@ -123,10 +170,9 @@ APIs. Linux 7.4 is still in development, so its final release must be checked
 again. Because this is an out-of-tree driver, a new kernel version may require a
 source update even though it falls within the intended `6.17+` range.
 
-Prebuilt packages, when available, are published under
-[GitHub Releases](https://github.com/KodeMunkie/sm750hdmifb/releases).
-Building locally is recommended because DKMS compiles against the installed
-kernel headers.
+No prebuilt packages are published. GitHub Actions is disabled for this
+repository, so no CI job produces binaries; build the package locally from the
+tree you checked out. DKMS then compiles against the installed kernel headers.
 
 ## Normal use
 
@@ -323,6 +369,24 @@ If an experimental mode gives no signal, boot an older kernel entry or remove
 the added `sm750hdmidrm.*` GRUB options from recovery access. Testing and live
 reload guidance is in [Testing and recovery](docs/TESTING.md).
 
+### Boot messages that are not errors
+
+Four lines appear on every boot of the reference host and none of them is a
+fault:
+
+| Message | Meaning |
+|---|---|
+| `loading out-of-tree module taints kernel`, `module verification failed: signature and/or required key missing` | Expected for a DKMS module that is not signed with a key enrolled in the kernel |
+| `DMA1 IRQ was not delivered; reverting to completion polling` | The DMA1 completion interrupt is not routed on this board. The driver confirms the first transfer by polling the completion bit, disables the interrupt and keeps polling. One `drm_info` per boot (`src/sm750_drm.c:1499`) |
+| `SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility` | Hot-plug and DDC are present, but the sink does not report a TMDS receiver for 100 ms - normal behind a KVM switch or a passive HDMI-DVI adapter. A forced mode needs no DDC, so the transmitter is programmed anyway and the probe succeeds (`src/sii902x.c:576`) |
+| `pci 0000:01:00.0: CLS mismatch (64 != 32), using 64 bytes` | PCI cache-line-size negotiation by the kernel |
+
+The real failures to watch for are `DMA1 shadow upload timed out; using CPU
+copies from now on` (`src/sm750_drm.c:1504`), which means the DMA path was
+abandoned, and `failed to enable HDMI mode`, which is survivable since 0.6.0 -
+the commit is completed and the atomic state stays consistent - but still
+indicates the bridge timeout described in `docs/evidence/EVIDENCE-GAPS.md` as GAP-B8.
+
 ### Register dump
 
 The driver registers a read-only MMIO dump as a debugfs file, which is the only
@@ -424,6 +488,40 @@ and prints `SKIP` with exit 0 when it is absent, so a fresh checkout without the
 image still passes. `make static` prints a skip message when the analysers are
 missing. Both are documented in [static analysis](docs/STATIC-ANALYSIS.md) and
 [VBIOS reconstruction](docs/VBIOS-REVERSE-ENGINEERING.md).
+
+### Gates and test scripts
+
+| Entry point | What it covers |
+|---|---|
+| `make check` | The 17 default checks: kernel build, policy checks for the module and DRM code, packaging hygiene, shadow and staging units, vblank timer |
+| `tests/build-all-kernels.sh` | The 9-combination kernel and scanout-format build matrix |
+| `tests/check-rpm-dkms.sh` | RPM payload against `git ls-files`, scriptlets, dependencies, sandbox DKMS build; no root needed |
+| `tests/check-vblank <card> <hz>` | Live vblank rate against the programmed refresh |
+| `tests/audit-release.sh` | Release tarball contents, version consistency and archive drift |
+| `tests/check-static.sh` | Opt-in static analysis gate with baseline comparison |
+
+Hardware-side validation uses the standard tools rather than project scripts:
+`modetest` from libdrm for atomic commits and connector state, `kmscube` for the
+GL path, and the IGT suite from `igt-gpu-tools` for the KMS conformance subset.
+The selected subtests, their pass criteria and the recorded results are in
+[test strategy and results](docs/TEST-STRATEGY.md).
+
+### Publishing
+
+The repository has three remotes:
+
+- `origin` carries two push URLs, the Polaris forge and
+  `https://github.com/GuramDuka/sm750hdmifb.git`, so one
+  `git push origin main` publishes to both.
+- `github` names the same GitHub repository directly.
+- `upstream` is `https://github.com/KodeMunkie/sm750hdmifb.git`, pull only: its
+  `pushurl` is set to `DISABLED`. Fetch from it to pick up upstream changes.
+
+GitHub Actions is disabled, and the CI recipe is kept at
+[docs/ci/build.yml](docs/ci/build.yml) as a copy-paste procedure. GitHub loads
+workflows only from `.github/workflows/`, and creating or updating a file there
+requires a token with the `workflow` scope; see
+[build environment](docs/ENVIRONMENT.md) sections 1.2 and 1.3.
 
 The official SM750 specification is known to be wrong for at least one
 hardware-observed partial-update boundary. Empirically verified workarounds are

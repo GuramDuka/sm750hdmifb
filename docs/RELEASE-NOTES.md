@@ -86,7 +86,9 @@
   7.4 development code, including the 7.2 atomic transaction rename and the
   state-creation callbacks needed after removal of the old CRTC reset API.
 - Preserve compatibility with the existing Linux 6.17 and 7.0 interfaces.
-- **Kernels >= 7.1 are untested.** Offline build and regression checks passed
+- **Kernels >= 7.1 are untested.** Superseded by 0.6.0, which is built and
+  installed for 7.2.15-100, 7.3.3-100 and 7.3.4-100 and loaded on 7.3.4-100.
+  Offline build and regression checks passed
   against 7.1, 7.2, 7.3-rc3 and a 7.4 merge-window snapshot; these results do
   not establish boot or runtime behavior. Final 7.4 requires another build
   check when it is released.

@@ -225,7 +225,7 @@ root-only remainder.
 ### Step 0: clone and tool check
 
 ```sh
-git clone https://github.com/KodeMunkie/sm750hdmifb.git
+git clone https://github.com/GuramDuka/sm750hdmifb.git
 cd sm750hdmifb
 command -v make gcc pkg-config rg python3 dnf rpm2cpio cpio
 /usr/bin/gcc --version | head -1     # must match CONFIG_GCC_VERSION of the kernel used
@@ -373,15 +373,15 @@ list.
 
 | Path | Content |
 | --- | --- |
-| `README.md` | install (Debian `.deb`, RPM/DKMS), modes, parameters, troubleshooting |
+| `README.md` | status and evidence summary, install (Debian `.deb`, RPM/DKMS), modes, parameters, non-error boot messages, troubleshooting, test entry points, publishing remotes |
 | `docs/LOGBOOK.md` | append-only chronological record of every action and change, newest entry last |
 | `docs/ROOT-ACTIONS.md` | every host root action with its exact command, the helper bodies and the GAP each closes |
-| `docs/HARDWARE.md` | board identification and capability comparison |
+| `docs/HARDWARE.md` | board identification, observed board quirks, capability comparison |
 | `docs/MODES.md` | catalogue, clock and transmitter risk |
 | `docs/PARAMETERS.md` | module parameters and their defaults |
 | `docs/REGISTERS.md` | tracked register reference and how to read the dump |
 | `docs/PROVENANCE.md` | licensing and third-party material policy |
-| `docs/RELEASE-NOTES.md` | 0.6.0 changes and the untested-kernel statement |
+| `docs/RELEASE-NOTES.md` | 0.6.0 changes and the kernels tested at runtime |
 | `docs/STAGING-BENCHMARK.md` | DMA batch benchmark procedure and analysis rules |
 | `docs/TESTING.md` | validation scope, recovery, live reload |
 | `docs/VBLANK.md` | private vblank timer and its locking |

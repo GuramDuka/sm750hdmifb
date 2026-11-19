@@ -41,7 +41,7 @@ after (working tree) form of every fixed item. All logs were produced unprivileg
 | A17 | S3 | Documentation claimed all parameters are load-time only | fixed | `docs/PARAMETERS.md:4-11` | `10` |
 | A18 | S3 | CI only ran on `workflow_dispatch` | fixed | `docs/ci/build.yml:15-17` (`push`, `pull_request`); the recipe is inactive since 2026-11-18, see `docs/ENVIRONMENT.md` 1.3 | `10` |
 | A19 | S3 | `make check` never built or audited a package | fixed | `Makefile:71-74` (`check-package`); CI step at `docs/ci/build.yml:58` | `07`, `08`, `10` |
-| A20 | S3 | DKMS auto-installs on kernels the release notes call untested | accepted | rationale at `docs/RELEASE-NOTES.md:14-19`; no change to `dkms.conf:7-8` | `10` |
+| A20 | S3 | DKMS auto-installs on kernels the release notes call untested | accepted | rationale now at `docs/RELEASE-NOTES.md:69-80` and `:95-100`; no change to `dkms.conf:7-8`. The 0.6.0 notes replace the blanket statement with an explicit coverage list (built 6.17-7.4, loaded on 7.3.4-100), so the risk that remains is limited to kernels newer than the last validated one, where a failed build only means no module for that kernel | `10` |
 | A21 | S3 | No committed evidence for the claimed kernel matrix | fixed | `docs/evidence/builds/01`-`11` (this task's logs; T4 cites them) | `02`-`06`, `11` |
 | A22 | S4 | Source tarball carried about 9 MB of screenshots | fixed | same fix as A02; `docs/images` excluded from the manifest (`build-package.sh:98`) | `07`, `10` |
 | A23 | S4 | Planning note said 18 `make check` commands; it runs 17 | fixed | `docs/plan/20261117-sm750-driver-prod/plan.yaml:28` (corrected), count re-verified in `01-make-check.log` | `01`, `10` |
