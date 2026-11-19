@@ -33,7 +33,7 @@ section "If the card stops working after removing the package".
 | 5 | 2026-11-18T10:12Z | reinstall the VBIOS helper with the v2 body | GAP-B1 (superseded by row 6, which closed it; v2's size constant was stale) |
 | 6 | 2026-11-18T12:07Z | reinstall the VBIOS helper with the v3 body: 1725 B, sha256 `07fe5499de1b320fc593f5e33db8f865bb867a40da3d35a956ee4511eeaa3a7e`, `EXPECT=49152`, exit 2 on size mismatch, exit 3 on a bad `55aa` signature, success prints `signature 55aa, checksum ok` | GAP-B1 CLOSED (capture byte-identical to the 48 KiB image) |
 | 7 | 2026-11-18T12:08Z | install the `/dev/tty0` ACL rule (`99-sm750-coder-tty0-acl.rules`, 762 B, sha256 `248d76743dd1fa5aca03e55432e53bf02647900038b330439033f569117f7c4b`) and its tmpfiles companion (`sm750-tty0-acl.conf`, 299 B, sha256 `3072aa4ecfd3f67d3c85be6076574d8d1b5afb47e5f4910df15d7f11c3f14538`) | GAP-B3 (IGT VT subset) unblocked: `/dev/tty0` is `crw-rw----+` with `user:coder:rw-` |
-| 8 | proposed | run `tests/check-scanout-crc.sh` once as root and store the transcript (section 7) | GAP-B3 readback/CRC half; GAP-B8 if the `-110` recurs during the run |
+| 8 | proposed | rebuild the module from the working tree, reload it, then run `tests/check-scanout-crc.sh` once as root and store the transcript (section 7) | GAP-B3 readback/CRC half; GAP-B8 if the `-110` recurs during the run |
 
 Sections below are ordered by subject, not by date: allowlist, recovery recipe,
 helpers, udev rule, installed state and re-verification, gap map.
@@ -660,7 +660,7 @@ udev as root, and the tmpfiles entry runs from `systemd-tmpfiles` as root.
 | `/dev/tty0` ACL rule (`99-sm750-coder-tty0-acl.rules` + `sm750-tty0-acl.conf`) | GAP-B3 IGT VT subset | CLOSED for the permission blocker: both files installed 2026-11-18T12:08Z, `/dev/tty0` is `crw-rw----+` with `user:coder:rw-` (`getfacl -p`). The five IGT binaries that aborted at `kmstest_set_vt_graphics_mode` with `errno 13` can now open the VT |
 | `sudo -n dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm` | GAP-B7 RPM install | CLOSED (T11): exit 0; `%post`/`%posttrans` built, signed with the machine MOK and installed for 7.2.15-100, 7.3.3-100 and 7.3.4-100; `rpm -q` -> `sm750hdmifb-0.6.0-1.fc43.noarch` |
 | `sudo -n dnf remove -y sm750hdmifb` (erase; note `dkms status -m ... -v ...` is NOT allowlisted, only bare `dkms status`) | GAP-B7 RPM erase | CLOSED (T11): exit 0, `%preun` ran `dkms remove --all`, `rpm -q` -> not installed, on-disk object deleted; the resident module stays loaded until `modprobe -r`, so 0.6.0 was reinstalled immediately. See `docs/evidence/runtime/20-rollback.txt`, `21-final-state.txt` |
-| `tests/check-scanout-crc.sh` as root (row 8) | GAP-B3 readback/CRC | OUTSTANDING: not run. The draw path is proven unprivileged (`docs/evidence/scanout/03-readback.txt`), the read half needs root |
+| `tests/check-scanout-crc.sh` as root (row 8) | GAP-B3 readback/CRC | OUTSTANDING: not run. The draw path is proven unprivileged (`docs/evidence/scanout/03-readback.txt`), the read half needs root. The driver now hosts `crtc-N/crc/{source,control,data}` in the source tree, but the loaded module is still the packaged 0.6.0 from HEAD, and debugfs is root-only, so nothing about it is observed yet: `docs/evidence/scanout/06-crc-debugfs-runtime.txt` |
 
 The authoritative per-gap text is `docs/evidence/EVIDENCE-GAPS.md`; this table
 records what the root actions themselves achieved.
@@ -676,27 +676,41 @@ The script resolves the card through debugfs, builds
 `SETCRTC`, reads the CRC stream and the `sm750_scanout` dump, and compares them.
 It exits 77 with a `SKIP:` line rather than passing when anything is missing.
 
-Run at the console as root, from the repository:
+Run at the console as root, from the repository. The packaged 0.6.0 predates
+the CRC debugfs hosting, so the module must be rebuilt from the tree and
+reloaded first; the version string stays 0.6.0, so only the reload distinguishes
+the two builds:
 
 ```sh
 cd /home/coder/sm750hdmifb
+make CC=/usr/bin/gcc
+modprobe -r sm750hdmidrm
+insmod src/sm750hdmidrm.ko
 export PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig
 export PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm
+export LD_LIBRARY_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64
 ./tests/check-scanout-crc.sh 2>&1 | tee /mega/tmp/sm750/scanout-crc.txt
 echo "exit: ${PIPESTATUS[0]}"
+modprobe -r sm750hdmidrm
+modprobe sm750hdmidrm
+rm -rf build
 ```
 
-The two exports are the documented rootless libdrm tree (`docs/ENVIRONMENT.md`
-section 4); the script falls back to the same path on its own, so they only
-matter if it is rebuilt elsewhere. The script writes `build/scanout-pattern`
-into the tree; `rm -rf build` afterwards keeps the tree owned by `coder`.
+The last three commands return the host to the packaged DKMS module and keep
+the tree owned by `coder`. The exports are the documented rootless libdrm tree
+(`docs/ENVIRONMENT.md` section 4); the script falls back to the same path on its
+own, so they only matter if it is rebuilt elsewhere. The script writes
+`build/scanout-pattern` into the tree.
 
-Store the transcript as `docs/evidence/scanout/05-crc-run.txt`, replace the SKIP
-sentence in `docs/evidence/scanout/04-checks.txt` with the PASS/FAIL lines it
-prints, and quote the `sm750_scanout` summary line (offset, length, nonzero,
-`crc32`) in `docs/evidence/scanout/03-readback.txt`. If `dmesg` shows
-`failed to enable HDMI mode: -110 at stage <name>` during the run, copy that
-line into `docs/evidence/gap-b8/`.
+Store the transcript as `docs/evidence/scanout/07-crc-debugfs-run.txt`, replace
+the SKIP sentence in `docs/evidence/scanout/04-checks.txt` with the PASS/FAIL
+lines it prints, and quote the `sm750_scanout` summary line (offset, length,
+nonzero, `crc32`) in `docs/evidence/scanout/03-readback.txt`. The run also
+observes the files the driver hosts itself (`crc/source` reads `scanout`,
+`crc/control` reads `none` then `scanout`), which is what
+`docs/evidence/scanout/06-crc-debugfs-runtime.txt` is waiting on. If `dmesg`
+shows `failed to enable HDMI mode: -110 at stage <name>` during the run, copy
+that line into `docs/evidence/gap-b8/`.
 
 Without a root shell, the same four accesses can be allowlisted. The lines obey
 the zero-colon rule of section 1; `tee` writes `scanout` and `none` into

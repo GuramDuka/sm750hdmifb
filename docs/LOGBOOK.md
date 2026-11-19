@@ -1757,3 +1757,115 @@ debugfs root with the same names and semantics.
 
 Checks: make check, check-release-version, check-drm-packaging, check-static
 and make crc-check all exit 0; four kernel builds exit 0.
+
+### 2026-11-19T11:54Z | gem-implementer | T26 follow-up: the driver hosts `crc/{source,control,data}` itself
+
+- Root cause of the runtime "crc/ does not exist": `drm_simple_display_pipe_init()`
+  creates the CRTC with the simple-pipe funcs and `sm750_crtc_funcs` is swapped
+  in afterwards (`src/sm750_drm.c:4029`), so `drm_debugfs_crtc_crc_add()` saw no
+  CRC callbacks. That helper is not exported (`Module.symvers` has only
+  `drm_crc_add_crc_entry`), so the driver creates the files.
+- New `sm750_crc_debugfs_create()` in `src/sm750_drm.c:3417` creates
+  `crc/source` (0444), `crc/control` (0644) and `crc/data` (0444) below the
+  CRTC debugfs directory. It is called from the new
+  `sm750_crtc_late_register()` (`:3458`), which runs after DRM has created
+  `crtc-N`, and again from `sm750_regs_debugfs_add()` (`:3909`), which covers
+  kernels that register the CRTC before the debugfs hook. A missing parent or
+  an existing entry is skipped with one `drm_dbg`, never an error.
+- uapi: `source` reads `scanout`; `control` reads `none`/`scanout` and accepts
+  `none`, the empty write, `auto` or `scanout`; `data` returns one line per read
+  in DRM's fixed-width form `"0x%08x 0x%08x"` (frame, crc), which is what IGT
+  parses, from a 128-entry ring that drops the oldest. Reads block
+  interruptibly, one reader at a time (`-EBUSY` on a second open), and a fresh
+  open starts a fresh sample.
+- One enable path: the arm logic moved out of `sm750_crtc_set_crc_source()` into
+  `sm750_crc_enable()` (`:3135`); disabling funnels through `sm750_crc_stop()`
+  under the new `crc_mutex`, which `sm750_crc_disable()` also takes, so the
+  debugfs control file and the CRTC callback cannot arm twice. The ring spinlock
+  is never held across a sleep and is never nested inside `crc_mutex`.
+  `sm750_crc_work_fn()` computes the CRC once and feeds both the ring and the
+  unchanged `drm_crc_add_crc_entry()` call.
+- Deviation from the brief, recorded deliberately: the files are not created
+  only from the debugfs hook, because on 7.x DRM creates `crtc-N` after that
+  hook runs and pre-creating `crc/` would make the core's own
+  `drm_debugfs_crtc_crc_add()` return `-EEXIST`; and the data line uses DRM's
+  real layout rather than `"%u %08x"`, because `igt_pipe_crc.c` parses a fixed
+  10-character frame field. `tests/check-scanout-crc.sh` now strips the `0x`
+  prefix from the crc field so its dump comparison still works.
+- Static-analysis find, fixed: smatch 0.6.4 segfaults inside
+  `match_untracked()`/function comparison on the `copy_from_user()` call in the
+  control write path. The copy now uses `strncpy_from_user()`, which is also
+  bounded; the truncated name is rejected by the source check.
+- New gate `tests/check-crc-uapi.sh`, called from `tests/check-drm-policy.sh`
+  so `make check` keeps exactly 17 recipe commands. It asserts the three
+  callbacks in `sm750_crtc_funcs`, the debugfs creation, the `0x%08x 0x%08x`
+  line and `SM750_CRC_ENTRIES 128`, and re-runs itself against four planted
+  defects (missing `.set_crc_source`, `control` renamed, `0x` dropped from the
+  crc field, ring shrunk to 64); each is rejected with exit 1 every run.
+- Evidence: `docs/evidence/scanout/05-crc-debugfs-build.txt` (7.2.15-100,
+  7.3.3-100, 7.3.4-100 and 6.17.1-300, exit 0, zero driver warnings; the one
+  6.17 `warning:` line is kbuild's toolchain notice) and
+  `06-crc-debugfs-runtime.txt` (`SKIP`: debugfs is root-only and the loaded
+  module is still the packaged build). No runtime claim is made.
+- Checks: `make CC=/usr/bin/gcc check` exit 0, `tests/check-release-version.sh`
+  exit 0, `tests/check-drm-packaging.sh` exit 0, `tests/check-static.sh` exit 0
+  (sparse/smatch/cppcheck/coccinelle/pahole), `make crc-check` exit 0 after its
+  `SKIP:` line.
+- Docs: `docs/evidence/scanout/02-crc-source.txt` dated why entry,
+  `docs/TEST-STRATEGY.md` CRC row and `check` table row 2,
+  `docs/ACCEPTANCE-REPORT.md` new T26-follow-up addendum,
+  `docs/DELIVERABLES.md` evidence list, `docs/ROOT-ACTIONS.md` row 8 and
+  section 7 (rebuild and reload before the run; transcript now
+  `07-crc-debugfs-run.txt`), and a `### Scanout CRC` section in `README.md`.
+- Outcome: AC-3 tier 4 stays `GAP` and tier 5 stays partial until one root run
+  of `tests/check-scanout-crc.sh` on a module rebuilt from this tree is
+  recorded. Version stays 0.6.0; tree left dirty for review.
+- Correction (2026-11-19T15:25Z, review finding): the first `crc/data` format
+  was wrong - it emitted DRM's fixed-width `"0x%08x 0x%08x"` line for every
+  entry and no value-count line. The uapi requires the count (`"1"`) as the
+  first read after open and then `"%u %08x\n"` (decimal frame counter, hex crc,
+  no `0x` prefix); libdrm reads the first line as the count, so a `0x` line
+  parsed as 0 and the whole capture was discarded. `sm750_crc_data_read()` now
+  sends the count once per open (`SM750_CRC_COUNT_LINE`, `crc_count_sent`) and
+  then `"%u %08x\n"` per entry; `tests/check-crc-uapi.sh` asserts both plus the
+  absence of `0x` in the data path and rejects six planted defects, and the
+  strip of a `0x` prefix in `tests/check-scanout-crc.sh` was reverted because
+  the crc field no longer carries one.
+
+### 2026-11-19T12:41Z | gem-implementer | Correction to the 11:54Z T26 entry: bounds fix in the control write
+
+- Corrects the 11:54Z entry's statement that the `strncpy_from_user()` switch in
+  `sm750_crc_control_write()` was safe on its own. The copy was bounded, but the
+  newline strip that followed still indexed with the write count
+  (`buf[count - 1]`), so a write longer than the 16-byte stack buffer read and
+  could write far out of bounds while the copy itself was clamped.
+- The strip now uses the copied length (`if (len && buf[len - 1] == '\n')
+  buf[len - 1] = '\0';`), so the index is always inside the buffer. A name that
+  was truncated by the copy is rejected by the source check as before.
+- Re-verified after the fix: four-kernel build regenerated into
+  `docs/evidence/scanout/05-crc-debugfs-build.txt` (7.2.15-100, 7.3.3-100,
+  7.3.4-100, 6.17.1-300, all exit 0, zero driver warnings), `make CC=/usr/bin/gcc
+  check` exit 0, `tests/check-release-version.sh` 0, `tests/check-drm-packaging.sh`
+  0, `tests/check-static.sh` 0 (`static gate: PASS`), `tests/check-crc-uapi.sh` 0
+  with its four rejections, `tests/check-drm-policy.sh` 0, `make crc-check` 0
+  (77 mapped to success).
+- Lesson: a bounded copy does not bound later uses of the copy length; the
+  smatch segfault hid this line from analysis, so it was caught by review.
+
+### 2026-11-19T12:25Z | orchestrator | T28 accepted: driver-hosted crc debugfs shim, DRM uapi format
+- Cause of the missing crc debugfs directory: sm750_crtc_funcs is assigned at
+  src/sm750_drm.c:3731, after drm_simple_display_pipe_init() at :3723 already
+  created the CRTC, so DRM never installed the CRC files; drm_debugfs_crtc_crc_add
+  is not exported, so the driver hosts crtc-<n>/crc/{source,control,data} itself
+  from sm750_regs_debugfs_add() via a new .late_register.
+- Review finding fixed before acceptance: crc/data emitted "0x%08x 0x%08x" with no
+  count line, which igt_pipe_crc would discard (it reads the values-per-entry
+  count with %d, then entries with "%u %x"). Now "1\n" once per open
+  (SM750_CRC_COUNT_LINE, src/sm750_drm.c:292) and "%u %08x\n" per entry
+  (src/sm750_drm.c:3362), decimal vblank counter, no 0x prefix.
+- tests/check-crc-uapi.sh asserts the contract and rejects six planted defects;
+  called from check-drm-policy.sh so the check: recipe stays 17 commands.
+- Four kernel builds exit 0; make check, check-release-version, check-drm-packaging,
+  check-static, check-crc-uapi, check-drm-policy, make crc-check all exit 0.
+- Still owed: one root run of tests/check-scanout-crc.sh on a module rebuilt and
+  reloaded from this tree (AC-3 tiers 4 and 5). Version stays 0.6.0.

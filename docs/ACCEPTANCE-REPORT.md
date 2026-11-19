@@ -595,3 +595,40 @@ Two changes narrow the AC-3 tier-4 blocker to one item:
 
 Tier 4 and tier 5 stay `GAP`/partial: this addendum changes what blocks them,
 not whether they are observed.
+
+### Addendum 2026-11-19 (T26 follow-up): the driver publishes the CRC uapi
+
+The T26 CRC source was unreachable: `drm_simple_display_pipe_init()` creates the
+CRTC with the simple-pipe funcs and `sm750_crtc_funcs` is only swapped in
+afterwards (`src/sm750_drm.c:4029`), so DRM's `drm_debugfs_crtc_crc_add()` saw no
+CRC callbacks and never created `crtc-N/crc/`; that helper is not exported, so
+the driver cannot ask for the files later. The driver now creates them itself,
+`crtc-N/crc/{source,control,data}`, from `sm750_crtc_late_register()`
+(`src/sm750_drm.c:3458`) and again from `sm750_regs_debugfs_add()`
+(`src/sm750_drm.c:3909`), which covers both orders in which the kernel creates
+the CRTC directory. The files implement the documented uapi: `source` reads
+`scanout`; `control` reads `none`/`scanout` and accepts `none`, `auto` or
+`scanout`; `data` emits the value count (`1`) once per open and then one
+`"%u %08x"` line per frame (decimal vblank count, hex crc, no `0x` prefix) from
+a 128-entry ring with one reader at a time.
+`sm750_crc_work_fn()` computes the CRC once and feeds both the ring and
+`drm_crtc_add_crc_entry()`.
+
+Evidence and gates:
+
+- Four kernels build with zero driver warnings, including 6.17.1-300 where the
+  block compiles out: `docs/evidence/scanout/05-crc-debugfs-build.txt`.
+- `tests/check-crc-uapi.sh`, called from `tests/check-drm-policy.sh` so from
+  `make check`, asserts the three callbacks, the file creation, the data line
+  format and the ring depth, and rejects four planted defects.
+
+Status after this addendum:
+
+- AC-3 tier 4: unchanged `GAP`. The run still needs root and the loaded module
+  is still the packaged build (`docs/evidence/scanout/06-crc-debugfs-runtime.txt`).
+- AC-3 tier 5: partial, and it stays partial until a root transcript exists. The
+  source is now reachable from userspace, so IGT `igt_require_pipe_crc` no
+  longer lacks `crc/control`; whether the entry stream is stable on the card is
+  exactly what the missing run observes. The emitted pixel stream itself is
+  still not observable on this host, so tier 5 would remain a statement about
+  the scanout source buffer even after that run.

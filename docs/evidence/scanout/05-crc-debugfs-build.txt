@@ -1,0 +1,197 @@
+# T26 CRC debugfs hosting: four-kernel build record
+# Captured 2026-11-19T12:20Z, actor coder (uid 1005), host kernel 7.3.4-100.fc43.x86_64
+# Tree: d352707 plus the uncommitted CRC debugfs working-tree changes
+
+Compiler
+--------
+$ /usr/bin/gcc --version | head -1
+gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+# /usr/bin/gcc is named explicitly: the gcc on PATH is a CUDA wrapper.
+# LC_ALL=C keeps make output ASCII.
+
+Build against 7.2.15-100.fc43.x86_64
+-----------------
+$ make clean KDIR=/usr/src/kernels/7.2.15-100.fc43.x86_64 CC=/usr/bin/gcc
+$ make KDIR=/usr/src/kernels/7.2.15-100.fc43.x86_64 CC=/usr/bin/gcc
+make -C /usr/src/kernels/7.2.15-100.fc43.x86_64 M=/home/coder/sm750hdmifb/src modules
+make[1]: Entering directory '/usr/src/kernels/7.2.15-100.fc43.x86_64'
+make[2]: Entering directory '/home/coder/sm750hdmifb/src'
+  CC [M]  sm750_drm.o
+  CC [M]  sm750_drm_mode.o
+  CC [M]  sm750_dither.o
+  CC [M]  ddk750_chip.o
+  CC [M]  ddk750_mode.o
+  CC [M]  ddk750_power.o
+  CC [M]  ddk750_display.o
+  CC [M]  ddk750_swi2c.o
+  CC [M]  ddk750_hwi2c.o
+  CC [M]  sii902x.o
+  LD [M]  sm750hdmidrm.o
+  MODPOST Module.symvers
+  CC [M]  sm750hdmidrm.mod.o
+  CC [M]  .module-common.o
+  LD [M]  sm750hdmidrm.ko
+  BTF [M] sm750hdmidrm.ko
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+make[2]: Leaving directory '/home/coder/sm750hdmifb/src'
+make[1]: Leaving directory '/usr/src/kernels/7.2.15-100.fc43.x86_64'
+exit status: 0, 'warning:' lines: 0
+
+Build against 7.3.3-100.fc43.x86_64
+-----------------
+$ make clean KDIR=/usr/src/kernels/7.3.3-100.fc43.x86_64 CC=/usr/bin/gcc
+$ make KDIR=/usr/src/kernels/7.3.3-100.fc43.x86_64 CC=/usr/bin/gcc
+make -C /usr/src/kernels/7.3.3-100.fc43.x86_64 M=/home/coder/sm750hdmifb/src modules
+make[1]: Entering directory '/usr/src/kernels/7.3.3-100.fc43.x86_64'
+make[2]: Entering directory '/home/coder/sm750hdmifb/src'
+  CC [M]  sm750_drm.o
+  CC [M]  sm750_drm_mode.o
+  CC [M]  sm750_dither.o
+  CC [M]  ddk750_chip.o
+  CC [M]  ddk750_mode.o
+  CC [M]  ddk750_power.o
+  CC [M]  ddk750_display.o
+  CC [M]  ddk750_swi2c.o
+  CC [M]  ddk750_hwi2c.o
+  CC [M]  sii902x.o
+  LD [M]  sm750hdmidrm.o
+  MODPOST Module.symvers
+  CC [M]  sm750hdmidrm.mod.o
+  CC [M]  .module-common.o
+  LD [M]  sm750hdmidrm.ko
+  BTF [M] sm750hdmidrm.ko
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+make[2]: Leaving directory '/home/coder/sm750hdmifb/src'
+make[1]: Leaving directory '/usr/src/kernels/7.3.3-100.fc43.x86_64'
+exit status: 0, 'warning:' lines: 0
+
+Build against 7.3.4-100.fc43.x86_64
+-----------------
+$ make clean KDIR=/usr/src/kernels/7.3.4-100.fc43.x86_64 CC=/usr/bin/gcc
+$ make KDIR=/usr/src/kernels/7.3.4-100.fc43.x86_64 CC=/usr/bin/gcc
+make -C /usr/src/kernels/7.3.4-100.fc43.x86_64 M=/home/coder/sm750hdmifb/src modules
+make[1]: Entering directory '/usr/src/kernels/7.3.4-100.fc43.x86_64'
+make[2]: Entering directory '/home/coder/sm750hdmifb/src'
+  CC [M]  sm750_drm.o
+  CC [M]  sm750_drm_mode.o
+  CC [M]  sm750_dither.o
+  CC [M]  ddk750_chip.o
+  CC [M]  ddk750_mode.o
+  CC [M]  ddk750_power.o
+  CC [M]  ddk750_display.o
+  CC [M]  ddk750_swi2c.o
+  CC [M]  ddk750_hwi2c.o
+  CC [M]  sii902x.o
+  LD [M]  sm750hdmidrm.o
+  MODPOST Module.symvers
+  CC [M]  sm750hdmidrm.mod.o
+  CC [M]  .module-common.o
+  LD [M]  sm750hdmidrm.ko
+  BTF [M] sm750hdmidrm.ko
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+make[2]: Leaving directory '/home/coder/sm750hdmifb/src'
+make[1]: Leaving directory '/usr/src/kernels/7.3.4-100.fc43.x86_64'
+exit status: 0, 'warning:' lines: 0
+
+Build against 6.17.1-300.fc43.x86_64
+-----------------
+$ make clean KDIR=/mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64 CC=/usr/bin/gcc
+$ make KDIR=/mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64 CC=/usr/bin/gcc
+make -C /mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64 M=/home/coder/sm750hdmifb/src modules
+make[1]: Entering directory '/mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64'
+make[2]: Entering directory '/home/coder/sm750hdmifb/src'
+warning: the compiler differs from the one used to build the kernel
+  The kernel was built by: gcc (GCC) 15.2.1 20250924 (Red Hat 15.2.1-2)
+  You are using:           gcc (GCC) 15.3.1 20260722 (Red Hat 15.3.1-1)
+  CC [M]  sm750_drm.o
+  CC [M]  sm750_drm_mode.o
+  CC [M]  sm750_dither.o
+  CC [M]  ddk750_chip.o
+  CC [M]  ddk750_mode.o
+  CC [M]  ddk750_power.o
+  CC [M]  ddk750_display.o
+  CC [M]  ddk750_swi2c.o
+  CC [M]  ddk750_hwi2c.o
+  CC [M]  sii902x.o
+  LD [M]  sm750hdmidrm.o
+  MODPOST Module.symvers
+  CC [M]  sm750hdmidrm.mod.o
+  CC [M]  .module-common.o
+  LD [M]  sm750hdmidrm.ko
+  BTF [M] sm750hdmidrm.ko
+Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux
+make[2]: Leaving directory '/home/coder/sm750hdmifb/src'
+make[1]: Leaving directory '/mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64'
+exit status: 0, 'warning:' lines: 1
+
+# The single 6.17.1-300 'warning:' line is kbuild's toolchain-version notice
+# (the driver is built with a different compiler than the running kernel),
+# not a diagnostic about the driver. The CRC debugfs block is compiled out
+# below 7.0.0: the change is inert there and must still compile, which it does.
+
+Checks and gates
+----------------
+Captured 2026-11-19T12:23Z, same tree and environment as the builds above,
+LC_ALL=C LANG=C LANGUAGE=C (the kernel top Makefile unexports LC_ALL, so LANG
+must be C as well or kbuild's own messages come out localised),
+PKG_CONFIG_PATH/SYSROOT_DIR/LD_LIBRARY_PATH pointing at the rootless libdrm tree
+/mega/tmp/sm750/t3/libdrm.
+
+$ make CC=/usr/bin/gcc check
+...
+Ran 4 tests in 0.270s
+
+OK
+exit: 0   (17 recipe commands, 'warning:' lines: 0)
+
+$ ./tests/check-release-version.sh
+Release version consistency checks passed: 0.6.0
+exit: 0
+
+$ ./tests/check-drm-packaging.sh
+Unified DRM package checks passed
+exit: 0
+
+$ ./tests/check-static.sh
+sparse[7.3.4-100.fc43.x86_64]: exit 0, 0 warning(s)
+smatch[7.3.4-100.fc43.x86_64]: exit 0, 5 finding(s)
+cppcheck: exit 0, 0 finding(s)
+coccinelle: exit 0, 0 finding(s)
+pahole: exit 0 (informational, struct layout in /tmp/sm750-static.ZHeHWC/pahole.log)
+static gate: PASS (raw logs in /tmp/sm750-static.ZHeHWC)
+exit: 0
+# The 5 smatch findings are the baseline entries (one sii902x.c and four
+# sm750_dma_init() shift-versus-mask warnings), unchanged from HEAD.
+
+$ ./tests/check-crc-uapi.sh
+CRC uapi check passed: /home/coder/sm750hdmifb/src/sm750_drm.c
+negative control set_crc_source: rejected (exit 1): CRC uapi: sm750_crtc_funcs lacks .set_crc_source
+negative control control_file: rejected (exit 1): CRC uapi: no crc/control debugfs file is created
+negative control count_line: rejected (exit 1): CRC uapi: crc/data does not gate the count line per open
+negative control frame_field: rejected (exit 1): CRC uapi: the crc/data entry format is missing or malformed
+negative control hex_prefix: rejected (exit 1): CRC uapi: crc/data carries a 0x prefix
+negative control ring_depth: rejected (exit 1): CRC uapi: the CRC ring is not 128 entries deep
+CRC uapi gate and negative controls passed
+exit: 0
+
+$ ./tests/check-drm-policy.sh
+...
+CRC uapi gate and negative controls passed
+DRM mode policy checks passed
+exit: 0
+
+$ make crc-check
+SKIP: root is required: /sys/kernel/debug and its crc files are mode 0700
+exit: 0   (the script exits 77; the target maps 77 to success)
+
+The crc/data uapi contract (correction, review finding)
+------------------------------------------------------
+Userspace reads the number of CRC values per entry as the first line after
+open, "1\n" (src/sm750_drm.c:292, emitted once per open at
+src/sm750_drm.c:3337), and then one entry per read as "%u %08x\n"
+(src/sm750_drm.c:3362): a decimal vblank count, a space, the CRC as eight hex
+digits, newline, with no 0x prefix on either field. libdrm's drmModeCrtcGetCRC
+and IGT take the first line as the count and parse entries as "%u %x", so the
+earlier "0x%08x 0x%08x" form would be read as a count of 0 and the capture
+dropped. tests/check-crc-uapi.sh now asserts the count line, the entry format
+and the absence of 0x in the data path, and rejects six planted defects.

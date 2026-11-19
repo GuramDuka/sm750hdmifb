@@ -47,3 +47,17 @@ cat: /sys/kernel/debug/dri/0/name: Permission denied
 
 The closing action above is unchanged and is what the new row in
 docs/ROOT-ACTIONS.md asks the host owner to run.
+
+Update (T26 follow-up, 2026-11-19): the source list now comes from the driver.
+The CRTC is created by drm_simple_display_pipe_init() with the simple-pipe
+funcs; sm750_crtc_funcs is swapped in at src/sm750_drm.c:4029, after DRM has
+already registered the CRTC, and
+drm_debugfs_crtc_crc_add() is not exported, so DRM never creates crtc-N/crc/.
+The driver therefore hosts crc/source, crc/control and crc/data itself from
+sm750_crtc_late_register() and again from sm750_regs_debugfs_add(), which also
+covers kernels that create the CRTC directory before the debugfs hook. Userspace
+sees the documented uapi: crc/source reads "scanout", crc/control reads "none"
+or "scanout" and accepts none/auto/scanout, and crc/data first emits the value
+count ("1") once per open and then one "%u %08x" line per frame (decimal vblank
+count, hex crc, no 0x prefix). Blocked on root for the
+observation: docs/evidence/scanout/06-crc-debugfs-runtime.txt.

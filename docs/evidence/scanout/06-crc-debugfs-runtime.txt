@@ -1,0 +1,77 @@
+# T26 CRC debugfs hosting: runtime state
+# Captured 2026-11-19T11:54Z, actor coder (uid 1005), host kernel 7.3.4-100.fc43.x86_64
+
+SKIP: /sys/kernel/debug is mode 0700 root-only, so neither the new files nor
+their absence can be observed as uid 1005. The driver now hosts
+/sys/kernel/debug/dri/<N>/crtc-0/crc/source, crc/control and crc/data itself
+(see 02-crc-source.txt for why); the module that would create them is not
+installed, so this record carries no observation of them.
+
+Probes run, verbatim (captured with LC_ALL=C)
+------------------------------------------------
+$ id
+uid=1005(coder) gid=1006(coder) groups=1006(coder),1007(vtune)
+$ ls -ld /sys/kernel/debug
+drwx------ 52 root root 0 Nov 19 10:25 /sys/kernel/debug
+$ ls /sys/kernel/debug/dri
+ls: cannot access '/sys/kernel/debug/dri': Permission denied
+$ ls -l /sys/kernel/debug/dri/0
+ls: cannot access '/sys/kernel/debug/dri/0': Permission denied
+$ sudo -n true
+sudo: a password is required
+$ ls -l /dev/fb0
+ls: cannot access '/dev/fb0': No such file or directory
+$ cat /sys/module/sm750hdmidrm/version
+0.6.0
+$ modinfo -F version sm750hdmidrm
+0.6.0
+
+The loaded module is the packaged 0.6.0 from DKMS, i.e. the build from HEAD
+d352707, not the working tree with the CRC debugfs change. The version string
+does not change (0.6.0), so this probe cannot tell the two apart either.
+
+Why no workaround exists on this host
+-------------------------------------
+The sudoers allowlist holds sm750-regs, sm750-lspci, sm750-vbios-dump, dmesg,
+journalctl -k, dkms, depmod, modprobe -r sm750hdmidrm, dnf for the package and
+dmidecode (docs/ROOT-ACTIONS.md). None of them reads debugfs or loads a module
+built from /home/coder/sm750hdmifb, and no unprivileged path to
+/sys/kernel/debug/dri exists.
+
+What is established without root
+--------------------------------
+- The four kernels build with zero driver warnings, including 6.17.1-300 where
+  the whole feature compiles out: docs/evidence/scanout/05-crc-debugfs-build.txt.
+- tests/check-crc-uapi.sh (run from tests/check-drm-policy.sh, so from
+  `make check`) proves statically that the three CRC callbacks are in
+  sm750_crtc_funcs, that the files are created, that the data path emits the
+  count line first and then "%u %08x\n" lines with no 0x prefix, and that the
+  ring is 128 entries deep; its six planted defects are each rejected, so the
+  gate is not decorative.
+- `make check`, tests/check-release-version.sh, tests/check-drm-packaging.sh,
+  tests/check-static.sh and `make crc-check` all exit 0 (the last one SKIPs
+  with exit 77 because root is required).
+
+Single remaining blocker
+------------------------
+One root run of tests/check-scanout-crc.sh against a module rebuilt from the
+working tree. At the console, as root:
+
+    cd /home/coder/sm750hdmifb
+    make CC=/usr/bin/gcc
+    modprobe -r sm750hdmidrm
+    insmod src/sm750hdmidrm.ko
+    export PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig
+    export PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm
+    export LD_LIBRARY_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64
+    ./tests/check-scanout-crc.sh 2>&1 | tee /mega/tmp/sm750/scanout-crc.txt
+    echo "exit: ${PIPESTATUS[0]}"
+    modprobe -r sm750hdmidrm
+    modprobe sm750hdmidrm            # back to the packaged DKMS module
+    rm -rf build                     # the pattern binary, keep the tree coder-owned
+
+Expected: crc/source reads "scanout", crc/control reads "none" before the run
+enables the source and "scanout" after, and twelve consecutive crc/data lines
+carry one stable crc that equals the crc32 line of sm750_scanout for the same
+frame. The transcript belongs in docs/evidence/scanout/07-crc-debugfs-run.txt
+(the build record is 05, this file is 06).

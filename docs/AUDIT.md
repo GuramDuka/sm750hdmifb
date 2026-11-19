@@ -99,6 +99,8 @@ The `check` recipe contains exactly 17 commands at `Makefile:16-32`:
 `python3 tests/test-vblank-timer.py`, `./tests/test-bbdither-rgb565`,
 `./tests/test-scale-optimizations`, `python3 tests/test-staging-results.py`.
 The planning note that described this target as 18 commands is wrong (A23).
+`check-drm-policy.sh` in turn runs `tests/check-crc-uapi.sh`, so the CRC uapi
+gate and its negative controls add no recipe command and the count stays 17.
 
 ## 3. Declared kernel support range
 

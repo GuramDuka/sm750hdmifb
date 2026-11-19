@@ -225,4 +225,9 @@ test "$stage_count" -ge 6 || {
 	echo "GAP-B8: expected at least 6 mode stages, found $stage_count." >&2
 	exit 1
 }
+# T26: the driver hosts crtc-N/crc/{source,control,data} itself because the
+# CRTC funcs are swapped after drm_simple_display_pipe_init(). The gate checks
+# the callbacks, the debugfs host, the uapi line format and the ring depth, and
+# re-runs itself against planted defects.
+./tests/check-crc-uapi.sh "$source_file"
 echo "DRM mode policy checks passed"
