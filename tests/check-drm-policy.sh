@@ -234,6 +234,10 @@ test "$stage_count" -ge 6 || {
 # instead of being mistaken for a display-path regression. Source-level, with
 # its own planted-defect controls.
 ./tests/check-console-blank.sh "$source_file"
+# T37: the test-card fallback (test_pattern/test_pattern_period_ms, the
+# pitch-padded painter, the single sample in sm750_pipe_enable and the
+# cancelled rotation). Source-level, with its own planted-defect controls.
+./tests/check-test-pattern.sh "$source_file"
 # T32: the reconsole restore path (masked transition compare, mode-derived
 # budget, kept display-off result, terminal fail path). Source-level, with its
 # own planted-defect controls.

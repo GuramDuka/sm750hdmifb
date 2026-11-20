@@ -93,6 +93,7 @@ exports `TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}`), never to `/tmp`.
 | S9 | In-repo `tests/check-console-blank.sh` (via `make check`) | Source-level gate: the blank-console precondition is named, ordered after the modeset and inert | PASS |
 | S10 | In-repo `tests/check-console-scanout.sh` (`make console-check`, opt-in) | Root-only: the console reaches the panel on a `KD_TEXT` VT; skips with a named cause under `KD_GRAPHICS` | PASS on the card under `KD_TEXT` (2026-11-20, all three assertions); the script still skips with exit 77 when the VT is `KD_GRAPHICS` or the caller is not root |
 | S11 | In-repo `tests/check-restore-path.sh` (via `make check`) | Source-level restore-path gate: masked transition compare with re-poke, mode-derived budget, kept display-off result, terminal fail path | PASS (source gate) plus PASS on hardware 2026-11-20: 30 restore cycles, 20 mode changes, 95 enable events, zero fault lines |
+| S12 | In-repo `tests/check-test-pattern.sh` (via `make check`) | Source-level test-card gate: the two writable parameters and their defaults, the bounded painter, the pitch-padded row copy, both pixel encodings, the card elements, the exact paint message and call ordering, the rotation's cancel sites and tick silence | PASS (source gate); nine planted defects rejected. Not yet observed on the panel |
 
 ### S1: in-repo `make check`
 
@@ -418,6 +419,38 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   The 50 cycles above reproduce the same trigger shape through the allowlisted
   helpers but do not exercise the harness's exit-code contract. Recorded in
   `docs/evidence/runtime/22-restore-fix-hardware-proof.txt` sections 5-11.
+
+### S12: source-level test-card invariants
+
+- Command: `./tests/check-test-pattern.sh` (also run by
+  `tests/check-drm-policy.sh`, so `make check` stays at 17 commands). Takes an
+  optional source file and a `--single` mode the negative controls use.
+- Holds, against `src/sm750_drm.c`, the T37 fallback contract: `test_pattern`
+  defaults to `auto` and `test_pattern_period_ms` to `5000`, both are `0644`,
+  and their help names the three modes and the default; the painter skips a
+  softscaled window, a missing pitch or line buffer, a mode below 320x200, a
+  pitch larger than its line buffer and a frame that does not fit the VRAM left
+  after the scanout offset; every row is padded to `scanout_pitch` and copied
+  with `memcpy_toio()` through the scanout offset; both the RGB565 and the
+  32 bpp encodings exist; the bars, grayscale staircase, grid, sweep, crosshair,
+  circle and border are all present; the paint message is exact; and the paint
+  call sits after `sm750_program_mode()` and the blank-frame diagnostic and
+  before `drm_crtc_vblank_on()`, with exactly one blank sample. It also holds
+  the rotation: a `delayed_work`, initialised, phase advanced under
+  `mode_lock`, no `drm_info` per tick, re-armed only with a live card and a
+  period, cancelled in `sm750_pipe_disable()`, in `sm750_pipe_update()` before
+  the damage is queued, on the enable fail path and in `sm750_pci_remove()`,
+  with the enabling commit's own upload skipped through `test_pattern_fresh`.
+- Negative controls, each planted on a scratch copy and rejected with exit 1:
+  default changed to `off`, paint call moved before `sm750_program_mode()`,
+  softscale guard removed, row copy by width instead of pitch, rotation not
+  cancelled on disable, rotation not cancelled on a client update, phase never
+  advanced, a per-tick `drm_info`, period default changed to `0`.
+- Status: PASS, `Test-pattern fallback checks passed`; all nine controls
+  rejected. The behaviour it guards is described in
+  `docs/evidence/runtime/23-test-card-fallback.txt`. No on-panel observation
+  exists: this session has no way to watch the panel, and the evidence file
+  says so in a `NOT YET OBSERVED ON THE PANEL` section.
 
 ## 3. `make check`: the 17 recipe commands
 

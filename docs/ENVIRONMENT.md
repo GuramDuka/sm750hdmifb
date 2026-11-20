@@ -439,6 +439,17 @@ site:
 | `/usr/local/sbin/sm750-lspci` | `4b4f555a5f70c369d54196e1b4fa7750d91cb1e1b7fa5938a05d93866968af10` | dumps config space with `lspci -vvv -xxx -s 01:00.0` and `-vvv -d 126f:0750` |
 | `/usr/local/sbin/sm750-vbios-dump` | `e2f6f68791ebd3f341ca77cb84169bda8843c1ce192f2e500b51faa01e67f585` (v1) | enables the PCI expansion ROM, copies the image, restores the enable bit through a trap |
 
+T37 stages a fourth helper that is **not installed yet**:
+`/usr/local/sbin/sm750-console` (source `tools/sm750-console.sh`, 139 lines,
+sha256 `e3955655c5c0c8942e733189f3e0342481fbcc6e7c8e433c259eb0b340244c21`,
+staged at `/mega/tmp/sm750/sm750-console`). It moves the foreground VT between
+`KD_TEXT` and the session and prints the console/scanout status, so it needs
+root for `chvt` and for the mode-0700 debugfs files. The grant is a single
+colon-free line, `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-console`,
+recorded as row 9 of [ROOT-ACTIONS.md](ROOT-ACTIONS.md) and awaiting the host
+owner. Until it is installed, `show` and `text` can be run by hand as root
+through an existing session; nothing in `make check` depends on it.
+
 The installed `sm750-vbios-dump` is the **v1 body and is defective**: it reads
 with `dd bs=65536 count=1`, and a sysfs binary attribute returns at most one
 page per `read(2)`, so the dump is 4096 bytes of a 65536-byte ROM. The cap was

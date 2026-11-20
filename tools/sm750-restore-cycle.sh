@@ -33,10 +33,14 @@ set -eu
 
 PROG=sm750-restore-cycle
 MOD=sm750hdmidrm
-REPO=/home/coder/sm750hdmifb
+OWNER=coder
+# Resolve the checkout through the owner's passwd entry instead of embedding
+# this host's home directory: this script ships in the source archive and
+# tests/audit-release.sh rejects a literal local path in anything that ships.
+owner_home=$(getent passwd "$OWNER" | cut -d: -f6 || true)
+REPO=${SM750_REPO:-${owner_home:-}/sm750hdmifb}
 KO=$REPO/src/sm750hdmidrm.ko
 BDF=pci-0000:01:00.0
-OWNER=coder
 RELOAD=1
 ITERATIONS=20
 MODE=1024x768

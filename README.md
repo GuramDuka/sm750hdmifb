@@ -514,6 +514,58 @@ The driver sets up fbdev emulation through `DRM_FBDEV_TTM_DRIVER_OPS` and
 with fbdev emulation and no other framebuffer driver already owns the device.
 KMS output works without it, so a missing `/dev/fb0` is not a driver fault.
 
+### Test card fallback
+
+A module load on a foreground VT in `KD_GRAPHICS` leaves the panel scanning an
+all-zero frame (see the next section). Instead of leaving a dead-black panel,
+the driver can paint an analog-style test card into the window it is about to
+scan: seven EBU colour bars over the top two thirds, an 8-step grayscale
+staircase along the bottom, a 16x12 grid, a centred crosshair and circle, an
+inset white border and a moving white sweep. The card is pure geometry, so it
+renders the same in 16 and 32 bpp, and it is repainted on a timer with a rotated
+palette so a panel left on it does not burn in.
+
+`test_pattern` selects the behaviour:
+
+| Value | Meaning |
+| --- | --- |
+| `off` | never paint |
+| `auto` (default) | paint when the frame being enabled is entirely blank |
+| `always` | paint on every enable, blank or not |
+
+`test_pattern_period_ms` (default `5000`) is the interval between palette
+rotations; `0` keeps the card static. Values outside 500-600000 ms are clamped
+once, with a `drm_info` line naming the clamp.
+
+```sh
+# paint a card even when a client did paint (diagnostics, cable hunting)
+sudo sh -c 'echo always > /sys/module/sm750hdmidrm/parameters/test_pattern'
+# static card: no rotation, no burn-in protection
+sudo sh -c 'echo 0 > /sys/module/sm750hdmidrm/parameters/test_pattern_period_ms'
+# back to the default: paint only a blank frame
+sudo sh -c 'echo auto > /sys/module/sm750hdmidrm/parameters/test_pattern'
+```
+
+The card is a fallback, not a display path. It is skipped when the window is
+softscaled (the scanout pitch is 2048 there, not the display width), when the
+frame does not fit the VRAM left after the scanout offset, and on modes below
+320x200. The first real client commit cancels the rotation before it uploads,
+and the commit that enables the pipe skips its own upload, so a live client is
+never overwritten. `test_pattern=auto` cannot tell "no producer" from "a
+producer that legitimately draws black"; set `off` if the panel must show
+exactly what the client wrote.
+
+`tools/sm750-console.sh` (installed as `/usr/local/sbin/sm750-console`, root
+only) is the alternative when a static image is unacceptable: it moves the
+foreground VT into `KD_TEXT` so fbcon paints the panel for real.
+
+```sh
+sudo sm750-console show      # active tty, KDGETMODE, vtcon bind, PANEL_FB_ADDRESS, scanout crc
+sudo sm750-console text      # chvt 2: foreground VT becomes KD_TEXT
+sudo sm750-console text 3    # a specific VT
+sudo sm750-console graphics  # chvt 1: back to the session VT
+```
+
 ### What the HDMI output actually shows
 
 On the reference host the SM750 HDMI output carries the kernel console, and the

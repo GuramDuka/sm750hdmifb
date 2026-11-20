@@ -20,8 +20,10 @@ artefact, with the read-only command that proves it, is in section 5.
 
 Row 8 is different: it is **proposed, not performed**. It needs a root run that
 no agent may make, and it is what closes the readback half of GAP-B3. The exact
-commands are in section 7. Related operational hazard: an erase followed by a
-reboot leaves the card with no driver; the recovery runbook is in `README.md`,
+commands are in section 7. Row 9 is also **proposed**: it installs the console
+helper added in T37 and needs both a root install and one sudoers line, so the
+host owner has to carry it out. Related operational hazard: an erase followed by
+a reboot leaves the card with no driver; the recovery runbook is in `README.md`,
 section "If the card stops working after removing the package".
 
 | # | Date (UTC) | Action | Closes |
@@ -34,6 +36,7 @@ section "If the card stops working after removing the package".
 | 6 | 2026-11-18T12:07Z | reinstall the VBIOS helper with the v3 body: 1725 B, sha256 `07fe5499de1b320fc593f5e33db8f865bb867a40da3d35a956ee4511eeaa3a7e`, `EXPECT=49152`, exit 2 on size mismatch, exit 3 on a bad `55aa` signature, success prints `signature 55aa, checksum ok` | GAP-B1 CLOSED (capture byte-identical to the 48 KiB image) |
 | 7 | 2026-11-18T12:08Z | install the `/dev/tty0` ACL rule (`99-sm750-coder-tty0-acl.rules`, 762 B, sha256 `248d76743dd1fa5aca03e55432e53bf02647900038b330439033f569117f7c4b`) and its tmpfiles companion (`sm750-tty0-acl.conf`, 299 B, sha256 `3072aa4ecfd3f67d3c85be6076574d8d1b5afb47e5f4910df15d7f11c3f14538`) | GAP-B3 (IGT VT subset) unblocked: `/dev/tty0` is `crw-rw----+` with `user:coder:rw-` |
 | 8 | proposed | rebuild the module from the working tree, reload it, then run `tests/check-scanout-crc.sh` once as root and store the transcript (section 7) | GAP-B3 readback/CRC half; GAP-B8 if the `-110` recurs during the run |
+| 9 | proposed | install the console helper `/usr/local/sbin/sm750-console` (139-line source `tools/sm750-console.sh`, sha256 `e3955655c5c0c8942e733189f3e0342481fbcc6e7c8e433c259eb0b340244c21`) and add one NOPASSWD line for it (section 3.4) | the one-command `KD_TEXT` route for a panel that looks dead (A34); no GAP |
 
 Sections below are ordered by subject, not by date: allowlist, recovery recipe,
 helpers, udev rule, installed state and re-verification, gap map.
@@ -403,6 +406,180 @@ string `Version 1.00.59-`, build date `05/14/19 16:25`, banner `Silicon Motion
 SM750 VGA BIOS (CRT)`, `Copyright 2000/2010, Silicon Motion Inc.`, and
 `0x815d..0xbfff` all `0xcc`. The ROM enable bit was restored after the run;
 `sm750-lspci` reports `Expansion ROM at c7400000 [disabled] [size=64K]`.
+
+### 3.4 `/usr/local/sbin/sm750-console` (proposed, not installed)
+
+Mode `0755 root:root`, 3877 bytes, 139 lines, sha256
+`e3955655c5c0c8942e733189f3e0342481fbcc6e7c8e433c259eb0b340244c21`. Source
+`tools/sm750-console.sh`; staged at `/mega/tmp/sm750/sm750-console`. Closes no
+GAP: it is the operational route for A34, the panel that looks dead because no
+client paints it. It needs root because `chvt` needs `CAP_SYS_TTY_CONFIG` and
+the debugfs files it reads are mode 0700.
+
+Install (host owner, root):
+
+```sh
+sudo install -m 0755 -o root -g root \
+    /mega/tmp/sm750/sm750-console \
+    /usr/local/sbin/sm750-console
+```
+
+Add one line to the allowlist in section 1, then re-run `sudo -n -l` and the
+colon audit:
+
+```text
+coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-console
+```
+
+Body:
+
+```sh
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# sm750-console - inspect and move the SM750 panel between the text console
+# and the graphical session.
+#
+# The panel is dark while the foreground VT is KD_GRAPHICS: the kernel console
+# drops output before fbcon (drivers/tty/vt/vt.c, do_con_write) and a Wayland
+# session on another card paints nothing on card0. Switching the foreground VT
+# to a text VT puts the VT back into KD_TEXT, fbcon binds and the console
+# reaches the panel. This script is that one-command route, plus the status an
+# operator needs afterwards.
+#
+# Exit codes:
+#   0  the requested action ran and the status was printed
+#   1  environment problem (not root, no /dev/tty0, chvt failed, no SM750 card)
+#   2  bad usage
+set -u
+
+PROG=sm750-console
+DEBUGFS=/sys/kernel/debug
+
+usage() {
+	echo "usage: $PROG show | text [N] | graphics" >&2
+	exit 2
+}
+
+say() { printf '%s\n' "$*"; }
+fail() { printf '%s: %s\n' "$PROG" "$*" >&2; exit 1; }
+
+[ $# -ge 1 ] || usage
+action=$1
+shift
+case "$action" in
+show|text|graphics) ;;
+*) usage ;;
+esac
+
+[ "$(id -u)" -eq 0 ] || fail "root is required: debugfs is mode 0700 and chvt needs CAP_SYS_TTY_CONFIG"
+[ -e /dev/tty0 ] || fail "/dev/tty0 is missing"
+
+# 0x4B3B is KDGETMODE on the tty file descriptor: 0 KD_TEXT, 1 KD_GRAPHICS,
+# 4 KD_KDWANTED.
+vt_mode=$(python3 -c '
+import fcntl, struct, sys
+f = open("/dev/tty0", "rb")
+sys.stdout.write(str(struct.unpack("i", fcntl.ioctl(f.fileno(), 0x4B3B,
+                                                     struct.pack("i", 0)))[0]))
+' 2>/dev/null) || fail "cannot read the VT mode of /dev/tty0 with KDGETMODE"
+
+mode_name() {
+	case "$1" in
+	0) echo KD_TEXT ;;
+	1) echo KD_GRAPHICS ;;
+	4) echo KD_KDWANTED ;;
+	*) echo "unknown($1)" ;;
+	esac
+}
+
+show_status() {
+	active=$(cat /sys/class/tty/tty0/active 2>/dev/null) || active=
+	say "active tty:   ${active:-unknown}"
+	say "tty0 mode:    $(mode_name "$vt_mode") ($vt_mode)"
+
+	for vc in /sys/class/vtconsole/vtcon*; do
+		[ -r "$vc/name" ] || continue
+		name=$(cat "$vc/name" 2>/dev/null) || name=
+		bind=$(cat "$vc/bind" 2>/dev/null) || bind=
+		say "vtconsole:    $(basename "$vc") bind=$bind name=$name"
+	done
+
+	card=
+	for d in "$DEBUGFS"/dri/*; do
+		[ -r "$d/name" ] || continue
+		if grep -q "sm750hdmidrm" "$d/name" 2>/dev/null; then
+			card=$d
+			break
+		fi
+	done
+	[ -n "$card" ] || fail "no SM750 DRM device (card absent or driver not loaded)"
+
+	if [ -x /usr/local/sbin/sm750-regs ]; then
+		regs=$(/usr/local/sbin/sm750-regs 2>/dev/null) || regs=
+	else
+		regs=$(cat "$card/regs" 2>/dev/null) || regs=
+	fi
+	if [ -n "$regs" ]; then
+		addr=$(printf '%s\n' "$regs" |
+			awk '$2 == "PANEL_FB_ADDRESS" { print $3; exit }')
+		say "PANEL_FB_ADDRESS: ${addr:-unknown}"
+	else
+		say "PANEL_FB_ADDRESS: unavailable (no sm750-regs and no $card/regs)"
+	fi
+
+	if [ -r "$card/sm750_scanout" ]; then
+		dump_field() {
+			head -n 8 "$card/sm750_scanout" |
+				awk -v key="$1" '$1 == key { print $2; exit }'
+		}
+		say "scanout offset:   $(dump_field offset)"
+		say "scanout nonzero:  $(dump_field nonzero)"
+		say "scanout crc32:    $(dump_field crc32)"
+		say "(crc32 0xe20eea22 is 262144 zero bytes: nothing has painted the window)"
+	else
+		say "scanout:          unavailable ($card/sm750_scanout is not readable)"
+	fi
+}
+
+switch_vt() {
+	/usr/bin/chvt "$1" || fail "chvt $1 failed"
+	sleep 1
+	vt_mode=$(python3 -c '
+import fcntl, struct, sys
+f = open("/dev/tty0", "rb")
+sys.stdout.write(str(struct.unpack("i", fcntl.ioctl(f.fileno(), 0x4B3B,
+                                                     struct.pack("i", 0)))[0]))
+' 2>/dev/null) || fail "cannot read the VT mode of /dev/tty0 with KDGETMODE"
+}
+
+case "$action" in
+show)
+	[ $# -eq 0 ] || usage
+	show_status
+	;;
+text)
+	[ $# -le 1 ] || usage
+	n=${1:-2}
+	case "$n" in
+	''|*[!0-9]*) usage ;;
+	esac
+	switch_vt "$n"
+	show_status
+	;;
+graphics)
+	[ $# -eq 0 ] || usage
+	switch_vt 1
+	show_status
+	;;
+esac
+```
+
+```
+
+The body above is the file as staged. When the script changes, replace both
+this section and the staged copy; the grant is on the path, so the sudoers line
+does not change.
 
 ## 4. udev ACL rule
 

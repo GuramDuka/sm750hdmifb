@@ -112,8 +112,15 @@ check_emit() {
 
 	# Behaviour: the block may only log. Any control flow here would let a
 	# blank frame skip an upload or fail a commit.
+	# T37 restructured the sample into a single `blank` result shared with
+	# the test-card decision (docs/evidence/runtime/23-test-card-fallback.txt),
+	# so the diagnostic is now guarded by the result rather than by the
+	# sampler call itself.
+	grep -F 'if (sdev->shadow_scanout && plane_state->fb)' <<<"$body" \
+		>/dev/null ||
+		fail "the blank frame is sampled without the shadow-path guard"
 	block=$(awk '
-		/if \(sdev->shadow_scanout && plane_state->fb &&/ { in_block = 1 }
+		/if \(blank && !blank_frame_reported\) \{/ { in_block = 1 }
 		in_block { print }
 		in_block && /^\t\t\}$/ { exit }' <<<"$body")
 	[ -n "$block" ] || fail "the blank-console guard is gone"
@@ -152,15 +159,10 @@ plant_emit_early() {
 	local block
 
 	block=$(awk '
-		index($0, "static void sm750_pipe_enable(") == 1 { in_fn = 1 }
-		in_fn && index($0, "\t\tif (sdev->shadow_scanout && plane_state->fb &&") == 1 { hold = 1 }
-		hold {
-			print
-			if (index($0, "\t\t}") == 1)
-				hold = 0
-		}
-		in_fn && hold == 0 && block_done { exit }
-		in_fn && hold == 1 { block_done = 1 }' "$1")
+		index($0, "if (blank && !blank_frame_reported) {") > 0 { hold = 1 }
+		hold { print }
+		hold && $0 == "\t\t}" { exit }' "$1")
+	[ -n "$block" ] || fail "planted: the blank diagnostic block was not found"
 	# Re-insert the same guard above the call that programs the mode.
 	BLOCK=$block awk '
 		index($0, "\tret = sm750_program_mode(sdev,") == 1 && !done {
@@ -176,7 +178,7 @@ plant_no_bail() {
 }
 # Without the latch the line prints on every modeset.
 plant_no_latch() {
-	sed -i 's/!blank_frame_reported &&//' "$1"
+	sed -i 's/if (blank \&\& !blank_frame_reported)/if (blank)/' "$1"
 }
 
 # Every planted defect must be caught, otherwise the gate is decorative.

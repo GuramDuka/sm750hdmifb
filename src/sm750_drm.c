@@ -10,6 +10,7 @@
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
+#include <linux/jiffies.h>
 #include <linux/ktime.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -120,6 +121,27 @@ typedef struct drm_atomic_state sm750_atomic_commit;
 #define SM750_DRM_DMA_GUARD_WORDS 4
 #define SM750_DRM_DAMAGE_SPLIT_GAP 64
 #define SM750_DRM_MAX_DAMAGE_RECTS 32
+/*
+ * Analog (EBU/SECAM-style) test-bar colours in 0xRRGGBB order: white,
+ * yellow, cyan, green, magenta, red, blue, and a black bar at the right
+ * edge. These are the classic 75% EBU bar values, not a display profile.
+ */
+#define SM750_TEST_WHITE   0xffffff
+#define SM750_TEST_YELLOW  0xffff00
+#define SM750_TEST_CYAN    0x00ffff
+#define SM750_TEST_GREEN   0x00ff00
+#define SM750_TEST_MAGENTA 0xff00ff
+#define SM750_TEST_RED     0xff0000
+#define SM750_TEST_BLUE    0x0000ff
+#define SM750_TEST_BLACK   0x000000
+#define SM750_TEST_BAR_COUNT 8
+#define SM750_TEST_GRAY_STEPS 8
+#define SM750_TEST_SWEEP_WIDTH 3
+#define SM750_TEST_MIN_WIDTH 320
+#define SM750_TEST_MIN_HEIGHT 200
+#define SM750_TEST_PERIOD_MIN_MS 500
+#define SM750_TEST_PERIOD_MAX_MS 600000
+#define SM750_TEST_LINE_BYTES (SM750_DRM_MAX_WIDTH * sizeof(u32))
 #define SM750_DRM_MAX_ROW_RUNS 8
 #define SM750_DRM_DENSE_RUN_NUMERATOR 3
 #define SM750_DRM_DENSE_RUN_DENOMINATOR 4
@@ -211,6 +233,8 @@ static unsigned int dma_batch_rows = 16;
 static bool staging_timing;
 static unsigned int shadow_dma_min_bytes = 4096;
 static unsigned int crc_window_bytes = 262144;
+static char *test_pattern = "auto";
+static unsigned int test_pattern_period_ms = 5000;
 module_param(scanout_format, charp, 0444);
 module_param(dither_green_gain, uint, 0444);
 module_param(edid_only, bool, 0444);
@@ -254,6 +278,12 @@ MODULE_PARM_DESC(shadow_dma_min_bytes,
 	"Minimum aligned shadow span for DMA (default 4096 bytes)");
 MODULE_PARM_DESC(crc_window_bytes,
 	"Bytes of the visible scanout region read per CRC (default 262144, minimum 4096)");
+module_param(test_pattern, charp, 0644);
+module_param(test_pattern_period_ms, uint, 0644);
+MODULE_PARM_DESC(test_pattern,
+	"Test card fallback when no client paints: off, auto (default), or always");
+MODULE_PARM_DESC(test_pattern_period_ms,
+	"Milliseconds between test-card palette rotations, 0 keeps it static (default 5000, clamped to 500-600000)");
 
 /*
  * Stages of sm750_program_mode(), in call order. mode_stage holds the last
@@ -317,6 +347,11 @@ struct sm750_drm_device {
 	u32 *xrgb_output_line;
 	u32 *cursor_source;
 	u8 *cursor_image;
+	u32 *test_pattern_line;
+	struct delayed_work test_pattern_work;
+	u32 test_pattern_phase;
+	u32 test_pattern_width;
+	u32 test_pattern_height;
 	void *dma_staging[SM750_DRM_DMA_STAGING_BUFFERS];
 	dma_addr_t dma_staging_address[SM750_DRM_DMA_STAGING_BUFFERS];
 	struct completion dma_completion;
@@ -370,6 +405,8 @@ struct sm750_drm_device {
 	bool softscale_active;
 	bool shadow_source_snapshot_valid;
 	bool rgb565_scanout_snapshot_valid;
+	bool test_pattern_active;
+	bool test_pattern_fresh;
 	bool hardware_cursor;
 	bool cursor_image_valid;
 	bool shadow_dma_enabled;
@@ -3430,6 +3467,211 @@ static bool sm750_shadow_frame_is_blank(struct sm750_drm_device *sdev,
 	return true;
 }
 
+/*
+ * Test-card fallback: when the pipe is about to scan a frame nobody has
+ * painted, draw one instead of showing a black panel. The card is written
+ * straight into the scanout window; a later client commit overwrites it
+ * because sm750_pipe_update() stops the rotation and re-uploads the client
+ * frame. The palette rotates because a static card is the burn-in pattern a
+ * kiosk panel hits overnight, and the sweep bar makes a stalled work item
+ * visible at a glance.
+ */
+
+/* Midpoint (Bresenham) circle, stored as a per-row outline half-width. */
+static void sm750_test_pattern_circle(u32 radius, u32 *half)
+{
+	u32 x = 0;
+	u32 y = radius;
+	int err = 3 - 2 * (int)radius;
+
+	while (y >= x) {
+		half[y] = x;
+		half[x] = y;
+		x++;
+		if (err > 0) {
+			y--;
+			err += 4 * ((int)x - (int)y) + 10;
+		} else {
+			err += 4 * (int)x + 6;
+		}
+	}
+}
+
+static void sm750_test_pattern_put(struct sm750_drm_device *sdev, void *line,
+				   u32 x, u32 rgb)
+{
+	if (sdev->rgb565) {
+		u32 r = (rgb >> 16) & 0xff;
+		u32 g = (rgb >> 8) & 0xff;
+		u32 b = rgb & 0xff;
+
+		((u16 *)line)[x] = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+	} else {
+		((u32 *)line)[x] = rgb;
+	}
+}
+
+static void sm750_paint_test_pattern(struct sm750_drm_device *sdev, u32 width,
+				     u32 height)
+{
+	static const u32 bars[SM750_TEST_BAR_COUNT - 1] = {
+		SM750_TEST_WHITE, SM750_TEST_YELLOW, SM750_TEST_CYAN,
+		SM750_TEST_GREEN, SM750_TEST_MAGENTA, SM750_TEST_RED,
+		SM750_TEST_BLUE,
+	};
+	u32 phase = sdev->test_pattern_phase;
+	unsigned int pitch = sdev->scanout_pitch;
+	unsigned int cpp = sdev->rgb565 ? sizeof(u16) : sizeof(u32);
+	u32 half[SM750_DRM_MAX_HEIGHT / 4 + 1] = { 0 };
+	void *line = sdev->test_pattern_line;
+	u32 bar_bottom, bar_w, sweep_x, grid_x, grid_y, radius;
+	u32 cx, cy, x, y;
+
+	if (!line || !pitch)
+		return;
+	/* The softscaler rewrites every line on upload; a card here would be
+	 * overwritten by the very path that produced the blank frame. */
+	if (sdev->softscale_active)
+		return;
+	if (width < SM750_TEST_MIN_WIDTH || height < SM750_TEST_MIN_HEIGHT)
+		return;
+	if (pitch < width * cpp || pitch > SM750_TEST_LINE_BYTES)
+		return;
+	if ((u64)pitch * height > sdev->vram_size - sdev->scanout_offset)
+		return;
+
+	bar_bottom = height * 2 / 3;
+	bar_w = max(width / SM750_TEST_BAR_COUNT, 1u);
+	grid_x = max(width / 16, 1u);
+	grid_y = max(bar_bottom / 12, 1u);
+	sweep_x = (u32)(((u64)phase * max(width / 64, 1u)) % width);
+	cx = width / 2;
+	cy = bar_bottom / 2;
+	radius = clamp_t(u32, min(width, bar_bottom) / 4,
+			 16u, SM750_DRM_MAX_HEIGHT / 4);
+	sm750_test_pattern_circle(radius, half);
+
+	for (y = 0; y < height; y++) {
+		u32 dy = y > cy ? y - cy : cy - y;
+		bool border_row = y == 2 || y == height - 3;
+
+		for (x = 0; x < width; x++) {
+			u32 dx = x > cx ? x - cx : cx - x;
+			u32 rgb;
+
+			if (y < bar_bottom) {
+				u32 slot = x / bar_w;
+
+				if (slot >= SM750_TEST_BAR_COUNT - 1)
+					rgb = SM750_TEST_BLACK;
+				else
+					rgb = bars[(slot + phase) %
+						   (SM750_TEST_BAR_COUNT - 1)];
+			} else {
+				u32 step = (x * SM750_TEST_GRAY_STEPS / width +
+					    phase) % SM750_TEST_GRAY_STEPS;
+				u32 v = step * 255 / (SM750_TEST_GRAY_STEPS - 1);
+				rgb = (v << 16) | (v << 8) | v;
+			}
+
+			if (y < bar_bottom && (x % grid_x == 0 || y % grid_y == 0))
+				rgb = SM750_TEST_WHITE;
+			if ((x + width - sweep_x) % width < SM750_TEST_SWEEP_WIDTH)
+				rgb = SM750_TEST_WHITE;
+			if (dy <= 1 && dx <= radius)
+				rgb = SM750_TEST_WHITE;
+			if (dx <= 1 && dy <= cy)
+				rgb = SM750_TEST_WHITE;
+			if (dy < radius && half[dy] &&
+			    (dx == half[dy] || dx + 1 == half[dy]))
+				rgb = SM750_TEST_WHITE;
+			if (border_row || x == 2 || x == width - 3)
+				rgb = SM750_TEST_WHITE;
+
+			sm750_test_pattern_put(sdev, line, x, rgb);
+		}
+		if (pitch > width * cpp)
+			memset((u8 *)line + width * cpp, 0,
+			       pitch - width * cpp);
+		memcpy_toio(sdev->vram + sdev->scanout_offset +
+			    (u64)y * pitch, line, pitch);
+	}
+
+	/* The card bypasses the snapshot bookkeeping, so both snapshots are
+	 * stale: a later client commit must re-upload every span. */
+	sdev->shadow_source_snapshot_valid = false;
+	sdev->rgb565_scanout_snapshot_valid = false;
+}
+
+static unsigned int sm750_test_pattern_period(struct sm750_drm_device *sdev)
+{
+	unsigned int period = READ_ONCE(test_pattern_period_ms);
+
+	if (!period)
+		return 0;
+	if (period < SM750_TEST_PERIOD_MIN_MS || period > SM750_TEST_PERIOD_MAX_MS) {
+		unsigned int clamped = clamp_t(unsigned int, period,
+					SM750_TEST_PERIOD_MIN_MS,
+					SM750_TEST_PERIOD_MAX_MS);
+
+		drm_info_once(&sdev->drm,
+			      "test_pattern_period_ms=%u is outside %u-%u ms, clamped to %u\n",
+			      period, SM750_TEST_PERIOD_MIN_MS,
+			      SM750_TEST_PERIOD_MAX_MS, clamped);
+		period = clamped;
+	}
+
+	return period;
+}
+
+static void sm750_test_pattern_cancel(struct sm750_drm_device *sdev)
+{
+	sdev->test_pattern_active = false;
+	sdev->test_pattern_fresh = false;
+	cancel_delayed_work_sync(&sdev->test_pattern_work);
+}
+
+static void sm750_test_pattern_work(struct work_struct *work)
+{
+	struct sm750_drm_device *sdev =
+		container_of(to_delayed_work(work), struct sm750_drm_device,
+			     test_pattern_work);
+	unsigned int period = sm750_test_pattern_period(sdev);
+	bool painted = false;
+
+	mutex_lock(&sdev->mode_lock);
+	/*
+	 * Both conditions are set and cleared under mode_lock: a client
+	 * commit or a pipe disable turns test_pattern_active off first, so a
+	 * tick that loses the race paints nothing. The card is repainted in
+	 * place rather than through the staged flip because
+	 * sm750_present_staged_frame() takes mode_lock itself and assumes the
+	 * shadow upload bookkeeping; one torn frame every few seconds is a
+	 * cheaper trade than a new lock order on a diagnostic path.
+	 */
+	if (sdev->test_pattern_active && sdev->scanout_pitch) {
+		sdev->test_pattern_phase++;
+		sm750_paint_test_pattern(sdev, sdev->test_pattern_width,
+					 sdev->test_pattern_height);
+		painted = true;
+	}
+	mutex_unlock(&sdev->mode_lock);
+
+	if (painted && period)
+		schedule_delayed_work(&sdev->test_pattern_work,
+				      msecs_to_jiffies(period));
+}
+
+static bool sm750_test_pattern_should_paint(bool blank)
+{
+	if (!strcmp(test_pattern, "always"))
+		return true;
+	if (strcmp(test_pattern, "auto"))
+		return false;
+
+	return blank;
+}
+
 static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 			      struct drm_crtc_state *crtc_state,
 			      struct drm_plane_state *plane_state)
@@ -3512,18 +3754,49 @@ static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 				 pitch, offset, cpp);
 	mutex_unlock(&sdev->mode_lock);
 	if (!ret) {
+		bool blank = false;
+		unsigned int period;
+
 		sdev->backbuffer_ready = sdev->backbuffer_available;
 		if (sdev->backbuffer_ready)
 			drm_info(&sdev->drm,
 				 "full-frame backbuffer staging enabled (%u bytes per buffer)\n",
 				 sdev->scanout_frame_size);
-		if (sdev->shadow_scanout && plane_state->fb &&
-		    !blank_frame_reported &&
-		    sm750_shadow_frame_is_blank(sdev,
-				to_drm_shadow_plane_state(plane_state))) {
+		/* One sample, two consumers: the A31/A33 diagnostic and the
+		 * test_pattern=auto paint decision below. */
+		if (sdev->shadow_scanout && plane_state->fb)
+			blank = sm750_shadow_frame_is_blank(sdev,
+					to_drm_shadow_plane_state(plane_state));
+		if (blank && !blank_frame_reported) {
 			blank_frame_reported = true;
 			drm_info(&sdev->drm,
 				 "console framebuffer is blank: the panel now scans a frame nobody has painted (is the foreground VT in KD_TEXT?)\n");
+		}
+		/*
+		 * Fallback for a foreground VT in KD_GRAPHICS with no
+		 * producer: paint a card so the panel is not simply dark. Any
+		 * later client commit overwrites it (sm750_pipe_update()
+		 * cancels the rotation first).
+		 */
+		if (sm750_test_pattern_should_paint(blank)) {
+			sdev->test_pattern_width =
+				crtc_state->adjusted_mode.hdisplay;
+			sdev->test_pattern_height =
+				crtc_state->adjusted_mode.vdisplay;
+			sm750_paint_test_pattern(sdev,
+						 sdev->test_pattern_width,
+						 sdev->test_pattern_height);
+			sdev->test_pattern_active = true;
+			/* The enabling commit also runs sm750_pipe_update(); see
+			 * the guard there. */
+			sdev->test_pattern_fresh = true;
+			drm_info(&sdev->drm,
+				 "painted a test card: no client has produced a frame (test_pattern=%s)\n",
+				 test_pattern);
+			period = sm750_test_pattern_period(sdev);
+			if (period)
+				schedule_delayed_work(&sdev->test_pattern_work,
+						      msecs_to_jiffies(period));
 		}
 		drm_crtc_vblank_on(&pipe->crtc);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
@@ -3535,6 +3808,7 @@ static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 	}
 fail:
 	sm750_async_quiesce(sdev);
+	sm750_test_pattern_cancel(sdev);
 	sdev->softscale_active = false;
 	sdev->softscale_source_width = 0;
 	sdev->shadow_source_width = 0;
@@ -3590,6 +3864,24 @@ static void sm750_pipe_update(struct drm_simple_display_pipe *pipe,
 	unsigned int rect_count = 0;
 	u32 offset;
 
+	/*
+	 * The enabling commit that just painted the card also runs this hook.
+	 * Skip that one upload so the blank client frame cannot be written over
+	 * the fresh card; a later real commit cancels the rotation and uploads
+	 * normally.
+	 */
+	if (sdev->test_pattern_fresh) {
+		sdev->test_pattern_fresh = false;
+		goto event;
+	}
+	/*
+	 * A real client frame is arriving: stop the test-card rotation before
+	 * any upload so a tick can never overwrite live pixels. The flag is
+	 * cleared first, so a tick that already lost the race paints nothing.
+	 */
+	if (sdev->test_pattern_active)
+		sm750_test_pattern_cancel(sdev);
+
 	if (sdev->shadow_scanout) {
 		drm_atomic_helper_damage_iter_init(&iter, old_plane_state, state);
 		drm_atomic_for_each_plane_damage(&iter, &damage)
@@ -3630,6 +3922,7 @@ static void sm750_pipe_disable(struct drm_simple_display_pipe *pipe)
 	int ret;
 
 	sm750_async_quiesce(sdev);
+	sm750_test_pattern_cancel(sdev);
 	sm750_crc_suspend(sdev);
 	drm_crtc_vblank_off(&pipe->crtc);
 	sm750_send_vblank_event(pipe);
@@ -4147,6 +4440,7 @@ static int sm750_pci_probe(struct pci_dev *pdev,
 	mutex_init(&sdev->async_lock);
 	mutex_init(&sdev->crc_mutex);
 	INIT_WORK(&sdev->shadow_work, sm750_async_shadow_work);
+	INIT_DELAYED_WORK(&sdev->test_pattern_work, sm750_test_pattern_work);
 	spin_lock_init(&sdev->vblank_lock);
 	hrtimer_setup(&sdev->vblank_timer, sm750_vblank_timer_fn,
 		      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
@@ -4172,6 +4466,15 @@ static int sm750_pci_probe(struct pci_dev *pdev,
 	ret = devm_add_action_or_reset(&pdev->dev, sm750_unmap_vram, sdev);
 	if (ret)
 		return ret;
+	/*
+	 * One line buffer for the test card, allocated once at probe so a
+	 * rotation tick in a work item never allocates.
+	 */
+	sdev->test_pattern_line = devm_kmalloc_array(&pdev->dev,
+		SM750_DRM_MAX_WIDTH, sizeof(*sdev->test_pattern_line),
+		GFP_KERNEL);
+	if (!sdev->test_pattern_line)
+		return -ENOMEM;
 	if (sdev->shadow_scanout) {
 		sdev->dither_scale_map = devm_kzalloc(&pdev->dev,
 			sizeof(*sdev->dither_scale_map), GFP_KERNEL);
@@ -4363,6 +4666,7 @@ static void sm750_pci_remove(struct pci_dev *pdev)
 
 	drm_kms_helper_poll_fini(&sdev->drm);
 	drm_dev_unplug(&sdev->drm);
+	sm750_test_pattern_cancel(sdev);
 	drm_atomic_helper_shutdown(&sdev->drm);
 	sm750_vblank_timer_stop(sdev, true);
 	mutex_lock(&sdev->mode_lock);

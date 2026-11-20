@@ -1,0 +1,277 @@
+# utc: 2026-11-20
+# T37 - test-card fallback (defect A34) and the sm750-console helper
+# host: deneb, kernel 7.3.4-100.fc43.x86_64, Fedora 43
+# module: sm750hdmidrm from this working tree, version string 0.6.1
+# actor: implementer subagent (no root, no hardware access)
+#
+# This file records everything that can be established WITHOUT the card:
+# the trigger condition, the geometry and the pixel arithmetic, the parameter
+# surface, the gate output with its planted negative controls, and the
+# build/test exit codes. Section 8 states plainly what has NOT been observed.
+
+1. WHY THE FALLBACK EXISTS
+--------------------------
+Measured state at the start of the task (see docs/AUDIT.md and the 22-*
+files): the panel scans `PANEL_FB_ADDRESS=0x00000000`, the window reads
+262144 zero bytes, `crc32 0xe20eea22` (the CRC of 262144 zero bytes), and
+`PANEL_DISPLAY_CTRL=0x0f010105` with `PANEL_CURRENT_LINE` advancing. The
+raster is alive; the frame nobody painted is black. The foreground VT is
+KD_GRAPHICS because the Wayland session runs on card1, and
+`drivers/tty/vt/vt.c` drops console output before fbcon when
+`vc->vc_mode != KD_TEXT`, so the blank client buffer is never repainted.
+
+Two routes close that: put the VT back into KD_TEXT (`sm750-console text`,
+section 7), or paint a known frame from the driver so the panel is never
+dead black. This file is about the second one; the first stays the preferred
+route because it restores the console the user asked for.
+
+2. TRIGGER CONDITION
+--------------------
+Module parameter `test_pattern`, type `charp`, mode `0644`, default `auto`
+(src/sm750_drm.c:236, module_param at src/sm750_drm.c:281):
+
+    off     never paint
+    auto    paint only when the frame being enabled is entirely blank
+    always  paint on every enable
+
+The decision is made once per pipe enable, from a single blank sample:
+
+    if (sdev->shadow_scanout && plane_state->fb)
+            blank = sm750_shadow_frame_is_blank(sdev, ...);
+
+`sm750_shadow_frame_is_blank()` is the pre-existing 16x16 grid sample of the
+shadow plane state (src/sm750_drm.c, "the frame is all zero" test). The same
+`blank` value feeds the diagnostic that names KD_TEXT and the paint decision,
+so the frame is never sampled twice.
+
+`sm750_test_pattern_should_paint(blank)`:
+- `test_pattern == "always"` -> true;
+- any value other than `"auto"` -> false (so `off`, and an unknown value, do
+  not paint: an unrecognised string is inert, not a surprise paint);
+- otherwise -> `blank`.
+
+The paint call sits in the `if (!ret)` block of `sm750_pipe_enable()`, after
+the blank diagnostic and before `drm_crtc_vblank_on()`, so the card is in
+VRAM before vblanks are enabled. The first real client commit reaches
+`sm750_pipe_update()`, which cancels the rotation and uploads the client
+frame over the card; the enabling commit itself is skipped once through
+`test_pattern_fresh` so the card is not erased by the very commit that
+enabled the pipe.
+
+3. GEOMETRY (worked examples)
+-----------------------------
+`scanout_pitch` is computed by `sm750_pipe_enable()`:
+`ALIGN((softscale_active ? 2048 : adjusted_mode.hdisplay) * cpp, 16)` with
+`cpp = rgb565 ? 2 : 4`. The painter uses the pitch, never the width, and pads
+each row to it:
+
+    memset((u8 *)line + width * cpp, 0, pitch - width * cpp);
+    memcpy_toio(sdev->vram + sdev->scanout_offset + (u64)y * pitch,
+                line, pitch);
+
+| mode | bpp | cpp | pitch | frame bytes |
+| --- | --- | --- | --- | --- |
+| 1024x768 | RGB565 | 2 | 2048 | 1,572,864 |
+| 1920x1080 | RGB565 | 2 | 3840 | 4,147,200 |
+| 1920x1080 | XRGB8888 | 4 | 7680 | 8,294,400 |
+
+VRAM is 16 MiB (docs/HARDWARE.md:13) and the cursor reserves the tail
+(64 KiB when the hardware cursor is on), so every one of those frames fits.
+The painter still checks the bound it can see:
+
+    if ((u64)pitch * height > sdev->vram_size - sdev->scanout_offset)
+            return;
+
+which is the `sm750_crc_region()` bound style. Note the 64-bit product: a
+32-bit `pitch * height` would overflow above 4 GiB, and though a single
+frame cannot reach that, the shift makes the guard honest for any future
+multi-plane use.
+
+Element geometry for 1024x768 (the worked example; every value is a division
+of the requested mode, so it scales with the display):
+
+- `bar_bottom = height * 2 / 3` = 512; colour bars occupy rows 0..511.
+- `bar_w = max(width / 8, 1)` = 128; slots 0..6 are the EBU bars (896 px) and
+  slot 7 is the fixed black right-edge bar (128 px).
+- `grid_x = max(width / 16, 1)` = 64; `grid_y = max(bar_bottom / 12, 1)` = 42,
+  giving the 16x12 grid required by the brief.
+- `cx = width / 2` = 512; `cy = bar_bottom / 2` = 256.
+- `radius = clamp_t(u32, min(width, bar_bottom) / 4, 16, 288)` = 128; the
+  Bresenham table is `half[SM750_DRM_MAX_HEIGHT / 4 + 1]`, filled once with
+  the midpoint algorithm (`err = 3 - 2 * radius`), so the circle costs a
+  table walk, not a square root.
+- `sweep_x = (phase * max(width / 64, 1)) % width` = `(phase * 16) % 1024`;
+  the sweep is 3 px wide and crosses the screen in 64 ticks, i.e. 320 s at
+  the default 5 s period. A frozen sweep therefore proves the delayed work
+  stopped, which is the whole point of putting a moving element on a static
+  card.
+
+4. PIXEL ENCODING
+-----------------
+`sm750_test_pattern_put()` writes one pixel in the format the pipe scans:
+
+    RGB565:  ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
+    XRGB:    ((u32 *)line)[x] = rgb;        /* 0x00RRGGBB */
+
+Derived values used by the bar table (src/sm750_drm.c:129-136):
+
+| colour | 0x00RRGGBB | RGB565 |
+| --- | --- | --- |
+| white | 0xffffff | 0xffff |
+| yellow | 0xffff00 | 0xffe0 |
+| cyan | 0x00ffff | 0x07ff |
+| green | 0x00ff00 | 0x07e0 |
+| magenta | 0xff00ff | 0xf81f |
+| red | 0xff0000 | 0xf800 |
+| blue | 0x0000ff | 0x001f |
+| black | 0x000000 | 0x0000 |
+
+Grayscale step s (0..7) is `v = s * 255 / 7` = 0, 36, 72, 109, 145, 182, 218,
+255, written as `(v << 16) | (v << 8) | v`, so the staircase is identical in
+both bit depths after the pipe's own conversion.
+
+5. GUARD LIST (each one is a planted negative control target)
+-------------------------------------------------------------
+1. `!line || !pitch` - no line buffer (allocation failed) or no scanout yet.
+2. `sdev->softscale_active` - the softscaler rewrites every line on upload
+   with its own pitch (2048 source columns), so a card there would be
+   overwritten by the path that produced the blank frame.
+3. `width < SM750_TEST_MIN_WIDTH || height < SM750_TEST_MIN_HEIGHT` - below
+   320x200 the fixed geometry (16x12 grid, 128 px circle) degenerates into
+   noise; the panel is better left black than covered in artefacts.
+4. `pitch < width * cpp || pitch > SM750_TEST_LINE_BYTES` - the line buffer is
+   `SM750_DRM_MAX_WIDTH * sizeof(u32)` = 10240 bytes; a pitch outside
+   `[width * cpp, 10240]` would either truncate the row or overflow the
+   buffer.
+5. `(u64)pitch * height > sdev->vram_size - sdev->scanout_offset` - the frame
+   must fit the VRAM left after the scanout base.
+
+6. PARAMETERS
+-------------
+| name | type | mode | default | meaning |
+| --- | --- | --- | --- | --- |
+| test_pattern | charp | 0644 | "auto" | off / auto / always |
+| test_pattern_period_ms | uint | 0644 | 5000 | ms between palette rotations; 0 = static |
+
+`sm750_test_pattern_period()` reads the value with READ_ONCE, returns 0
+unchanged (static card), and clamps anything else into 500..600000 ms with
+one `drm_info_once` naming the clamped value. Clamp, not reject: a 0644 store
+must not fail, and an operator who writes 100 wants a fast rotation, not an
+error on a sysfs write. The clamp bounds the wake-up cost (2 Hz minimum) and
+keeps the palette from strobing.
+
+Rotation content per tick: `test_pattern_phase++`; the seven EBU bars rotate
+by one slot (`bars[(slot + phase) % 7]`), the eight grayscale steps are
+phase-shifted (`(x * 8 / width + phase) % 8`), and the sweep moves
+`width / 64` px. Grid, crosshair, circle and border stay fixed so a geometry
+or scaling error remains visible while the colours move. The tick is silent;
+the initial paint emits exactly one line:
+
+    painted a test card: no client has produced a frame (test_pattern=%s)
+
+7. CONSOLE HELPER (the KD_TEXT route)
+-------------------------------------
+`tools/sm750-console.sh`, staged at `/mega/tmp/sm750/sm750-console`
+(139 lines, 3877 bytes, sha256
+`e3955655c5c0c8942e733189f3e0342481fbcc6e7c8e433c259eb0b340244c21`).
+
+    sm750-console show          active tty, KDGETMODE of /dev/tty0, vtconsole
+                                bind state, PANEL_FB_ADDRESS, scanout
+                                offset/nonzero/crc32
+    sm750-console text [N]      chvt N (default 2), then the same status
+    sm750-console graphics      chvt 1, then the same status
+
+KDGETMODE is read with the same technique the root console gate already
+uses: `python3 -c '... fcntl.ioctl(f.fileno(), 0x4B3B, struct.pack("i", 0))'`
+on `/dev/tty0`; 0 = KD_TEXT, 1 = KD_GRAPHICS, 4 = KD_KDWANTED. It is
+root-only in effect (debugfs is mode 0700 and `chvt` needs
+`CAP_SYS_TTY_CONFIG`), `set -u`, POSIX sh, usage errors exit 2, environment
+errors exit 1. Not installed: the install is proposed as row 9 of
+docs/ROOT-ACTIONS.md with the one-line grant
+`coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-console` (zero colons in
+the path). Nothing in `make check` depends on it.
+
+8. NOT YET OBSERVED ON THE PANEL
+--------------------------------
+This task ran without root and without the card. The following are therefore
+NOT proven here and must be confirmed by the host owner on the next root
+session:
+- that the card appears on the panel and the raster shows the bars;
+- that the palette actually rotates at 5 s and the sweep advances (the
+  delayed work is only exercised through source assertions);
+- that a client commit repaints over the card without a visible torn frame;
+- that the softscaled 2048-column path is skipped as intended;
+- the real `scanout nonzero`/`crc32` after a paint (the expected change is
+  from 0x00000000 / 0xe20eea22 to a nonzero offset and a CRC other than
+  0xe20eea22, but the value depends on the mode).
+
+What IS established: the code compiles for two kernel header sets, the source
+gate passes with nine planted negative controls rejected, and the existing
+suites are unchanged (section 9).
+
+9. VERIFICATION RUN (exit codes)
+--------------------------------
+Recorded from this working tree; see docs/LOGBOOK.md for the entry.
+
+    make CC=/usr/bin/gcc                                    exit 0
+    make CC=/usr/bin/gcc KDIR=<6.17.1-300 headers>          exit 0
+    make check (rootless libdrm env)                        exit 0
+    tests/check-test-pattern.sh                             exit 0
+    tests/check-drm-policy.sh / check-console-blank.sh      exit 0
+    tests/check-crc-uapi.sh / check-restore-path.sh         exit 0
+    tests/check-scratch-policy.sh                           exit 0
+    tests/check-release-version.sh                          exit 0
+    tests/check-drm-packaging.sh                            exit 0
+    tests/check-static.sh                                   exit 0 (after the probe-indent fix below)
+    tests/check-rpm-dkms.sh                                 exit 0
+    ./build-package.sh                                      exit 0
+    ./tests/audit-release.sh                                exit 0 (after the A35 fix below)
+
+The gate runs above are the final ones, made after the A35 fix and the doc
+corrections. `tests/check-rpm-dkms.sh` was invoked with
+`SM750_RPM_EVIDENCE=/mega/tmp/sm750/t37-evid` so its six tracked logs under
+`docs/evidence/packaging/` were not rewritten: T37 changes no packaging input,
+and regenerating them would have replaced six committed transcripts with
+timestamp-only churn. The gate is the same code path; only the output
+directory differs, and the tracked logs were left exactly as HEAD has them.
+
+Two defects were found by these runs and fixed in the same session:
+
+1. `tests/check-static.sh` exit 1 with a new smatch finding,
+   `sm750_drm.c:4503 sm750_pci_probe() warn: inconsistent indenting`. An edit
+   had joined the `GFP_KERNEL);` of the `xrgb_output_line` allocation with the
+   following `if (sdev->hardware_cursor) {` on one line. It compiled; splitting
+   the line restored the gate to PASS with no change in behaviour.
+2. `tests/audit-release.sh` exit 1 with
+   `tools/sm750-restore-cycle.sh:36:REPO=` plus the literal absolute checkout
+   path. This is
+   pre-existing at HEAD 1f74688 (reproduced in a clean worktree: build-package
+   0, audit 1), i.e. the 0.6.1 tree could not pass its own release gate. Fixed
+   by resolving the checkout through `getent passwd coder`, the idiom
+   `tools/sm750-crc-cycle.sh:21-26` already documents; `SM750_REPO` still wins.
+   After the fix, build-package and the audit both exit 0.
+
+Negative controls, verbatim from tests/check-test-pattern.sh:
+
+    negative control default_off: rejected (exit 1): test_pattern does not default to auto
+    negative control paint_before_program_mode: rejected (exit 1): the test card is painted before sm750_program_mode()
+    negative control no_softscale_guard: rejected (exit 1): the painter does not skip a softscaled window
+    negative control memcpy_without_pitch: rejected (exit 1): the painter does not copy a full pitch-padded row
+    negative control no_cancel_on_disable: rejected (exit 1): sm750_pipe_disable leaves the rotation running
+    negative control no_cancel_on_update: rejected (exit 1): a client commit does not stop the rotation
+    negative control phase_never_advances: rejected (exit 1): a tick does not advance the palette phase
+    negative control per_tick_logging: rejected (exit 1): a rotation tick logs with drm_info
+    negative control period_default_zero: rejected (exit 1): test_pattern_period_ms does not default to 5000
+
+10. BURN-IN RATIONALE
+---------------------
+A static test card is a burn-in hazard on any panel: the bar edges, the
+crosshair and the border sit on the same phosphor/subpixel cell for hours.
+The palette rotation moves the luminance across every bar and every gray step
+within 40 s at the default period (8 phases), while the geometry reference
+stays put so the card keeps its diagnostic value. The sweep is the liveness
+witness: if the picture freezes, the work item stopped, and the next step is
+`sm750-console text` rather than a driver change. Operators who cannot accept
+any moving image on the panel should set `test_pattern=off` and use the
+KD_TEXT route instead; that is why the fallback is opt-out and why A34 is
+recorded as `fixed; opt-out available` rather than a hard-wired default.

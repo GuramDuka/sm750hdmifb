@@ -33,6 +33,7 @@ scripts=(
 	tests/check-static.sh
 	tests/check-crc-uapi.sh
 	tests/check-console-blank.sh
+	tests/check-test-pattern.sh
 	tests/check-restore-path.sh
 	tools/benchmark-staging.sh
 	tools/sm750-crc-cycle.sh
