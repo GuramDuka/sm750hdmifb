@@ -1,12 +1,14 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Defect dispositions
 
-One row per defect inventoried in [AUDIT.md](AUDIT.md), plus six found later:
+One row per defect inventoried in [AUDIT.md](AUDIT.md), plus eight found later:
 `A25`, in the kernel log of the running 0.5.9 build, `A26`, in the IGT
 `kms_addfb_basic` run, `A27`, isolated by a targeted reproduction of the
 same 0.5.9 kernel log episode, `A28`, by the static-analysis gate added in
-T19, `A29`, by the release gate itself, and `A30`, by the acceptance review of
-that same static gate. They are recorded here because this
+T19, `A29`, by the release gate itself, `A30`, by the acceptance review of
+that same static gate, `A32`, by the root restore-path run of T20 and the
+RCA that followed, and `A33`, by the coverage review of the stale-DKMS purge
+in T36. They are recorded here because this
 table is the current defect state, not a copy of the audit. [AUDIT.md](AUDIT.md)
 still describes the pre-fix tree and is not rewritten. Statuses:
 
@@ -52,6 +54,8 @@ after (working tree) form of every fixed item. All logs were produced unprivileg
 | A28 | S4 | Found by static analysis, not by the audit: smatch reports `shift has higher precedence than mask` five times on 7.3.4 and three times on 6.17.1, at `src/sm750_drm.c:1651,1663,1665,1673` and `src/sii902x.c:741`. Not a driver defect and not fixable in the driver: the message is produced by `GENMASK_TYPE()` (`include/linux/bits.h:52`), which mixes `<<` with `&`/`>>` without inner parentheses and is reached through `DMA_BIT_MASK()` (`include/linux/dma-mapping.h:126`) and `GENMASK()`; the enclosing cast and parentheses make the value correct, and smatch's precedence check does not model the cast. A five-line out-of-tree probe reproduces the warning with no driver code. The four fixed sparse findings (`sm750_test_*` globals with no declaration in scope) and the cppcheck `unknownMacro` suppression are also recorded there | accepted | no code change: the driver expressions are correct and the header macro is not ours to edit. The residual findings are pinned in the opt-in gate baseline, so the gate fails on anything new while these stay quiet. Also records that the out-of-tree module has no `.BTF` section (`Skipping BTF generation ... due to unavailability of vmlinux`), so `pahole -F btf` is unavailable and layouts come from DWARF | `docs/STATIC-ANALYSIS.md`, `docs/evidence/builds/20-static-sparse.log` to `25-static-gate.log` |
 | A29 | S2 | The packager and the release gate each carried their own copy of the development-only directory list, so they disagreed by construction: `build-package.sh:98-100` shipped the tracked tree minus `docs/images` only, while `tests/audit-release.sh:54-58` failed the archive if `docs/plan`, `docs/evidence` or `docs/images` appeared in it. Once `docs/plan/` and `docs/evidence/` became tracked, every fresh build produced a tarball the gate rejected: `./tests/audit-release.sh` exited 1 with `Source archive contains development-only content: docs/plan` on a 160-file archive that carried 1 `docs/plan` and 69 `docs/evidence` entries. The same divergence had a second consequence: the shipped `docs/ENVIRONMENT.md` named three absolute `$HOME` paths that the audit's own private-path scan rejects, hidden behind the earlier exit | fixed | one list, read by every consumer: `packaging/source-excludes.sh` declares `sm750_dev_only=(docs/plan docs/evidence docs/images)` and `sm750_dev_only_pathspecs()`; `build-package.sh:90-128` sources it for both the `git ls-files` pathspecs and the non-git `--exclude=` arguments; `tests/audit-release.sh:52-80` sources it for the forbidden-directory loop and for the manifest diff; `tests/check-rpm-dkms.sh:70-85` sources it for the DKMS payload. `tests/check-drm-packaging.sh:32-49` asserts all three paths are in the shared file, that both scripts read it, and that neither hard-codes `:(exclude)docs/` again. `docs/ENVIRONMENT.md:41-51` now writes those paths with `~/`. The gate is not narrowed: a tarball rebuilt without the list still fails it | `docs/evidence/builds/26-audit-release.log`, `docs/evidence/builds/27-source-archive-manifest.log` |
 | A30 | S3 | The opt-in static gate was non-deterministic: over one unchanged tree, T8's acceptance run got `static gate: PASS` (exit 0) and another got `coccinelle: exit 255` / `spatch failed` (exit 1). The cause is an inherited variable, not the driver and not a patch: spatch's Python bridge locates libpython with `pkg-config --libs python-3.14`, which returns the empty string in a clean shell but `-L/mega/tmp/sm750/t3/libdrm/usr/lib64` once `docs/ENVIRONMENT.md` section 4's `PKG_CONFIG_SYSROOT_DIR` is exported, and spatch then dies with `Py.find_library_path: unable to parse the output of pkg-config ...` before analysing a file | fixed | `tests/check-static.sh:37-46` clears `PKG_CONFIG_SYSROOT_DIR`, `PKG_CONFIG_PATH` and `PKG_CONFIG_LIBDIR` next to the existing locale sanitisation (the gate asks pkg-config nothing, so this removes a dependency and not a check); `:216` and `:237` name the patch behind a non-zero spatch exit; `:250` labels a 255 as a fatal spatch exit rather than a finding. No patch, no baseline line and no `src/` file was touched; the `check` recipe is still 17 commands | `docs/evidence/builds/28-static-determinism.log` |
+| A32 | S3 | The fbdev reconsole restore path could fail with `-ETIMEDOUT` and leave the panel blank. When the last userspace DRM client closed the node, `drm_fbdev_client_restore` submitted the fbcon restore commit; `commit_tail` ran `sm750_pipe_disable()` (which discarded the result of `ddk750_set_display_control(..., false)`) and then `sm750_pipe_enable()` -> `sm750_program_mode()`, whose display-control transition wait returned `-ETIMEDOUT`. Both waits compared the whole `PANEL_DISPLAY_CTRL` snapshot minus a reserved mask, so bits the hardware rewrites mid-transition (live VSYNC, FIFO request, pan, phase, gamma, format) could make a latched transition look unlatched; the mode loop additionally capped itself at 1000 iterations of `udelay(10)` (under one 60 Hz frame) and re-poked a stale snapshot. A27 had already removed the WARNING, the 10 s stalls and the refcount underflow that followed, so what remained was the failure itself and an invisible disable half | fixed; confirmed on hardware 2026-11-20 | masked compare plus re-poke: `wait_display_bits()` (`src/ddk750_display.c:14-45`) compares only `DISPLAY_CTRL_TIMING | DISPLAY_CTRL_PLANE` (`src/ddk750_reg.h:561`, `:567`) and rewrites the control value on every poll, keeping the 100 ms budget and logging `want`/`mask`/`last` on timeout; `program_mode_registers()` (`src/ddk750_mode.c:299-318`) uses the same mask and re-poke with `budget_us = max(20000, 2 * 1000000 / mode_param->vertical_frequency)` instead of `cnt > 1000`; `sm750_pipe_disable()` (`src/sm750_drm.c:3648-3652`) keeps the display-off result and warns with the `PANEL_DISPLAY_CTRL` readback, and the `sm750_pipe_enable()` fail path (`:3549-3562`) keeps A27 byte-for-byte and adds one `enable-fail state:` line with `PANEL_DISPLAY_CTRL`, `PANEL_PLL_CTRL`, `SYSTEM_CTRL` and `PANEL_CURRENT_LINE`. Gates: `tests/check-restore-path.sh` (four structural properties, four planted defects, part of `make check` through `tests/check-drm-policy.sh`) and `tools/sm750-restore-cycle.sh` (root stress harness, exit 0/1/2/3). Confirmed on hardware 2026-11-20 on the module built from this tree (srcversion `14ED4F27A83A6BB8AA445D2`, kernel 7.3.4-100.fc43): the CRC cycle passed all six assertions, 30 consecutive client exit/restore cycles succeeded 30/30, 20 mode changes (`modetest -s 35@38:1024x768`) completed 20/20, 95 enable events ran across two geometries (75 at 1920x1080, 20 at 1024x768), and a `grep -cE` over the whole session's dmesg for `failed to enable HDMI mode\|flip_done timed out\|commit wait timed out\|refcount_t: underflow\|did not latch\|panel did not acknowledge\|enable-fail state\|WARNING\|BUG:` returned 0. The same run recorded S10 passing for real under `KD_TEXT` (`offset` 0 = `PANEL_FB_ADDRESS` 0x00000000, `nonzero` 28766, `crc32` 0x0204dd04). Remaining uncertainty: single card and single panel; the 50 cycles were driven manually through the allowlisted sudo entries because `tools/sm750-restore-cycle.sh` refuses to run as non-root (`:73`), so its 120-iteration form is still unexercised. Absence of a fault line over 95 enable events lowers the rate, it does not prove impossibility | `docs/evidence/runtime/20-fbdev-restore-timeout-rca.txt`, `docs/evidence/runtime/21-fbdev-restore-fix.txt`, `docs/evidence/runtime/22-restore-fix-hardware-proof.txt` |
+| A33 | S4 | Observation, not a defect, found by the coverage review in T36: the `%posttrans` stale-registration purge carries a fallback branch that no test exercised. `packaging/sm750hdmifb.spec:227-228` runs `dkms remove -m %{dkms_name} -v "$stale_version" --all || echo "warning: dkms remove %{dkms_name}/$stale_version failed; remove it by hand" >&2`, but the dkms shim in `tests/check-rpm-dkms.sh` always ended in `exit 0`, so the property "a failed removal is a warning, the loop continues, the transaction survives" was asserted only by reading the source. The exit-code split that makes the branch reachable was measured on this host with `dkms` 3.4.4 against a scratch tree: a registration whose `source` symlink dangles gives `Error! sm750hdmifb/0.6.0 is broken!` / `Missing the source directory or the symbolic link pointing to it:` / `Manual intervention is required!` and exit **4**, while a source directory with no `dkms.conf` and no installed module gives `Deleting module sm750hdmifb/0.6.0 completely from the DKMS tree.` and exit **0**. The single real occurrence on this host was host state and not packaging: `/usr/src/sm750hdmifb-0.6.0` was a git checkout of the repository, so its registration pointed at a directory no RPM owned and `%posttrans` had no tree to remove | closed; no code change (test coverage added) | no driver, spec or scriptlet logic changed. `tests/check-rpm-dkms.sh:364-384` teaches the shim `SHIM_FAIL_REMOVE=<version>`, which logs the call first and then fails `dkms remove ... -v <version> --all` with the real dkms error text and exit 4; `:468-505` runs the purge with `SHIM_FAIL_REMOVE=0.5.9` (the first version the loop meets) and asserts exit 0, the exact spec warning, that 0.6.0 is still removed afterwards, that `%{dkms_version}` is never removed, and that no build or install ran. The evidence log gained a labelled failed-removal section; `docs/PACKAGING-RPM.md` section 4 gained "When a removal fails (exit-code semantics)" | `docs/evidence/packaging/06-posttrans-missing-headers.log` |
 
 ## Deferred and accepted items in detail
 
@@ -423,6 +427,59 @@ Residual limitation: 255 is spatch's generic fatal status and also covers a
 `.cocci` that does not parse, so the exit code alone does not name the cause.
 The raw log does, and the gate prints which patch produced it; it does not
 assert that spatch can never fail for a reason other than these.
+
+### A31 - black panel misdiagnosed as a display-path regression (accepted, diagnosed)
+
+A multi-hour investigation read a black SM750 HDMI panel as a fault in the
+driver's display path: the module loaded, the modeset reported success, and the
+panel showed nothing. No driver code was at fault.
+
+Observation: after a module load the in-kernel fbdev client registered by
+`drm_client_setup()` (`src/sm750_drm.c:4305`) scans out an all-zero frame, and
+`/sys/kernel/debug/dri/N/sm750_scanout` reported `nonzero 0` with
+`crc32 0xe20eea22`.
+
+Proof, three independent measurements:
+
+- `crc32 0xe20eea22` is exactly `zlib.crc32()` of 262144 zero bytes, so the
+  sampled window was arithmetically blank, not merely dark:
+  `python3 -c 'import zlib; print(hex(zlib.crc32(bytes(262144))))'` prints
+  `0xe20eea22`.
+- `KDGETMODE` (ioctl `0x4B3B`) on `/dev/tty0` returned 1, `KD_GRAPHICS`, while
+  `/sys/class/tty/tty0/active` read `tty1` and a Wayland session owned it:
+  `python3 -c 'import fcntl,struct; f=open("/dev/tty0","rb"); print(struct.unpack("i", fcntl.ioctl(f.fileno(), 0x4B3B, struct.pack("i", 0)))[0])'`.
+- A userspace DRM client's full-screen white frame displayed correctly
+  (`docs/evidence/scanout/09-crc-single-owner.txt` section 5: white
+  `0x06cf606c`, 262144 of 262144 nonzero bytes), so the path from VRAM to the
+  panel was intact.
+
+Conclusion: fbcon only paints while the foreground VT is in `KD_TEXT`;
+`do_con_write()` in `drivers/tty/vt/vt.c` drops console output before fbcon when
+`vc_mode != KD_TEXT`. On a graphical VT the fbdev client's buffer is therefore
+born blank, the shadow path uploads the zeros faithfully, and the panel scans
+them. This also corrects the earlier claim that the fbdev client is "inert
+because `CONFIG_FB_DEVICE` is unset": that option removes `/dev/fbN`, not
+fbcon, and the kernel log does register `fb0`. The remaining delay before the
+first real frame is the console client's, not the driver's.
+
+Disposition: accepted, with the precondition now named instead of silent. The
+driver samples the frame it is about to commit
+(`sm750_shadow_frame_is_blank()`, `src/sm750_drm.c:3404-3431`) and, at most once
+per module load, logs one `drm_info` line from `sm750_pipe_enable()` after
+`sm750_program_mode()` succeeded:
+`console framebuffer is blank: the panel now scans a frame nobody has painted
+(is the foreground VT in KD_TEXT?)`. Nothing else changes: no upload is
+skipped, no stale frame is kept, no commit fails.
+
+Two gates prevent recurrence as a misdiagnosis: `tests/check-console-blank.sh`
+(source level, part of `make check` through `tests/check-drm-policy.sh`) holds
+the helper, the exact text, the ordering after the mode is programmed and the
+once-per-load latch, and rejects four planted defects; and
+`tests/check-console-scanout.sh` (`make console-check`, root only) tells the two
+console states apart on the card, skipping with a named cause under
+`KD_GRAPHICS` and otherwise requiring content, a `crc32` other than the
+all-zero sentinel and an `offset` equal to `PANEL_FB_ADDRESS`. Evidence:
+`docs/evidence/runtime/19-console-blank-diagnosis.txt`.
 
 ## Evidence handling
 

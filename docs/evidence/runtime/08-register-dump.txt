@@ -218,6 +218,11 @@ register state. A third dump after the client exits proves the restore is comple
     read and carries no state. Ignore it for comparison purposes.
   PANEL_FB_ADDRESS (0x08000c) 0x00000000 -> 0x003f4800 is the fbdev client
     re-allocating its framebuffer object; the offset moves, the mode does not.
+    [CORRECTED 2026-11-19T19:48Z, T31: no framebuffer is re-allocated. 0x003f4800
+    is 4147200 = ALIGN(1920 * 1080 * 2, 16), the second buffer: the driver's
+    sm750_present_staged_frame() flipped SM750_DRM_FB_ADDRESS to the staged
+    backbuffer after uploading the frame. The offset moves because the flip
+    moves it, not because a buffer object was replaced.]
   MISC_CTRL (0x000004) 0x01020060 -> 0x01000060 clears bit 17 (0x00020000).
     src/ddk750_reg.h defines no name for MISC_CTRL bit 17; the register table in
     docs/REGISTERS.md:52 lists MISC_CTRL without that bit. Recorded as an

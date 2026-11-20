@@ -1869,6 +1869,18 @@ and make crc-check all exit 0; four kernel builds exit 0.
   6.17.1 log carries only the kernel's own compiler-differs note); `make check`
   and the five gate scripts pass, and `make crc-check` still stops at the root
   check (exit 77 mapped to 0). Version stays 0.6.0; tree left dirty for review.
+- Correction (2026-11-19T19:48Z, T31): the clause above that calls the fbdev
+  client "inert because `CONFIG_FB_DEVICE` is unset" is wrong. That option only
+  removes the `/dev/fbN` node and `/sys/class/graphics/fbN`; fbcon is bound and
+  the driver's `drm_client_setup()` does register `fb0` (the kernel log carries
+  `fb0: sm750hdmidrmdrm frame buffer device`). The client was blank, not inert:
+  `KDGETMODE` (ioctl 0x4B3B) on `/dev/tty0` returns 1, `KD_GRAPHICS`, while
+  `/sys/class/tty/tty0/active` is `tty1` and a Wayland session owns it, and
+  `do_con_write()` in `drivers/tty/vt/vt.c` drops console output before fbcon
+  when `vc_mode != KD_TEXT`. The fbdev client therefore never painted its
+  buffer, the shadow path uploaded the zeros, and the arm-before-first-modeset
+  reading of that transcript stands. Recorded as A31; see
+  `docs/evidence/runtime/19-console-blank-diagnosis.txt`.
 
 ### 2026-11-19T12:41Z | gem-implementer | Correction to the 11:54Z T26 entry: bounds fix in the control write
 
@@ -1951,3 +1963,372 @@ and make crc-check all exit 0; four kernel builds exit 0.
   0x06cf606c, 262144 of 262144 nonzero bytes for the white frame. Transcript
   `docs/evidence/scanout/09-crc-single-owner.txt`. Version stays 0.6.0; tree
   left dirty for review, no commit.
+
+### 2026-11-20T09:29Z | gem-implementer | T31: the blank console panel is named, not misdiagnosed
+
+- Symptom: after a module load the SM750 HDMI panel stayed black while the
+  modeset reported success. It was not a display-path regression. Measured
+  2026-11-19T19:48Z: `KDGETMODE` (ioctl `0x4B3B`) on `/dev/tty0` returned 1,
+  `KD_GRAPHICS`, while `/sys/class/tty/tty0/active` was `tty1` and a Wayland
+  session owned it. `do_con_write()` in `drivers/tty/vt/vt.c` drops console
+  output before fbcon when `vc_mode != KD_TEXT`, so the fbdev client registered
+  by `drm_client_setup()` (`src/sm750_drm.c:4305`) was never painted, the
+  shadow path uploaded the zeros and the panel scanned them.
+  `crc32 0xe20eea22` is exactly `zlib.crc32()` of 262144 zero bytes, so the
+  sampled window was arithmetically blank. A userspace DRM client's white
+  frame still displayed, so VRAM-to-panel was intact throughout.
+- Driver change (diagnostic only): `u32 shadow_source_pitch` in
+  `struct sm750_drm_device` (`src/sm750_drm.c:348`), recorded on the shadow
+  path (`:3461`) and cleared on both teardown paths (`:3541`, `:3636`);
+  `sm750_shadow_frame_is_blank()` (`:3404-3431`) samples the frame being
+  committed on a 16-row/16-pixel grid, bails out on an unmapped map or an
+  implausible geometry and allocates nothing; `sm750_pipe_enable()` (`:3433`)
+  emits, once per module load via a `static bool blank_frame_reported` latch
+  and only after `sm750_program_mode()` succeeded (`:3510`, block at
+  `:3519-3526`), one neutral `drm_info`:
+  `console framebuffer is blank: the panel now scans a frame nobody has painted (is the foreground VT in KD_TEXT?)`.
+  No upload is skipped, no stale frame is kept, no commit fails. A first cut
+  dereferenced `plane_state->fb` before its later check; smatch caught it and
+  the pitch is now recorded conditionally.
+- Gates: `tests/check-console-blank.sh` (200 lines, part of `make check`
+  through `tests/check-drm-policy.sh`, so the recipe stays at 17 commands)
+  holds the helper, the exact text, the ordering after the mode is programmed
+  and the latch, forbids control flow in the guard and rejects four planted
+  defects (message deleted, diagnostic moved above the programming call,
+  NULL-map bail-out removed, latch removed). `tests/check-console-scanout.sh`
+  (118 lines, `make console-check`, opt-in, root only) skips with one named
+  reason and otherwise requires the console window to carry content
+  (`nonzero > 0`), a `crc32` other than `0xe20eea22` and an `offset` equal to
+  `PANEL_FB_ADDRESS`.
+- Documentation: the 11:54Z T26 follow-up entry above carries a dated
+  correction replacing its "fbdev client is inert because `CONFIG_FB_DEVICE` is
+  unset" reading; `docs/evidence/EVIDENCE-GAPS.md:471-473` and
+  `docs/evidence/runtime/08-register-dump.txt:219-224` now attribute
+  `0x003f4800` to the staged flip in `sm750_present_staged_frame()`
+  (`src/sm750_drm.c:2388-2425`) instead of an fbdev re-allocation; defect A31,
+  suites S9/S10 in `docs/TEST-STRATEGY.md`, the README console section, the
+  `console-check` target and the deliverable rows follow. Evidence:
+  `docs/evidence/runtime/19-console-blank-diagnosis.txt`.
+- Verification, all in this tree: `make CC=/usr/bin/gcc` 0 (7.3.4-100),
+  `make CC=/usr/bin/gcc KDIR=/mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64`
+  0 (only kbuild's compiler-differs note), `make check` with the rootless
+  libdrm environment 0 (173 lines), `check-console-blank` 0, `check-crc-uapi`
+  0, `check-drm-policy` 0, `check-release-version` 0 (0.6.0),
+  `check-drm-packaging` 0, `check-static` 0. `check-scanout-crc` and
+  `check-console-scanout` exit 77 (root gate as uid 1005), which is the
+  documented skip.
+- Environment: the `/mega/tmp/sm750` scratch tree had been wiped between
+  sessions, so `libdrm-2.4.134-1.fc43` and `libdrm-devel-2.4.134-1.fc43` were
+  fetched from `dl.fedoraproject.org` and `kernel-devel-6.17.1-300.fc43` from
+  `kojipkgs.fedoraproject.org`, then extracted with `rpm2cpio | cpio -idm`
+  into `/mega/tmp/sm750/t3/libdrm` and `/mega/tmp/sm750/t5/k617`; no root, no
+  install. `tests/audit-release.sh` exits 1 for a reason that predates this
+  task: it audits the 2026-11-19T10:35Z artifacts in `dist/`, whose source
+  archive lacks the files added by T26-T30; it is not caused by T31 and was
+  not in this task's verification set.
+- Version stays 0.6.0; tree left dirty for review, no commit.
+
+### 2026-11-20T10:52Z | gem-implementer | T32: restore-path waits made satisfiable, failure made loud
+
+- Action: implemented the A32 fix from
+  `docs/evidence/runtime/20-fbdev-restore-timeout-rca.txt`. The failure was a
+  chain, not a call: a client exit submits the fbcon restore commit,
+  `commit_tail` runs `sm750_pipe_disable()` (whose display-off result was
+  discarded) and then `sm750_pipe_enable()` -> `sm750_program_mode()`, and
+  either display-control wait could return `-ETIMEDOUT` because it compared a
+  whole `PANEL_DISPLAY_CTRL` snapshot minus a reserved mask. Bits the hardware
+  rewrites mid-transition (live VSYNC at bit 11, FIFO request, pan, phase,
+  gamma, format) could make a latched transition look unlatched, and the mode
+  loop additionally capped itself at `cnt > 1000` iterations of `udelay(10)` -
+  under one 60 Hz frame - while re-poking a stale snapshot. A27 had already
+  removed the WARNING, the 10 s per-object stalls and the refcount underflow,
+  so the remaining work was the timeout and its invisibility.
+- Driver change 1 (`src/ddk750_display.c:14-45`): `wait_display_value()` ->
+  `wait_display_bits(reg, name, value, mask, what)`. Compares
+  `(last & mask) == (value & mask)`, re-writes `(last & ~mask) | (value & mask)`
+  on every poll iteration, keeps `DISPLAY_TRANSITION_TIMEOUT_US` (100 ms) and
+  logs `sm750: <reg> <what> did not latch: want %#lx mask %#lx last %#08x
+  after %u us` via `pr_err_ratelimited`. `ddk750_set_display_control()` passes
+  the per-step mask: `DISPLAY_CTRL_TIMING` for the timing steps,
+  `DISPLAY_CTRL_PLANE` for the plane steps, on both controllers.
+- Mask rationale: `DISPLAY_CTRL_TIMING` (`src/ddk750_reg.h:561`, `BIT(8)`) and
+  `DISPLAY_CTRL_PLANE` (`:567`, `BIT(2)`) are the only bits the waits command
+  and the only ones the datasheet's vertical-sync handshake governs. The
+  reserved mask `0xc0f08000` (`:538`) plus `VSYNC` was a proxy for "everything
+  else may move"; naming the two owned bits is the same intent without the
+  false negatives, and each call site now waits on exactly the bit it drives.
+- Driver change 2 (`src/ddk750_mode.c:299-318`): `program_mode_registers()`'s
+  PANEL branch drops `int cnt` and `cnt > 1000`, uses the same mask and re-poke,
+  and derives its budget from the mode:
+  `frame_us = 1000000 / (vertical_frequency ?: 1)`,
+  `budget_us = max(20000, 2 * frame_us)` - two vertical periods of the mode
+  being programmed, 20 ms floor, so the write can lose one race with the old
+  mode's VSYNC and still win the next. The old cap was ~10 ms of sleep, i.e.
+  less than one frame at 60 Hz. Timeout still returns `-ETIMEDOUT` and now logs
+  `want`/`mask`/`last`/budget.
+- Driver change 3 (`src/sm750_drm.c:3648-3652`): `sm750_pipe_disable()` keeps
+  the display-off result and, on failure, warns
+  `panel did not acknowledge display-off: %d (PANEL_DISPLAY_CTRL=%#08x)` with
+  the readback. No early return, no skipped teardown.
+- Driver change 4 (`src/sm750_drm.c:3549-3562`): the `sm750_pipe_enable()` fail
+  path keeps A27 byte-for-byte (`drm_crtc_vblank_on()`, then
+  `sm750_crc_resume()`, then `sm750_arm_vblank_event()`) and the T27 stage
+  name, and adds one `drm_err`:
+  `enable-fail state: PANEL_DISPLAY_CTRL=%#08x PANEL_PLL_CTRL=%#08x
+  SYSTEM_CTRL=%#08x PANEL_CURRENT_LINE=%#08x`. Those four separate the RCA
+  hypotheses on the next occurrence.
+- Gate: `tests/check-restore-path.sh` (223 lines) holds the four properties
+  and rejects four planted defects (whole-register compare restored, event
+  armed before `drm_crtc_vblank_on()`, display-off result discarded, state line
+  deleted), each printed as `negative control <name>: rejected (exit 1):
+  <reason>`. Wired into `tests/check-drm-policy.sh` after
+  `check-console-blank.sh`, so `make check` stays at 17 commands.
+- Harness: `tools/sm750-restore-cycle.sh` (208 lines), root only, repeats the
+  client-exit restore trigger (`build/scanout-pattern` plus an optional
+  `modetest` mode change) and fails on any new `did not latch` /
+  `panel did not acknowledge` / `failed to enable HDMI mode` line; exit 0
+  clean, 1 environment, 2 no scanout readback, 3 failure seen. Not run: this
+  session has no root.
+- Documentation: defect A32 in `docs/DEFECTS.md` (fixed in source, pending
+  on-card confirmation, remaining uncertainty stated), suite S11 plus a
+  subsection in `docs/TEST-STRATEGY.md`, deliverable rows for the gate, the
+  harness and the evidence file in `docs/DELIVERABLES.md`, one README
+  paragraph in the console/panel section, and
+  `docs/evidence/runtime/21-fbdev-restore-fix.txt` with a "not yet proven on
+  hardware" section naming the run and the three distinguishable outcomes.
+- Verification, all in this tree, uid 1005, no root: `make CC=/usr/bin/gcc`
+  0 (7.3.4-100.fc43), `make CC=/usr/bin/gcc
+  KDIR=/mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64` 0
+  (only kbuild's compiler-differs note and the skipped BTF),
+  `check-restore-path` 0, `check-console-blank` 0, `check-crc-uapi` 0,
+  `check-drm-policy` 0, `make check` with the rootless libdrm environment 0
+  (178 lines), `check-release-version` 0 (0.6.0), `check-drm-packaging` 0,
+  `check-static` 0 (coccinelle, 0 findings).
+- Environment: the `/mega/tmp/sm750` scratch trees (`t3/libdrm`, `t5/k617`)
+  were present and were not re-extracted. Scratch logs:
+  `/mega/tmp/sm750/t32-build.log`, `t32-build617.log`, `t32-check.log` and one
+  per gate.
+- Open: the root stress run `sudo ./tools/sm750-restore-cycle.sh
+  --iterations 120` on the card, which is the only thing that can turn A32 from
+  "fixed in source" into a hardware result.
+- Version stays 0.6.0; tree left dirty for review, no commit.
+
+### 2026-11-20T14:58Z | gem-documentation-writer | T34: the T32 restore fix is confirmed on hardware; A32 closes
+
+- Action: recorded the on-card run of the T32 restore-path fix and moved the
+  A32 disposition from "fixed in source, pending on-card confirmation" to
+  "fixed; confirmed on hardware 2026-11-20". No source file changed in this
+  task; every claim below is backed by
+  `docs/evidence/runtime/22-restore-fix-hardware-proof.txt`.
+- Module under test: built from this working tree, srcversion
+  `14ED4F27A83A6BB8AA445D2`, vermagic `7.3.4-100.fc43.x86_64`, version string
+  still `0.6.0` at the time of the run, loaded through
+  `sudo -n /usr/local/sbin/sm750-crc-cycle`.
+- CRC cycle: `RESULT: scanout CRC check passed`, exit 0, six PASS lines -
+  `crc/control lists scanout as the active source`; `CRC entries arrive and are
+  stable over 12 static frames (crc 0xe20eea22)`; `dump and CRC path agree for
+  a black frame (offset 0, length 262144, crc 0xe20eea22)`; `CRC changes with
+  frame content (black 0xe20eea22, white 0x06cf606c)`; `nonzero scanout bytes
+  are monotonic (black 0, white 262144 of 262144)`; `scanout CRC source and
+  sm750_scanout dump agree`.
+- T31 diagnostic: fired exactly once for the whole session -
+  `console framebuffer is blank: the panel now scans a frame nobody has painted
+  (is the foreground VT in KD_TEXT?)` - which is the once-per-module-load latch
+  behaving as designed, not a per-commit repeat.
+- Restore-path stress: 30 consecutive client exit/restore cycles
+  (`build/scanout-pattern /dev/dri/card0 white 2`, each exiting so the fbdev
+  restore commit runs) - 30/30 succeeded, 0 failures.
+- Mode-change stress: 20 iterations of
+  `modetest -M sm750hdmidrm -s 35@38:1024x768` followed by a client frame and
+  exit - 20/20 completed.
+- Enable-event count: 95 `staging enabled (` lines across the session, 75 at
+  1920x1080 (`4147200`) and 20 at 1024x768 (`1572864`), so the re-enable path
+  ran 95 times across two geometries rather than once at load.
+- Fault census: one grep over the whole session's dmesg for
+  `failed to enable HDMI mode|flip_done timed out|commit wait timed out|refcount_t: underflow|did not latch|panel did not acknowledge|enable-fail state|WARNING|BUG:`
+  returned 0. The pre-fix shape of run produced `failed to enable HDMI mode:
+  -110` then `flip_done timed out`, `commit wait timed out` and a refcount
+  underflow, so the cascade is absent in this run.
+- Console scanout: with `KDGETMODE` 0 (`KD_TEXT`) on `/dev/tty0` and
+  `/sys/class/tty/tty0/active` reading `tty1`, the S10 assertions held for real
+  - `PANEL_FB_ADDRESS` 0x00000000, `sm750_scanout` offset 0, nonzero 28766 of
+  262144, crc32 0x0204dd04, not the all-zero sentinel 0xe20eea22. This is the
+  first non-SKIP S10 result recorded on this host.
+- Gates re-run, all exit 0: `check-restore-path` 0, `check-console-blank` 0,
+  `check-crc-uapi` 0, `check-drm-policy` 0, `check-release-version` 0,
+  `check-drm-packaging` 0, `check-static` 0, `check-rpm-dkms` 0, `make check` 0.
+- Documentation updated: A32 row in `docs/DEFECTS.md` (status, the measured
+  numbers and the remaining uncertainty) plus the file preamble, which counted
+  six later-found defects and now counts seven with `A32` named (the table has
+  31 rows, A01..A30 then A32; A31 is a prose section), suite rows S10 and S11
+  plus the S11 on-card subsection in `docs/TEST-STRATEGY.md`, one paragraph in
+  the console/panel restore section of `README.md`, a `## Round 3` section
+  appended to `docs/ACCEPTANCE-REPORT.md` with the affected criteria and the
+  numbers table, and the evidence row in `docs/DELIVERABLES.md` section 5.4.
+- Evidence: `docs/evidence/runtime/22-restore-fix-hardware-proof.txt`.
+- Open: the harness form `sudo ./tools/sm750-restore-cycle.sh --iterations 120`
+  is still unexercised; it refuses to run as non-root
+  (`tools/sm750-restore-cycle.sh:73`), so its exit-code contract is untested.
+  The manual 50 cycles reproduce the same trigger shape but are not the harness.
+- Out of scope, in progress elsewhere: the release bump to 0.6.1 (version
+  strings, `dkms.conf`, `build-package.sh`, the RPM spec, `docs/ci/build.yml`,
+  `dist/`). This task touched none of those files and did not rebuild.
+- Version stays 0.6.0 in this scope; tree left dirty for review, no commit.
+
+### 2026-11-20T16:17Z | gem-implementer | T35: every script honours the scratch rule; the restore harness greps the proof census
+
+- Action: made AGENTS.md:26 ("scratch files go under `/mega/tmp/sm750/` only")
+  true for every script instead of a convention, and aligned the restore stress
+  harness with the fault census the hardware proof uses. Cause of the breach:
+  `TMPDIR` is unset on this host, so every bare `mktemp` fell back to `/tmp`;
+  nine `tests/check-static.sh` runs had left `/tmp/sm750-static.*` directories
+  of 15 MB each (135 MB), and one such directory (15 MB, mtime 15:34) was still
+  present and was removed.
+- Resolver: `export TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}` added after the
+  shebang/SPDX/`set -euo pipefail` block and before any command that could use
+  it, in all ten `mktemp` callers - `build-package.sh:4`,
+  `tests/audit-release.sh:4`, `tests/check-drm-xorg-config.sh:4`,
+  `tests/check-rpm-dkms.sh:19`, `tests/check-static.sh:23`,
+  `tests/check-crc-uapi.sh:16`, `tests/check-console-blank.sh:21`,
+  `tests/check-restore-path.sh:30`, `tools/benchmark-staging.sh:4`,
+  `tools/sm750-crc-cycle.sh:17`.
+- Templates: every call is now `mktemp [-d] "${TMPDIR}/name.XXXXXX"`. Three
+  sites bypassed `TMPDIR` and were fixed - `tests/check-restore-path.sh:161`
+  (`-d /tmp/sm750-restore-gate.XXXXXX`), `tools/sm750-crc-cycle.sh:168`
+  (`/tmp/sm750-crc-cycle.XXXXXX`) and `build-package.sh:104`
+  (`"${TMPDIR:-/tmp}/sm750-tracked.XXXXXX"`, whose fallback is now dead). No
+  `/tmp` literal and no `/tmp` fallback remains in any `mktemp` call. The one
+  deliberate exception is `packaging/write-xorg-config.sh:38`,
+  `mktemp "${output}.XXXXXX"`: the temporary must sit on the destination
+  filesystem for the atomic rename, so redirecting it to `TMPDIR` would break
+  the write.
+- `tests/check-static.sh` leak closed: the script records `own_logdir=1` when
+  it created the directory itself and installs
+  `trap 'rc=$?; if [ "$rc" -eq 0 ]; then rm -rf -- "$logdir"; fi' EXIT` only in
+  that case, so a passing run removes its own directory while a failing run
+  keeps it and prints `static analysis logs kept at: <path>`. A `--logs DIR`
+  directory belongs to the caller and is never removed. The gate checks, the
+  log file names and the exit codes are unchanged.
+- `tools/sm750-restore-cycle.sh:191` now greps the same nine markers as
+  `docs/evidence/runtime/22-restore-fix-hardware-proof.txt`: `failed to enable
+  HDMI mode|flip_done timed out|commit wait timed out|refcount_t: underflow|
+  did not latch|panel did not acknowledge|enable-fail state|WARNING|BUG:`, with
+  a comment saying the census is shared with that proof file so the two cannot
+  drift. Per-iteration PASS/FAIL logic, exit codes (0/1/2/3) and output format
+  unchanged; `sh -n` passes.
+- New gate: `tests/check-scratch-policy.sh`, called from
+  `tests/check-drm-policy.sh` so it runs inside `make check` without changing
+  the 17-command recipe count. It asserts the resolver precedes the first
+  `mktemp` in each of the ten scripts, rejects a `/tmp` literal or a missing
+  `${TMPDIR}` in any `mktemp` line, pins the harness census against the proof
+  file, and fails if the `packaging/write-xorg-config.sh` exemption goes stale.
+  It self-tests with five planted defects (wrong template, missing resolver,
+  late resolver, census drift, foreign template), each of which must be caught
+  with its specific message.
+- Documentation: a paragraph in the "Scratch directories (mandatory)" section
+  of `docs/ENVIRONMENT.md` states the resolver, the repository-wide ephemeral
+  root, the template form, that this enforces AGENTS.md:26, and the
+  check-static failure-only log directory; one sentence in
+  `docs/TEST-STRATEGY.md` says transient suite output goes to
+  `/mega/tmp/sm750/tmp`.
+- Verification, all exit 0: `make CC=/usr/bin/gcc`, `check-static` twice,
+  `check-crc-uapi`, `check-console-blank`, `check-restore-path`,
+  `check-drm-policy`, `check-release-version`, `check-drm-packaging`,
+  `check-rpm-dkms` (with `SM750_RPM_EVIDENCE` pointed at scratch, so tracked
+  evidence was not rewritten), `build-package.sh`, `audit-release.sh`, and
+  `make check` against the staged libdrm. `make check` still runs its 17
+  commands; the recipe was not edited. The failure path of the check-static
+  trap was exercised once by pointing `STATIC_KERNELS` at a missing kernel
+  tree: exit 1, the directory survived, and the summary printed
+  `static analysis logs kept at: /mega/tmp/sm750/tmp/sm750-static.fbHGMX`;
+  that directory was then removed by hand.
+- Hygiene: after the two `check-static` runs plus `check-crc-uapi`,
+  `check-console-blank` and `check-restore-path`, `ls -d /tmp/sm750*` prints
+  nothing and `ls -A /mega/tmp/sm750/tmp` prints nothing.
+- No version string changed (0.6.1 throughout), no `sudo`, no commit; tree left
+  dirty for review.
+
+### 2026-11-20T17:12Z | gem-implementer | T36: the stale-purge failure branch is exercised, A33 recorded as an observation
+
+- Action: closed the one branch of the `%posttrans` stale-registration purge
+  that no test had ever executed. `packaging/sm750hdmifb.spec:227-228` runs
+  `dkms remove -m %{dkms_name} -v "$stale_version" --all || echo "warning: dkms
+  remove %{dkms_name}/$stale_version failed; remove it by hand" >&2`, and the
+  dkms shim in `tests/check-rpm-dkms.sh` always ended in `exit 0`, so "a failed
+  removal is a warning, the loop continues, the transaction survives" was
+  asserted only by reading the source. No driver, spec or scriptlet logic
+  changed; the spec file is untouched by this task.
+- Measured exit-code split, `dkms` 3.4.4 on this host against a scratch tree
+  under `/mega/tmp/sm750/a33probe` (`--dkmstree`, `--sourcetree`,
+  `--installtree`), never against `/var/lib/dkms`: a registration whose
+  `source` symlink dangles prints `Error! sm750hdmifb/0.6.0 is broken!`,
+  `Missing the source directory or the symbolic link pointing to it:` and
+  `Manual intervention is required!` and exits **4**; a source directory that
+  exists but carries no `dkms.conf`, with no module installed, prints
+  `Deleting module sm750hdmifb/0.6.0 completely from the DKMS tree.` and exits
+  **0**. Only the first shape reaches the `||` branch, which is why the shim
+  reproduces that one.
+- Shim: `tests/check-rpm-dkms.sh:364-384` adds `SHIM_FAIL_REMOVE=<version>`.
+  The call is logged to `$SHIM_LOG` first (so the call-sequence assertion keeps
+  working), then `dkms remove ... -v <version> --all` for that version writes
+  the real dkms error text - `Error! Could not locate dkms.conf file.` and
+  `File: /var/lib/dkms/sm750hdmifb/<version>/source/dkms.conf does not exist.`
+  - to stderr and exits 4. With the variable empty every pre-existing run
+  behaves exactly as before. `run_posttrans()` passes it through at `:399`.
+- New run at `:468-505`, after the existing purge assertions: the same canned
+  status listing, `SHIM_FAIL_REMOVE=0.5.9` so the FIRST version the loop meets
+  is the one that fails, module root `modules-none`. Five assertions, each a
+  separate failure mode: (1) the scriptlet still exits 0 - a non-zero scriptlet
+  aborts the whole RPM transaction, so this is the load-bearing property; (2)
+  stderr carries the exact spec text `warning: dkms remove sm750hdmifb/0.5.9
+  failed; remove it by hand`; (3) the loop CONTINUED - the `dkms remove ... -v
+  0.6.0 --all` line appears after the 0.5.9 line in the recorded call log, so a
+  failure does not abort the loop; (4) `dkms remove ... -v 0.6.1` was still
+  never called, the installed version is never purged; (5) the recorded calls
+  equal exactly `dkms status`, `dkms remove -m sm750hdmifb -v 0.5.9 --all`,
+  `dkms remove -m sm750hdmifb -v 0.6.0 --all` - no build and no install, since
+  the purge run has no usable headers. `SHIM_FAIL_REMOVE` and `SHIM_STATUS` are
+  reset to empty before and after the run so no later run inherits them.
+- Evidence: the failed-removal run is recorded inside
+  `docs/evidence/packaging/06-posttrans-missing-headers.log` as a labelled
+  section with the command, the full combined output, the exit code and the
+  recorded call sequence. The other five packaging logs gained nothing from
+  this task beyond the 0.6.1 release-cut churn they already carried.
+- Negative control, run twice against a planted spec and reverted both times:
+  (a) the `||` fallback replaced by a bare `:` - the suite exits 1 with `FAIL:
+  the failed removal did not emit the spec warning text`, the assertion that
+  owns this branch; (b) the whole `|| \` continuation deleted, which leaves
+  `dkms remove ... --all ||` with no command and the suite exits 1 earlier with
+  `FAIL: %posttrans exited 2 without headers; it must exit 0`, so a broken
+  fallback cannot pass silently through the exit-0 assertion either. After each
+  run the spec was restored from a saved copy;
+  `grep -n 'remove it by hand' packaging/sm750hdmifb.spec` prints `:228` and
+  `md5sum` matches the pre-plant file (`3c11ac831fed0a8a5373d12d00fc9b3f`).
+- The real host incident, recorded here because no tracked evidence file
+  carried it before this task: `/usr/src/sm750hdmifb-0.6.0` was a **git
+  checkout** of this repository, not an RPM payload, so its DKMS registration
+  pointed at a directory no RPM owned. Host state, not a packaging defect, and
+  `%posttrans` cannot repair it - it has no tree to remove and no authority to
+  delete an unowned directory. The remedy is manual: `sudo rm -rf
+  /usr/src/sm750hdmifb-<version>` and then re-run the purge (`dnf reinstall`
+  of the package, which is idempotent). That directory no longer exists on the
+  host; only `/usr/src/sm750hdmifb-0.6.1` and its matching registration remain.
+- Docs: `docs/PACKAGING-RPM.md` section 4 gained "When a removal fails
+  (exit-code semantics)" with the measured outcome table, the reason the
+  scriptlet warns and keeps exit 0, the operator recipe (`dkms status | grep
+  sm750hdmifb`, then `ls -l /var/lib/dkms/sm750hdmifb/<version>/source`), the
+  git-checkout explanation and the manual remedy. `docs/DEFECTS.md` gained row
+  A33, status `closed; no code change (test coverage added)`, and the preamble
+  count went from seven to eight. `docs/DELIVERABLES.md`'s 06 row was widened to
+  name the failed-removal branch as well.
+- Verification, all exit 0: `bash -n` and `sh -n` on the touched script,
+  `make CC=/usr/bin/gcc`, `./tests/check-rpm-dkms.sh` (final run without
+  `SM750_RPM_EVIDENCE`, so the six tracked logs regenerated together),
+  `./tests/check-scratch-policy.sh`, `./tests/check-static.sh`,
+  `./tests/check-drm-policy.sh`, `./tests/check-release-version.sh`,
+  `./tests/check-drm-packaging.sh`, `./build-package.sh`,
+  `./tests/audit-release.sh`, and `make check` with the libdrm sysroot from
+  `docs/ENVIRONMENT.md` (17 commands, unchanged).
+- Hygiene: ASCII only in every touched file (`grep -cP '[^\x00-\x7F]'` returns
+  0), scratch confined to `/mega/tmp/sm750/t36/`, no version string changed
+  (0.6.1 throughout), no `sudo`, no commit; tree left dirty for review.

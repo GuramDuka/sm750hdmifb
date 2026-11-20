@@ -20,6 +20,7 @@
 #
 # Triage of the recorded findings: docs/STATIC-ANALYSIS.md.
 set -euo pipefail
+export TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 baseline_dir=$project_dir/tests/static/baseline
@@ -56,8 +57,16 @@ while [ $# -gt 0 ]; do
 	esac
 	shift
 done
+own_logdir=0
 if [ -z "$logdir" ]; then
-	logdir=$(mktemp -d "${TMPDIR:-/tmp}/sm750-static.XXXXXX")
+	logdir=$(mktemp -d "${TMPDIR}/sm750-static.XXXXXX")
+	own_logdir=1
+fi
+# Drop our own directory only on a pass: a failing run's raw logs are the
+# evidence for the finding, so they survive and the path is printed below.
+# A --logs directory belongs to the caller and is never removed.
+if [ "$own_logdir" -eq 1 ]; then
+	trap 'rc=$?; if [ "$rc" -eq 0 ]; then rm -rf -- "$logdir"; fi' EXIT
 fi
 mkdir -p "$logdir"
 logdir=$(CDPATH= cd -- "$logdir" && pwd)
@@ -87,7 +96,11 @@ if [ ${#analysers[@]} -eq 0 ]; then
 fi
 echo "static gate: ${analysers[*]}"
 echo "  kernel trees: ${kdirs[*]}"
-echo "  raw logs:     $logdir"
+if [ "$own_logdir" -eq 1 ]; then
+	echo "  raw logs:     $logdir (removed on pass)"
+else
+	echo "  raw logs:     $logdir"
+fi
 
 fail=0
 # Fresh fingerprint files: the log directory may be reused between runs, and
@@ -331,6 +344,13 @@ done
 
 if [ "$fail" -ne 0 ]; then
 	echo "static gate: FAIL (raw logs in $logdir)"
+	if [ "$own_logdir" -eq 1 ]; then
+		echo "static analysis logs kept at: $logdir"
+	fi
 	exit 1
 fi
-echo "static gate: PASS (raw logs in $logdir)"
+if [ "$own_logdir" -eq 1 ]; then
+	echo "static gate: PASS"
+else
+	echo "static gate: PASS (raw logs in $logdir)"
+fi

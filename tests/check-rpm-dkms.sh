@@ -9,19 +9,22 @@
 # missing-headers branch warns without a non-zero exit, and the %posttrans
 # stale-registration purge removes every other registered version of this
 # module name while leaving the installed version and other module names
-# alone. Root-only install assertions are skipped with a printed
+# alone - including when one removal fails (dkms exit 4): the purge then
+# warns, keeps exit 0 and continues with the remaining versions.
+# Root-only install assertions are skipped with a printed
 # reason (docs/evidence/EVIDENCE-GAPS.md, GAP-B7).
 #
 # Writes its logs to docs/evidence/packaging/ by default; override with
 # SM750_RPM_EVIDENCE. Scratch stays under /mega/tmp/sm750/t6 and never touches
 # $HOME.
 set -euo pipefail
+export TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 spec=$project_dir/packaging/sm750hdmifb.spec
 name=sm750hdmifb
 module=sm750hdmidrm
-version=0.6.0
+version=0.6.1
 kernel=$(uname -r)
 arch=$(uname -m)
 cc=/usr/bin/gcc
@@ -74,7 +77,7 @@ mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS}
 . "$project_dir/packaging/source-excludes.sh"
 mapfile -t exclude_pathspecs < <(sm750_dev_only_pathspecs)
 source_archive=$topdir/SOURCES/$name-$version-source.tar.gz
-tracked_list=$(mktemp "${TMPDIR:-/tmp}/sm750-rpm-tracked.XXXXXX")
+tracked_list=$(mktemp "${TMPDIR}/sm750-rpm-tracked.XXXXXX")
 trap 'rm -f -- "$tracked_list"' EXIT
 git -C "$project_dir" ls-files -z -- . "${exclude_pathspecs[@]}" \
 	>"$tracked_list"
@@ -356,6 +359,28 @@ for tool in dkms depmod; do
 printf '%s %s\n' "${0##*/}" "$*" >>"${SHIM_LOG:?}"
 if [ "${0##*/}" = dkms ] && [ "$1" = status ]; then
 	[ -n "${SHIM_STATUS:-}" ] && [ -r "$SHIM_STATUS" ] && cat "$SHIM_STATUS"
+	exit 0
+fi
+# SHIM_FAIL_REMOVE=<version> makes "dkms remove ... -v <version> --all" fail
+# the way dkms 3.4.4 fails on a broken registration: the source symlink under
+# /var/lib/dkms/<name>/<version>/ dangles, so dkms.conf cannot be located and
+# dkms exits 4. Empty (the default) leaves every other run unchanged.
+if [ "${0##*/}" = dkms ] && [ "$1" = remove ] &&
+	[ -n "${SHIM_FAIL_REMOVE:-}" ]; then
+	shim_version= shim_all=0
+	shift
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+		-v) shim_version=${2:-} ;;
+		--all) shim_all=1 ;;
+		esac
+		shift
+	done
+	if [ "$shim_all" -eq 1 ] && [ "$shim_version" = "$SHIM_FAIL_REMOVE" ]; then
+		echo "Error! Could not locate dkms.conf file." >&2
+		echo "File: /var/lib/dkms/sm750hdmifb/$shim_version/source/dkms.conf does not exist." >&2
+		exit 4
+	fi
 fi
 exit 0
 SHIM
@@ -364,11 +389,14 @@ done
 
 # SHIM_STATUS lets one run hand the purged scriptlet a canned "dkms status"
 # listing; it is empty for the header-branch runs below, so those see no
-# registrations at all.
+# registrations at all. SHIM_FAIL_REMOVE names one version whose removal must
+# fail; empty means every removal succeeds.
 shim_status=
+shim_fail_remove=
 run_posttrans() {
 	SHIM_LOG=$sandbox/calls.log \
 		SHIM_STATUS=$shim_status \
+		SHIM_FAIL_REMOVE=$shim_fail_remove \
 		SM750_RPM_MODULES_ROOT=$1 \
 		PATH="$sandbox/bin:$PATH" \
 		sh "$sandbox/posttrans.sh"
@@ -396,21 +424,23 @@ mixed_output=$(run_posttrans "$sandbox/modules-mixed" 2>&1) || mixed_exit=$?
 [ "$mixed_exit" -eq 0 ] || fail "%posttrans exited $mixed_exit on the mixed root"
 printf '%s\n' "$mixed_output" | grep -F 'no supported installed kernel' >/dev/null &&
 	fail "%posttrans warned despite one usable kernel"
-expected_calls=$'dkms build -m sm750hdmifb -v 0.6.0 -k 7.3.4-100.fc43.x86_64\ndkms install -m sm750hdmifb -v 0.6.0 -k 7.3.4-100.fc43.x86_64 --force\ndepmod -a 7.3.4-100.fc43.x86_64\ndkms status'
+expected_calls=$'dkms build -m sm750hdmifb -v 0.6.1 -k 7.3.4-100.fc43.x86_64\ndkms install -m sm750hdmifb -v 0.6.1 -k 7.3.4-100.fc43.x86_64 --force\ndepmod -a 7.3.4-100.fc43.x86_64\ndkms status'
 [ "$(cat "$sandbox/calls.log")" = "$expected_calls" ] ||
 	fail "unexpected dkms/depmod call sequence: $(tr '\n' '|' <"$sandbox/calls.log")"
 mixed_calls=$(cat "$sandbox/calls.log")
 
 # Stale-registration purge, rootless: the canned listing is the host state
-# before this task (two 0.5.9 kernels, 0.6.0 installed, plus rows that must not
-# be touched). Dropping the purge from %posttrans leaves calls.log at
-# "dkms status" and fails the equality below.
+# before this task (two 0.5.9 kernels, 0.6.0 installed, 0.6.1 added by %post,
+# plus rows that must not be touched). Dropping the purge from %posttrans
+# leaves calls.log at "dkms status" and fails the equality below.
 cat >"$sandbox/status-stale.txt" <<'EOF'
 sm750hdmifb/0.5.9, 7.3.3-100.fc43.x86_64, x86_64: built
 sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: built
 sm750hdmifb/0.6.0, 7.2.15-100.fc43.x86_64, x86_64: installed
 sm750hdmifb/0.6.0, 7.3.3-100.fc43.x86_64, x86_64: installed
 sm750hdmifb/0.6.0: added
+sm750hdmifb/0.6.1, 7.3.4-100.fc43.x86_64, x86_64: installed
+sm750hdmifb/0.6.1: added
 sm750hdmifb-ng/0.9.0, 7.3.4-100.fc43.x86_64, x86_64: built
 othermodule/1.0, 7.3.4-100.fc43.x86_64, x86_64: installed
 EOF
@@ -424,10 +454,55 @@ shim_status=
 printf '%s\n' "$purge_output" |
 	grep -F 'removing stale DKMS registration: sm750hdmifb/0.5.9' >/dev/null ||
 	fail "the purge did not announce the removal of 0.5.9"
-expected_purge=$'dkms status\ndkms remove -m sm750hdmifb -v 0.5.9 --all'
+printf '%s\n' "$purge_output" |
+	grep -F 'removing stale DKMS registration: sm750hdmifb/0.6.0' >/dev/null ||
+	fail "the purge did not announce the removal of 0.6.0"
+printf '%s\n' "$purge_output" |
+	grep -F 'removing stale DKMS registration: sm750hdmifb/0.6.1' >/dev/null &&
+	fail "the purge tried to remove the version being installed"
+expected_purge=$'dkms status\ndkms remove -m sm750hdmifb -v 0.5.9 --all\ndkms remove -m sm750hdmifb -v 0.6.0 --all'
 [ "$(cat "$sandbox/calls.log")" = "$expected_purge" ] ||
 	fail "the purge removed the wrong registrations: $(tr '\n' '|' <"$sandbox/calls.log")"
 purge_calls=$(cat "$sandbox/calls.log")
+
+# Failed-removal branch, rootless: the same canned listing, but the FIRST
+# version the loop meets (0.5.9) fails to unregister the way a broken
+# registration does (dangling source symlink, dkms exit 4). The load-bearing
+# property is that the scriptlet still exits 0 - a non-zero exit aborts the
+# whole RPM transaction - and that the failure does not abort the loop, so
+# 0.6.0 is still removed afterwards.
+: >"$sandbox/calls.log"
+shim_status=$sandbox/status-stale.txt
+shim_fail_remove=0.5.9
+failpurge_exit=0
+failpurge_output=$(run_posttrans "$sandbox/modules-none" 2>&1) || failpurge_exit=$?
+shim_status=
+shim_fail_remove=
+[ "$failpurge_exit" -eq 0 ] ||
+	fail "a failed stale removal exited $failpurge_exit; it must stay 0 or the transaction aborts"
+printf '%s\n' "$failpurge_output" |
+	grep -F 'Error! Could not locate dkms.conf file.' >/dev/null ||
+	fail "the failing-removal run did not surface the shim dkms error"
+printf '%s\n' "$failpurge_output" |
+	grep -F 'warning: dkms remove sm750hdmifb/0.5.9 failed; remove it by hand' >/dev/null ||
+	fail "the failed removal did not emit the spec warning text"
+# Ordering: 0.5.9 fails first, so a later 0.6.0 removal proves the loop
+# continued past the failure instead of aborting on it.
+fail_line=$(grep -nF 'dkms remove -m sm750hdmifb -v 0.5.9 --all' \
+	"$sandbox/calls.log" | cut -d: -f1)
+cont_line=$(grep -nF 'dkms remove -m sm750hdmifb -v 0.6.0 --all' \
+	"$sandbox/calls.log" | cut -d: -f1)
+[ -n "$fail_line" ] || fail "the failing-removal run never attempted 0.5.9"
+[ -n "$cont_line" ] ||
+	fail "the loop aborted after the failed removal; 0.6.0 was never attempted"
+[ "$cont_line" -gt "$fail_line" ] ||
+	fail "the loop removed 0.6.0 before the failed 0.5.9 removal"
+grep -F 'dkms remove -m sm750hdmifb -v 0.6.1' "$sandbox/calls.log" >/dev/null &&
+	fail "the failing-removal run tried to remove the version being installed"
+expected_failpurge=$'dkms status\ndkms remove -m sm750hdmifb -v 0.5.9 --all\ndkms remove -m sm750hdmifb -v 0.6.0 --all'
+[ "$(cat "$sandbox/calls.log")" = "$expected_failpurge" ] ||
+	fail "the failing-removal run built or installed: $(tr '\n' '|' <"$sandbox/calls.log")"
+failpurge_calls=$(cat "$sandbox/calls.log")
 {
 	log_header "sh posttrans.sh with SM750_RPM_MODULES_ROOT (rootless)"
 	printf '%s\n' '--- no supported kernel with headers ---'
@@ -445,9 +520,19 @@ purge_calls=$(cat "$sandbox/calls.log")
 	printf 'exit: %s\n' "$purge_exit"
 	printf '%s\n' '--- recorded calls (purge run) ---'
 	printf '%s\n' "$purge_calls"
+	printf '%s\n' '--- purge run with a FAILED removal (SHIM_FAIL_REMOVE=0.5.9) ---'
+	printf '%s\n' 'command: SHIM_FAIL_REMOVE=0.5.9 SHIM_STATUS=status-stale.txt sh posttrans.sh'
+	printf '%s\n' 'purpose: dkms 3.4.4 exits 4 for a broken registration (dangling'
+	printf '%s\n' 'source symlink); the scriptlet must warn, keep exit 0 and keep'
+	printf '%s\n' 'purging the remaining stale versions.'
+	printf '%s\n' "$failpurge_output"
+	printf 'exit: %s\n' "$failpurge_exit"
+	printf '%s\n' '--- recorded calls (failed-removal run) ---'
+	printf '%s\n' "$failpurge_calls"
 } >"$evidence/06-posttrans-missing-headers.log" 2>&1
 note "missing headers: warning on stderr, exit 0; build/install/depmod sequence verified"
-note "stale purge: only sm750hdmifb/0.5.9 removed, 0.6.0 and other module names untouched"
+note "stale purge: sm750hdmifb/0.5.9 and 0.6.0 removed, 0.6.1 and other module names untouched"
+note "failed removal: dkms exit 4 downgraded to the spec warning, exit 0, loop continued"
 
 # --- dkms sandbox: add + build ---------------------------------------------
 # The source comes from the built RPM payload, so this also proves the packaged
@@ -552,7 +637,7 @@ note "built object: $built_ko ($(stat -c %s "$built_ko") bytes, host tree untouc
 skip "dnf install $(basename "$rpm_file"): needs root (writes /usr/src, /etc, /var/lib/dkms)"
 skip "dkms status showing 'installed' in the host tree: needs root, follows the skipped dnf install"
 skip "dkms install (even with --installtree): 'Error! You must be root to use this command.'"
-skip "dkms remove -m sm750hdmifb -v 0.5.9 --all in the host tree: not in the sudoers allowlist (only -v 0.6.0 is); the purge runs inside the RPM %posttrans instead, and the rootless run above proves the call sequence"
+skip "dkms remove -m sm750hdmifb -v 0.5.9 --all in the host tree: not in the sudoers allowlist (only -v 0.6.1 is); the purge runs inside the RPM %posttrans instead, and the rootless run above proves the call sequence"
 skip "modinfo of the installed module: needs root, follows the skipped dnf install"
 skip "dnf remove $name: needs root and the skipped dnf install"
 skip "dkms status after erase (registration gone): needs root, follows the skipped dnf remove"

@@ -468,7 +468,9 @@ proportions (314 vs 319), which proves the modeset really programs the panel and
 that the 1-of-49 reading was a sampling artefact.
 
 Restored-vs-baseline is 3 of 49: `PANEL_CURRENT_LINE` (expected), plus
-`PANEL_FB_ADDRESS` (the fbdev client re-allocates its buffer on restore) and
+`PANEL_FB_ADDRESS` (the staged flip moves it: `0x003f4800` is
+`ALIGN(1920 * 1080 * 2, 16)`, the driver's backbuffer, so no buffer object was
+re-allocated on restore; corrected in T31) and
 `MISC_CTRL` bit 17 (`0x01020060` -> `0x01000060`). The last one has no name in
 `src/ddk750_reg.h` and is absent from `docs/REGISTERS.md:52`; it is recorded as
 an observation, not a defect, and no closing command is owed for it.

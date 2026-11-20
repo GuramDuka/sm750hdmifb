@@ -162,6 +162,54 @@ row and no `: added` line. The purge is idempotent - a second install finds
 nothing to remove.
 
 
+### When a removal fails (exit-code semantics)
+
+`dkms remove` does not fail the same way for every leftover, and the purge has
+to survive both outcomes:
+
+| Host state of `/var/lib/dkms/sm750hdmifb/<version>/source` | `dkms remove -m sm750hdmifb -v <version> --all` |
+| --- | --- |
+| symlink dangles (target gone) | `Error! sm750hdmifb/<version> is broken!`, `Missing the source directory or the symbolic link pointing to it:`, `Manual intervention is required!`, exit **4** |
+| directory exists but has no `dkms.conf`, module not installed | `Deleting module sm750hdmifb/<version> completely from the DKMS tree.`, exit **0** |
+
+Both were measured with `dkms` 3.4.4 on this host against a scratch tree
+(`--dkmstree`, `--sourcetree`, `--installtree`), never against `/var/lib/dkms`.
+
+The exit-4 case is why `%posttrans` downgrades the call to
+`|| echo "warning: dkms remove %{dkms_name}/$stale_version failed; remove it
+by hand" >&2` (`packaging/sm750hdmifb.spec:227-228`) and still ends in
+`exit 0`: a scriptlet that exits non-zero aborts the whole RPM transaction, so
+the package would fail to install over a leftover it cannot delete anyway. The
+warning is the operator's cue; the rest of the loop keeps purging the other
+stale versions. `tests/check-rpm-dkms.sh` forces this branch with
+`SHIM_FAIL_REMOVE=<version>` and asserts the exit 0, the exact warning text,
+that the loop continued to the next version, that `%{dkms_version}` was still
+never removed, and that no build or install ran during the purge.
+
+Finding a leftover by hand:
+
+```sh
+dkms status | grep sm750hdmifb                    # every registered version
+ls -l /var/lib/dkms/sm750hdmifb/<version>/source  # dangling -> exit 4 above
+```
+
+The one real occurrence on this host was not a packaging defect:
+`/usr/src/sm750hdmifb-0.6.0` was a **git checkout** of the repository, not an
+RPM payload, so its registration pointed at a directory the package never
+owned. Host state, not a defect in `%files` or in the scriptlets.
+
+`%posttrans` cannot repair such a leftover - it has no tree to remove and no
+authority to delete a directory no RPM owns. The remedy is manual:
+
+```sh
+sudo rm -rf /usr/src/sm750hdmifb-<version>
+sudo dnf reinstall -y /path/to/sm750hdmifb-<version>-1.fc43.noarch.rpm  # re-runs %posttrans
+```
+
+The purge is idempotent, so re-running it costs nothing; a second pass finds
+either nothing to remove or a registration whose source tree is now gone and
+warns again.
+
 ### Kernel-update rebuild
 
 `dkms.conf` sets `AUTOINSTALL=yes`, so DKMS kernel hooks build and install the

@@ -1,0 +1,253 @@
+# utc: 2026-11-20T10:52:06Z
+# T32 - the fbdev reconsole restore path: masked transition waits, a mode-derived
+#       budget, a kept display-off result and a fail-path register dump
+# host: deneb, kernel 7.3.4-100.fc43.x86_64
+# module: sm750hdmidrm 0.6.0 built from this working tree (T32), not installed
+# actor: gem-implementer, uid 1005; this session has no root, so no module load,
+#        no register dump and no restore-cycle run are part of this file
+
+WHY THIS FILE EXISTS
+--------------------
+docs/evidence/runtime/20-fbdev-restore-timeout-rca.txt established the failure
+chain and ranked six hypotheses without being able to settle which one fires.
+A27 already removed the damage that followed the failure (the unconsumed vblank
+event, the 10 s stalls, the refcount underflow). What remained was the failure
+itself: `ddk750_set_display_control(..., false)` and
+`program_mode_registers()` returned -ETIMEDOUT from display-control waits that
+compare a whole register snapshot, and the disable hook threw its result away,
+so the enable hook that follows in the same commit inherited a raster that was
+still running. This file records what changed, why each change makes the
+comparison satisfiable rather than merely longer, and what is still unproven
+because it needs a root run on the card.
+
+1. THE TWO WAIT LOOPS, BEFORE AND AFTER
+---------------------------------------
+Both loops shared one mistake: they compared the whole PANEL_DISPLAY_CTRL /
+CRT_DISPLAY_CTRL register against a value captured before the write, minus a
+"reserved" mask. Everything the hardware updates during a transition - live
+VSYNC status, the FIFO request field, pan, phase, gamma, format - is outside
+that mask, so the comparison could fail on bits the wait does not own. Neither
+loop re-read before deciding, and only the mode loop re-poked.
+
+Before (src/ddk750_display.c:14-27, as committed):
+
+    static int wait_display_value(unsigned long reg, unsigned long value,
+                                  unsigned long reserved)
+    {
+            unsigned int elapsed;
+
+            for (elapsed = 0; elapsed < DISPLAY_TRANSITION_TIMEOUT_US;
+                 elapsed += 10) {
+                    if ((peek32(reg) & ~reserved) == (value & ~reserved))
+                            return 0;
+                    udelay(10);
+            }
+
+            return -ETIMEDOUT;
+    }
+
+Before (src/ddk750_mode.c:288-297, as committed):
+
+    while ((peek32(PANEL_DISPLAY_CTRL) & ~reserved) != (tmp | reg)) {
+            cnt++;
+            if (cnt > 1000)
+                    return -ETIMEDOUT;
+            poke32(PANEL_DISPLAY_CTRL, tmp | reg);
+            udelay(10);
+    }
+
+After (src/ddk750_display.c:14-45): `wait_display_bits(reg, name, value, mask,
+what)` keeps the 100 ms budget (`DISPLAY_TRANSITION_TIMEOUT_US`), compares
+`(last & mask) == (value & mask)`, re-writes `(last & ~mask) | (value & mask)`
+on every poll iteration, and on exhaustion prints
+
+    sm750: %s %s did not latch: want %#lx mask %#lx last %#08x after %u us
+
+through `pr_err_ratelimited`, the severity the file already uses (no
+`drm_err` is reachable from a DDK helper, and no new logging dependency was
+introduced).
+
+After (src/ddk750_mode.c:299-318): the PANEL branch of
+`program_mode_registers()` computes `mask = DISPLAY_CTRL_TIMING |
+DISPLAY_CTRL_PLANE`, derives the budget from the mode, polls in 10 us steps,
+re-pokes per iteration, and prints
+
+    sm750: PANEL_DISPLAY_CTRL transition did not latch: want %#x mask %#x last %#08x after %lu us
+
+before returning -ETIMEDOUT. `int cnt` and the `cnt > 1000` cap are gone.
+
+2. THE MASK, AND WHY EXACTLY THESE BITS
+---------------------------------------
+    #define DISPLAY_CTRL_TIMING  BIT(8)   src/ddk750_reg.h:561
+    #define DISPLAY_CTRL_PLANE   BIT(2)   src/ddk750_reg.h:567
+
+    mask = DISPLAY_CTRL_TIMING | DISPLAY_CTRL_PLANE;      /* 0x104 */
+
+TIMING and PLANE are the two bits the waits actually command: enable is
+"TIMING then PLANE", disable is "clear PLANE then clear TIMING", and the
+datasheet's vertical-sync handshake applies to exactly those two transitions
+(the hardware waits for the next vertical sync to turn the plane on or off).
+Every other writable field of the register is rewritten by the hardware during
+the transition, and bit 11 is live VSYNC status that changes at the frame
+rate. A wait that compares anything beyond TIMING|PLANE therefore has a
+non-zero probability of missing a latch that did happen - which is precisely
+the H1/H3 mechanism in the RCA. Each call site now passes only the bit it is
+transitioning (TIMING for the two timing steps, PLANE for the two plane
+steps), so a wait never fails because of a bit another step owns.
+
+3. THE NEW TIMEOUT BUDGET
+-------------------------
+    frame_us  = 1000000 / vertical_frequency     (0 -> 1, never divides by 0)
+    budget_us = max(20000, 2 * frame_us)
+
+`mode_param->vertical_frequency` (src/ddk750_mode.h:12-34) is the refresh rate
+of the mode being programmed, so `frame_us` is one vertical period and the
+budget is two of them - enough for the write to lose one race with the old
+mode's VSYNC and still win the next. The 20 ms floor keeps the previous
+behaviour for slow modes (a 24 Hz mode is 41.7 ms per frame, so the floor only
+binds at 100 Hz and above) and guarantees at least two frames at any rate.
+Compared with the old fixed cap: 1000 iterations of `udelay(10)` was ~10 ms of
+sleep plus register-access time, i.e. under one frame at 60 Hz, which is why
+the old loop could exhaust inside a single VSYNC period. The formula is stated
+in a comment at src/ddk750_mode.c:288-296, including which value it reads.
+
+The display-side helper keeps `DISPLAY_TRANSITION_TIMEOUT_US` (100 ms)
+unchanged, as the brief required: only the comparison was made satisfiable
+there. 100 ms is more than five frames at 60 Hz, so a masked compare has ample
+time to observe a latch.
+
+4. THE DISABLE AND ENABLE HOOKS (src/sm750_drm.c)
+-------------------------------------------------
+`sm750_pipe_disable()` (:3627): the display-off call is still unconditional and
+still the last thing under `mode_lock`, but its result is now captured and, on
+failure, reported once at `drm_warn` severity with the readback:
+
+    panel did not acknowledge display-off: %d (PANEL_DISPLAY_CTRL=%#08x)
+
+The disable path itself is unchanged: no early return, no skipped teardown, no
+aborted disable. A display that refuses to switch off is now visible in the log
+before the enable half of the same commit runs.
+
+`sm750_pipe_enable()` fail path (:3536): the A27 sequence is byte-for-byte as
+it was - `drm_crtc_vblank_on(&pipe->crtc)`, then
+`sm750_crc_resume(sdev)` on >= 7.0.0, then `sm750_arm_vblank_event(pipe)` - and
+the T27 stage name is still in `failed to enable HDMI mode: %d at stage %s`.
+One `drm_err` was added after it, printing the state at the moment of failure:
+
+    enable-fail state: PANEL_DISPLAY_CTRL=%#08x PANEL_PLL_CTRL=%#08x SYSTEM_CTRL=%#08x PANEL_CURRENT_LINE=%#08x
+
+Those four registers are what separates the RCA hypotheses on the next
+occurrence: a still-running raster (TIMING/PLANE still set), a PLL that never
+left the old mode, a power/clock gate left off, or a control that latched but
+never reached the visible scan (`PANEL_CURRENT_LINE` frozen or zero). No
+retry, no replayed modeset, no change to when the event is armed or consumed.
+
+5. THE SOURCE-LEVEL GATE
+------------------------
+tests/check-restore-path.sh (223 lines) holds the four properties above and
+rejects its own planted defects. It takes an optional source directory and a
+`--single` mode (used by the controls). Transcript, this tree, exit 0:
+
+    negative control exact_register_compare: rejected (exit 1): Restore path: the display wait does not compare through the transition mask
+    negative control event_armed_before_vblank_on: rejected (exit 1): Restore path: the fail path arms the event before vblank accounting is restored
+    negative control display_off_result_discarded: rejected (exit 1): Restore path: the display-off result is discarded
+    negative control no_fail_state_registers: rejected (exit 1): Restore path: the fail path does not print PANEL_DISPLAY_CTRL
+    Restore path checks passed
+
+The four controls are the regressions that matter, each planted on a temporary
+copy of the three sources:
+
+- exact_register_compare: `(last & mask) == (value & mask)` reverted to
+  `(last & ~mask) == (value & ~mask)`, i.e. the pre-A32 whole-register compare.
+- event_armed_before_vblank_on: the fail path arms the event before
+  `drm_crtc_vblank_on()`, i.e. A27 undone.
+- display_off_result_discarded: `ret = ddk750_set_display_control(...)` put back
+  to a bare call with the warning removed.
+- no_fail_state_registers: the `enable-fail state:` line deleted, so the next
+  occurrence would again be undiagnosable.
+
+It is wired into tests/check-drm-policy.sh after `check-console-blank.sh`, so
+`make check` stays at 17 recipe commands.
+
+6. THE ROOT STRESS HARNESS (not run here)
+------------------------------------------
+tools/sm750-restore-cycle.sh (208 lines) repeats the trigger and looks for the
+new lines. Options `--no-reload`, `--ko PATH` (default src/sm750hdmidrm.ko),
+`--iterations N` (default 20), `--mode WxH` (default 1024x768), `--hold
+SECONDS` (default 2). It refuses to run as non-root, refuses to unload when
+`modinfo -F vermagic` of the object differs from `uname -r`, and restores the
+packaged module when `insmod` fails, exactly like tools/sm750-crc-cycle.sh.
+Per iteration it runs `build/scanout-pattern <card> white <hold>` (built first
+with the documented rootless libdrm fallback) so the client exit issues the
+`drm_release` restore, appends one `modetest -M sm750hdmidrm -s
+<connector>@<crtc>:<mode>` when modetest is in PATH and skips that half
+otherwise, and then judges the attempt by the dmesg lines added since it
+started. Exit codes: 0 all attempts clean, 1 environment, 2 no scanout
+readback, 3 at least one failure line.
+
+7. NOT YET PROVEN ON HARDWARE
+-----------------------------
+Nothing in this file is a hardware result. This session has no root, so the
+module was never loaded, no register was read, and the restore path never ran
+against the card. What the tree now guarantees is:
+
+- the comparison is satisfiable (masked, re-poked, mode-derived budget);
+- a failure is loud at both ends (`panel did not acknowledge display-off`,
+  `... transition did not latch ...`, `enable-fail state: ...`);
+- A27's ordering is intact, so a failure no longer becomes a WARNING, a 10 s
+  stall per atomic object or a refcount underflow.
+
+Whether the -110 disappears is still open, and the RCA's own falsification
+criteria apply unchanged. The run that settles it:
+
+    sudo ./tools/sm750-restore-cycle.sh --iterations 120
+
+on the card, with the object built for the running kernel. Three outcomes are
+distinguishable from its output:
+
+- no failure line in 120 attempts, where the RCA records 1 occurrence in 205
+  attempts in T16 and 5 fail-path firings in 108 attempts in the post-A27 run
+  (`docs/evidence/runtime/20-fbdev-restore-timeout-rca.txt:24`, `:701`): the
+  wait no longer times out on this path, and the masked compare was the cause
+  (RCA H1/H3).
+- a `did not latch` line whose printed `last` differs from `want` only inside
+  the mask: the bits really did not latch, so the mechanism is a genuine latch
+  failure (H5) and the budget, not the mask, is the lever.
+- a `did not latch` line that is absent while `failed to enable HDMI mode`
+  still appears: the failure moved to another stage, and the new
+  `enable-fail state:` line names which one via the stage and the four
+  registers.
+
+Until that run exists, the disposition is "fixed in source, pending on-card
+confirmation", which is how docs/DEFECTS.md records A32.
+
+8. VERIFICATION, THIS TREE
+--------------------------
+All exit codes are from this session, uid 1005, no root.
+
+    make CC=/usr/bin/gcc                                   0   (7.3.4-100.fc43, 12 lines)
+    make CC=/usr/bin/gcc KDIR=/mega/tmp/sm750/t5/k617/...   0   (6.17.1-300.fc43, 31 lines)
+    ./tests/check-restore-path.sh                           0   (5 lines, 4 controls rejected)
+    ./tests/check-console-blank.sh                          0
+    ./tests/check-crc-uapi.sh                               0
+    ./tests/check-drm-policy.sh                             0   (delegates, still one command)
+    make check (rootless libdrm env)                        0   (178 lines, 17 commands)
+    ./tests/check-release-version.sh                        0   (0.6.0)
+    ./tests/check-drm-packaging.sh                          0
+    ./tests/check-static.sh                                 0   (coccinelle 0 findings)
+
+The 6.17.1-300 build emits only kbuild's own
+`warning: the compiler differs from the one used to build the kernel` (the
+archived kernel was built by gcc 15.2.1, this host has 15.3.1) and
+`Skipping BTF generation ... due to unavailability of vmlinux`; both are the
+residual notes already recorded in docs/DEFECTS.md. `modinfo -F vermagic` on
+the resulting object reads `6.17.1-300.fc43.x86_64 SMP preempt mod_unload`,
+so the harness would accept it on a 6.17.1 host.
+
+Scratch logs: /mega/tmp/sm750/t32-build.log, t32-build617.log, t32-check.log,
+t32-check-restore-path.log, t32-check-console-blank.log, t32-check-crc-uapi.log,
+t32-check-drm-policy.log, t32-check-release-version.log,
+t32-check-drm-packaging.log, t32-check-static.log. The /mega/tmp/sm750 trees
+(t3 libdrm, t5 k617 kernel) were present and were not re-extracted.
+
+Version stays 0.6.0. No commit; the tree is left dirty for review.

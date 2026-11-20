@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-only
 set -euo pipefail
+export TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}
 
 readonly project_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 readonly package=sm750hdmifb
 readonly module=sm750hdmidrm
-readonly version=0.6.0
+readonly version=0.6.1
 readonly arch=all
 readonly build_root="${project_dir}/build/package/${package}_${version}_${arch}"
 readonly dist_dir="${project_dir}/dist"
@@ -100,7 +101,7 @@ dpkg-deb --root-owner-group --build "${build_root}" "${deb}"
 . "${project_dir}/packaging/source-excludes.sh"
 mapfile -t exclude_pathspecs < <(sm750_dev_only_pathspecs)
 if git -C "${project_dir}" rev-parse --git-dir >/dev/null 2>&1; then
-	tracked_list=$(mktemp "${TMPDIR:-/tmp}/sm750-tracked.XXXXXX")
+	tracked_list=$(mktemp "${TMPDIR}/sm750-tracked.XXXXXX")
 	trap 'rm -f -- "$tracked_list"' EXIT
 	git -C "${project_dir}" ls-files -z -- . "${exclude_pathspecs[@]}" \
 		>"$tracked_list"

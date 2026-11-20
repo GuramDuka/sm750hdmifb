@@ -406,13 +406,17 @@ list.
 | --- | --- |
 | `docs/AUDIT.md` | repository audit, 24 defects with reproduction and evidence |
 | `docs/DEFECTS.md` | one disposition per defect: fixed, accepted or deferred |
-| `docs/TEST-STRATEGY.md` | suites S1-S8, recorded results, remaining gaps |
+| `docs/TEST-STRATEGY.md` | suites S1-S10, recorded results, remaining gaps |
 | `docs/STATIC-ANALYSIS.md` | static-analysis gate, per-tool counts, triage of every finding, tool configuration and limits |
 | `docs/PACKAGING-RPM.md` | spec purpose, build recipe, install, verify, rollback |
 | `docs/ENVIRONMENT.md` | host, header trees, tool matrix, privilege state |
 | `docs/ci/build.yml` | inactive CI recipe: GitHub Actions is disabled, the file is kept outside `.github/workflows/` |
 | `docs/DELIVERABLES.md` | this index and the reproduction guide |
+| `tests/check-console-blank.sh` | T31 source-level gate: `sm750_shadow_frame_is_blank()` samples the shadow source on a coarse grid, the exact `console framebuffer is blank` line is emitted from `sm750_pipe_enable()` after `sm750_program_mode()` behind a once-per-load latch, and the guard carries no control flow; four planted defects rejected. Run by `tests/check-drm-policy.sh`, so it stays inside the 17-command `make check` |
+| `tests/check-console-scanout.sh` | T31 root-only runtime check (`make console-check`, opt-in): on a `KD_TEXT` foreground VT it writes to `/dev/tty0` and requires a non-blank `sm750_scanout` window, a `crc32` other than the all-zero sentinel `0xe20eea22` and an `offset` equal to `PANEL_FB_ADDRESS`; exits 77 with one `SKIP:` line, naming `KD_GRAPHICS` when that is the cause |
+| `tests/check-restore-path.sh` | T32 source-level gate (part of `make check` through `tests/check-drm-policy.sh`): the display and mode transition waits compare through `DISPLAY_CTRL_TIMING \| DISPLAY_CTRL_PLANE` and re-poke per poll, the mode budget is `max(20 ms, 2 vertical periods)`, `sm750_pipe_disable()` keeps and reports the display-off result, and the `sm750_pipe_enable()` fail path stays terminal and dumps four registers. Rejects four planted defects; 223 lines |
 | `tools/sm750-crc-cycle.sh` | single root entry point for the CRC/readback check: reloads the locally built module after a vermagic guard, waits for scanout geometry, runs `tests/check-scanout-crc.sh` and prints the transcript; `--diag` adds an strace of `crc/data`, `--dump` prints the crc file set |
+| `tools/sm750-restore-cycle.sh` | T32 root-only stress harness for the restore path: reloads the module after a vermagic guard, repeats the client-exit restore trigger with `build/scanout-pattern` plus an optional `modetest` mode change, and fails on any new `did not latch` / `panel did not acknowledge` / `failed to enable HDMI mode` line. Exit 0 clean, 1 environment, 2 no scanout readback, 3 failure seen; 208 lines. Not yet run on the card |
 
 ### 5.3 Specification archive
 
@@ -450,6 +454,9 @@ list.
 | `docs/evidence/scanout/04-checks.txt` | PASS/FAIL/SKIP lines of `tests/check-scanout-crc.sh` |
 | `docs/evidence/scanout/05-crc-debugfs-build.txt` | four-kernel build record of the T28 hosting attempt; the hosting itself was removed in T30, kept as history |
 | `docs/evidence/scanout/06-crc-debugfs-runtime.txt` | SKIP record for the T28 hosted files as uid 1005; superseded by `09-crc-single-owner.txt` |
+| `docs/evidence/runtime/22-restore-fix-hardware-proof.txt` | T34: the on-card run of the T32 restore-path fix - module srcversion and vermagic, the six CRC-cycle PASS lines, the single T31 blank-console line, 30/30 restore cycles, 20/20 mode changes, 95 enable events across two geometries, the zero-fault census with the exact grep, the S10 console-scanout result under `KD_TEXT`, and the limitations (one card, one panel, harness form unexercised) |
+| `docs/evidence/runtime/21-fbdev-restore-fix.txt` | T32: the restore-path failure chain, the two wait loops before and after with the mask rationale, the `max(20 ms, 2 vertical periods)` budget derivation, the disable/enable hook changes, the gate transcript with its four rejected controls, the root harness design, and an explicit not-yet-proven-on-hardware section naming the run that would settle it |
+| `docs/evidence/runtime/19-console-blank-diagnosis.txt` | T31: the black-panel misdiagnosis, `KDGETMODE=1` on `/dev/tty0`, `crc32(262144 zeros) = 0xe20eea22`, the blank and white register/scanout states, the conclusion, and the S9/S10 transcripts |
 | `docs/evidence/scanout/09-crc-single-owner.txt` | T30: core owns `crtc-N/crc/{control,data}`, the deleted driver symbols, the two defects found (positive return from `drm_vblank_work_schedule()`, lastclose console restore), the seven gate exit codes and the root run ending in `RESULT: scanout CRC check passed` |
 | `docs/evidence/scanout/08-crc-stream-fix.txt` | T29: the stalled stream diagnosis (a failed region check returned before the re-arm), the fix, the gate transcript, and the runtime run that still produced no entries |
 | `docs/evidence/baseline/11-journalctl.txt` | whether `journalctl -k` substitutes for `dmesg` |
@@ -490,7 +497,7 @@ list.
 | `docs/evidence/packaging/03-rpm-qlp.log` | `%files` list, 36 files |
 | `docs/evidence/packaging/04-rpm-qpR.log` | dependency assertions |
 | `docs/evidence/packaging/05-dkms-sandbox.log` | sandbox DKMS `built` with a real module |
-| `docs/evidence/packaging/06-posttrans-missing-headers.log` | missing-header branch of `%posttrans` |
+| `docs/evidence/packaging/06-posttrans-missing-headers.log` | missing-header branch of `%posttrans`, plus the stale-purge run whose `dkms remove` fails (exit 4) |
 | `docs/evidence/packaging/07-check-rpm-dkms.log` | full `tests/check-rpm-dkms.sh` run |
 | `docs/evidence/packaging/0.5.9/01-rpmbuild.log` | `rpmbuild -ba` at 0.5.9, exit 0 |
 | `docs/evidence/packaging/0.5.9/02-rpm-qp-scripts.log` | scriptlet assertions at 0.5.9 |

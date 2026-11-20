@@ -536,8 +536,27 @@ instruction:
   mode the fbdev client sets.
 - No `/dev/fb*` node appears despite that registration, because
   `CONFIG_FB_DEVICE` is unset on this kernel (recorded as A24 in
-  `docs/DEFECTS.md`). The console still reaches the panel; only the character
-  device is missing.
+  `docs/DEFECTS.md`). The character device is missing; the console still
+  reaches the panel whenever the foreground VT is in `KD_TEXT`.
+- The console reaches the panel through fbcon, and fbcon only paints while the
+  foreground VT is in `KD_TEXT`: `do_con_write()` in `drivers/tty/vt/vt.c`
+  drops console output before fbcon when `vc_mode` is `KD_GRAPHICS`. Loading
+  the module on such a host therefore leaves the fbdev client's buffer blank,
+  and the panel scans zeros with nothing else wrong. The driver says so once
+  per module load at the modeset instead of leaving a black panel unexplained:
+
+  ```text
+  [    6.265979] sm750hdmidrm 0000:01:00.0: [drm] console framebuffer is blank: the panel now scans a frame nobody has painted (is the foreground VT in KD_TEXT?)
+  ```
+
+  This is a diagnostic, not a behaviour change: no upload is skipped and no
+  commit fails. `make console-check` (root only) tells the two states apart on
+  the card: it skips when the foreground VT is `KD_GRAPHICS`, and on a text VT
+  it writes to the console and asserts that the `sm750_scanout` window carries
+  content, that its `crc32` is not the all-zero sentinel `0xe20eea22` and that
+  its `offset` is the `PANEL_FB_ADDRESS` the panel register points at. The
+  source-level counterpart is `tests/check-console-blank.sh`, part of
+  `make check`.
 - The monitor stays attached to the SM750 HDMI connector: `card0-HDMI-A-1`
   reports `connected` at every probe, and nothing detaches it.
 - The user's desktop runs on the NVIDIA GTX 1070, not on the SM750. On this
@@ -548,6 +567,25 @@ So the SM750 is a second, permanent output that shows the console, and the
 graphical session is unaffected by anything done to it. A modeset on `card0`
 from a test tool temporarily replaces the console; closing the tool lets the
 fbdev client restore its own 1920x1080 mode.
+
+That restore is a disable-then-enable pair inside one atomic commit, and both
+halves can now say what happened instead of failing quietly. The transition
+waits compare only the timing and plane enable bits - the bits the hardware
+latches at the next vertical sync - rather than a whole register snapshot, and
+a mode change budgets for two vertical periods of the mode it programs. If a
+display still refuses to switch off, the log carries
+`panel did not acknowledge display-off: -110 (PANEL_DISPLAY_CTRL=0x...)`; if
+the enable half then fails, it prints one `enable-fail state:` line with
+`PANEL_DISPLAY_CTRL`, `PANEL_PLL_CTRL`, `SYSTEM_CTRL` and
+`PANEL_CURRENT_LINE`. A failing restore is therefore a register readback to
+report, not a silent timeout.
+
+The restore path is verified on hardware: 30 consecutive client exit/restore
+cycles and 20 mode changes ran on 2026-11-20, 95 enable events in total
+across 1920x1080 and 1024x768, with no timeout, no `did not latch` line and no
+`enable-fail state` line in the kernel log. The run, its counts and its
+limitations are in
+[`docs/evidence/runtime/22-restore-fix-hardware-proof.txt`](docs/evidence/runtime/22-restore-fix-hardware-proof.txt).
 
 ## Developers
 
@@ -571,7 +609,7 @@ fbdev client restore its own 1920x1080 mode.
 - [Host root actions](docs/ROOT-ACTIONS.md) - sudoers, helpers, udev rule, recovery
 - [CI recipe](docs/ci/build.yml) - inactive: GitHub Actions is disabled for this repository, the file is a copy-paste recipe
 
-Four verification targets are opt-in and deliberately outside `make check`, so
+Five verification targets are opt-in and deliberately outside `make check`, so
 the default gate stays the same 17 commands on machines without the analysers:
 
 ```sh
@@ -579,15 +617,18 @@ make static       # sparse, smatch, cppcheck, coccinelle, pahole against src/
 make vbios-re     # rebuild the option ROM and compare it byte for byte
 make vbios-trace  # execute both images and compare their instruction traces
 make crc-check    # live scanout CRC and sm750_scanout readback on the card
+make console-check # console reachability: the scanout window is not blank
 ```
 
 `make vbios-re` and `make vbios-trace` need the captured image
 (`VBIOS_ROM=...`, or the default path) and print `SKIP` with exit 0 when it is
 absent, so a fresh checkout without the image still passes; the trace target
 also needs `qemu-system-i386`, `gdb`, `capstone` and `unicorn`. `make static`
-prints a skip message when the analysers are missing. `make crc-check` needs
-the SM750 card, root and a mounted debugfs; without them it prints one
-`SKIP:` line and the target turns its exit code 77 into success. The static,
+prints a skip message when the analysers are missing. `make crc-check` and
+`make console-check` need the SM750 card, root and a mounted debugfs; without
+them they print one `SKIP:` line and the target turns the exit code 77 into
+success. `make console-check` also skips, with a line naming the cause, when
+the foreground VT is `KD_GRAPHICS`. The static,
 VBIOS and scanout checks are documented in
 [static analysis](docs/STATIC-ANALYSIS.md),
 [VBIOS reconstruction](docs/VBIOS-REVERSE-ENGINEERING.md) and
@@ -603,6 +644,7 @@ VBIOS and scanout checks are documented in
 | `tests/check-vblank <card> <hz>` | Live vblank rate against the programmed refresh |
 | `tests/audit-release.sh` | Release tarball contents, version consistency and archive drift |
 | `tests/check-static.sh` | Opt-in static analysis gate with baseline comparison |
+| `make console-check` | Opt-in console reachability: writes to the foreground VT, then requires the `sm750_scanout` window to carry content, to differ from the all-zero sentinel `0xe20eea22` and to report the `PANEL_FB_ADDRESS` offset; exits 77 (a skip) without root, card or a `KD_TEXT` foreground VT |
 | `make crc-check` | Opt-in live scanout readback: enables the CRTC CRC source `scanout`, checks that entries arrive, stay constant for a static frame, change with the content and agree with the `sm750_scanout` debugfs dump; exits 77 (a skip) without root, card or an active CRTC |
 
 Hardware-side validation uses the standard tools rather than project scripts:

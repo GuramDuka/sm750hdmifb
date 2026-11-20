@@ -14,11 +14,11 @@
 #   tests/check-rpm-dkms.sh
 
 %global dkms_name     sm750hdmifb
-%global dkms_version  0.6.0
+%global dkms_version  0.6.1
 %global module_name   sm750hdmidrm
 
 Name:           sm750hdmifb
-Version:        0.6.0
+Version:        0.6.1
 Release:        1%{?dist}
 Summary:        DKMS source for the SM750G10 SiI9024A HDMI DRM-KMS driver
 License:        GPL-2.0-only
@@ -299,6 +299,15 @@ exit 0
 %doc README.md LICENSE docs/RELEASE-NOTES.md docs/TESTING.md packaging/copyright
 
 %changelog
+* Fri Nov 20 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.1-1
+- Release 0.6.1: the display-control transition waits compare through a mask
+  and re-poke the register on every poll, and the mode wait budget is derived
+  from the vertical period instead of a fixed iteration count, so a modeset no
+  longer reports "failed to enable HDMI mode" on this panel; the display-off
+  result is no longer discarded and an enable failure dumps PANEL_DISPLAY_CTRL,
+  PANEL_PLL_CTRL, SYSTEM_CTRL and PANEL_CURRENT_LINE; a blank console
+  framebuffer now names the KD_GRAPHICS precondition once; new gates
+  tests/check-restore-path.sh and tests/check-console-blank.sh.
 * Wed Nov 18 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.0-1
 - Release 0.6.0: driver reports its version through drm_driver major/minor/
   patchlevel so modetest no longer prints 0.1.0; read-only debugfs "regs"

@@ -682,7 +682,7 @@ reloaded first; the version string stays 0.6.0, so only the reload distinguishes
 the two builds:
 
 ```sh
-cd /home/coder/sm750hdmifb
+cd ~coder/sm750hdmifb
 make CC=/usr/bin/gcc
 modprobe -r sm750hdmidrm
 modprobe drm_vram_helper

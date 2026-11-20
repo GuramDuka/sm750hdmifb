@@ -11,34 +11,52 @@
 #define DISPLAY_TRANSITION_TIMEOUT_US 100000
 #define VSYNC_TRANSITION_TIMEOUT_US 50000
 
-static int wait_display_value(unsigned long reg, unsigned long value,
-			      unsigned long reserved)
+/*
+ * Only the transition bits latch through the vertical-sync handshake. Every
+ * other writable field of the display control register (pan, FIFO request,
+ * phase, gamma, format) may be rewritten by the hardware while the panel is
+ * mid-transition, so comparing a whole snapshot can never converge and used
+ * to burn the whole budget on a transition that had in fact latched (A32).
+ */
+static int wait_display_bits(unsigned long reg, const char *name,
+			     unsigned long value, unsigned long mask,
+			     const char *what)
 {
 	unsigned int elapsed;
+	u32 last = 0;
 
 	for (elapsed = 0; elapsed < DISPLAY_TRANSITION_TIMEOUT_US;
 	     elapsed += 10) {
-		if ((peek32(reg) & ~reserved) == (value & ~reserved))
+		last = peek32(reg);
+		if ((last & mask) == (value & mask))
 			return 0;
+		/*
+		 * The hardware may need several writes before a transition
+		 * latches. The poke is idempotent and only drives the bits this
+		 * wait owns, so hardware-updated fields are left alone.
+		 */
+		poke32(reg, (last & ~mask) | (value & mask));
 		udelay(10);
 	}
 
+	pr_err_ratelimited("sm750: %s %s did not latch: want %#lx mask %#lx last %#08x after %u us\n",
+			   name, what, value, mask, last,
+			   DISPLAY_TRANSITION_TIMEOUT_US);
 	return -ETIMEDOUT;
 }
 
 int ddk750_set_display_control(int ctrl, bool enabled)
 {
-	unsigned long reg, val, reserved;
+	unsigned long reg, val;
+	const char *name;
 	int ret;
 
 	if (!ctrl) {
 		reg = PANEL_DISPLAY_CTRL;
-		/* Bit 11 is live VSYNC status and is not a writable value. */
-		reserved = PANEL_DISPLAY_CTRL_RESERVED_MASK |
-			PANEL_DISPLAY_CTRL_VSYNC;
+		name = "PANEL_DISPLAY_CTRL";
 	} else {
 		reg = CRT_DISPLAY_CTRL;
-		reserved = CRT_DISPLAY_CTRL_RESERVED_MASK;
+		name = "CRT_DISPLAY_CTRL";
 	}
 
 	val = peek32(reg);
@@ -46,23 +64,26 @@ int ddk750_set_display_control(int ctrl, bool enabled)
 		/* The hardware requires timing before plane enable. */
 		val |= DISPLAY_CTRL_TIMING;
 		poke32(reg, val);
-		ret = wait_display_value(reg, val, reserved);
+		ret = wait_display_bits(reg, name, val, DISPLAY_CTRL_TIMING,
+					"timing enable");
 		if (ret)
 			return ret;
 
 		val |= DISPLAY_CTRL_PLANE;
 		poke32(reg, val);
-		return wait_display_value(reg, val, reserved);
+		return wait_display_bits(reg, name, val, DISPLAY_CTRL_PLANE,
+					 "plane enable");
 	}
 
 	val &= ~DISPLAY_CTRL_PLANE;
 	poke32(reg, val);
 	/* A plane transition may wait for vertical sync. It must not hang. */
-	wait_display_value(reg, val, reserved);
+	wait_display_bits(reg, name, val, DISPLAY_CTRL_PLANE, "plane disable");
 
 	val &= ~DISPLAY_CTRL_TIMING;
 	poke32(reg, val);
-	return wait_display_value(reg, val, reserved);
+	return wait_display_bits(reg, name, val, DISPLAY_CTRL_TIMING,
+				 "timing disable");
 }
 
 static int primary_wait_vertical_sync(int delay)

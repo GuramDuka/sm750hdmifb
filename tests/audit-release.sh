@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-only
 set -euo pipefail
+export TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 dist_dir=$project_dir/dist
@@ -36,7 +37,7 @@ if [[ -n $stale_artifacts ]]; then
 	exit 1
 fi
 
-tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/sm750-release-audit.XXXXXX")
+tmpdir=$(mktemp -d "${TMPDIR}/sm750-release-audit.XXXXXX")
 trap 'rm -rf -- "$tmpdir"' EXIT
 dpkg-deb -e "$deb" "$tmpdir/control"
 dpkg-deb -x "$deb" "$tmpdir/deb"

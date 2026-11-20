@@ -38,6 +38,19 @@ Anything a later task downloads or extracts belongs under
 the expected form. Repository deliverables (`docs/ENVIRONMENT.md`,
 `docs/evidence/`) are committed artifacts, not scratch.
 
+Every script in the repository exports
+`TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}` before its first `mktemp`, so a run in a
+shell where `TMPDIR` is unset - this host's default - still writes its scratch
+under `/mega/tmp/sm750/` and never falls back to `/tmp`. `/mega/tmp/sm750/tmp`
+is the repository-wide ephemeral root: all `mktemp` templates are of the form
+`"${TMPDIR}/name.XXXXXX"`, and none names `/tmp` explicitly. This is what
+enforces `AGENTS.md:26`. The one directory a gate keeps deliberately is
+`tests/check-static.sh`'s log directory: it is removed on a passing run and
+kept on failure, where the summary prints `static analysis logs kept at:
+<path>`; a directory passed with `--logs` belongs to the caller and is never
+removed. Leaked directories of 15 MB each from earlier `tests/check-static.sh`
+runs under `/tmp` were the symptom this rule removes.
+
 Two pre-existing `$HOME` entries are not T3 scratch but are noted so packaging
 tasks do not add to them: `~/.rpmmacros` and the empty
 `~/rpmbuild/` skeleton were created by `rpmdev-setuptree` at 18:59,

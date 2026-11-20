@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-only
 set -euo pipefail
+export TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 generator=$project_dir/packaging/write-xorg-config.sh
-config=$(mktemp "${TMPDIR:-/tmp}/sm750hdmidrm-xorg.XXXXXX.conf")
+config=$(mktemp "${TMPDIR}/sm750hdmidrm-xorg.XXXXXX.conf")
 trap 'rm -f -- "$config"' EXIT
 
 "$generator" "$config" 0000:01:02.0

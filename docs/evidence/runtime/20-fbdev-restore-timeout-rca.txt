@@ -1,0 +1,723 @@
+# utc: 2026-11-20T11:10:00Z
+T32 - RCA: WHY THE FBDEV RECONSOLE RESTORE FAILS WITH -110 AND WEDGES THE COMMIT
+================================================================================
+
+Subject: sm750hdmidrm, kernel 7.3.4-100.fc43.x86_64, panel connector 35
+(HDMI-A-1) / CRTC 38 / plane 36, native 1920x1080.
+Question: a userspace DRM client exits, the kernel fbdev console client takes the
+CRTC back, `sm750_pipe_enable()` fails, the atomic commit wedges. Which call
+returns -110, why only on the re-enable, which callback keeps the commit alive,
+and what is the minimal fix.
+
+Scope of this file: analysis only. Nothing under src/, tests/ or any build output
+was modified, built or committed by T32; the patch below is a sketch in text.
+Line numbers are from the tree at HEAD 8c05e1b with the T31 work-in-progress
+present in the working copy (src/sm750_drm.c +54 lines). T31 inserts a blank
+frame diagnostic in sm750_pipe_enable, so every anchor below is given as a
+function name plus a nearby stable statement; line numbers may shift by a few
+tens of lines once T31 lands.
+
+Status of the cascade: the log analysed here is 0.6.0 with srcversion
+F4E135E09C9898462FE24C5, i.e. BEFORE the A27 fail-path fix. A27 is in the tree
+(src/sm750_drm.c:3536-3569, the `fail:` label of sm750_pipe_enable) and was
+measured after the fix in docs/evidence/runtime/19-a27-fix-reproduce.txt:
+108 attempts, 0 warnings, 0 flip_done timeouts, 0 refcount underflows, fail path
+fired 5 times. So the wedge and the underflow described below are already closed
+by A27; what remains open is the -110 itself (docs/evidence/EVIDENCE-GAPS.md:745,
+gap B8) and the fact that a failed restore leaves the panel blank until some
+later commit re-enables it. This file attacks the -110 and specifies the patch
+that makes the restore path succeed without undoing A27 or the T30 CRC path.
+
+
+================================================================================
+1. THE EVIDENCE, QUOTED
+================================================================================
+
+Source: docs/evidence/runtime/18-kernel-log-0.6.0.txt (111 lines, a curated
+transcript of the 2479-line dmesg of the two 0.6.0 reloads).
+Episode window [2889.882009 .. 2920.432986] s = dmesg lines 2308..2420 of that
+capture (18-kernel-log-0.6.0.txt:48-51). Line numbers below are lines of
+18-kernel-log-0.6.0.txt itself.
+
+  53:  [ 2889.882009] sm750hdmidrm 0000:01:00.0: [drm] *ERROR* failed to enable HDMI mode: -110
+  54:  [ 2889.882044] ------------[ cut here ]------------
+  55:  [ 2889.882047] WARNING: drivers/gpu/drm/drm_atomic_helper.c:2758 at
+  56:                 drm_atomic_helper_commit_hw_done+0x102/0x130, CPU#21: kmscube/322140
+  57:    call trace: drm_atomic_helper_commit_tail -> commit_tail ->
+  58:      drm_atomic_helper_commit -> drm_atomic_commit ->
+  59:      drm_client_modeset_commit_atomic -> drm_client_modeset_commit_locked ->
+  60:      drm_client_modeset_commit -> __drm_fb_helper_restore_fbdev_mode_unlocked.part.0 ->
+  61:      drm_fbdev_client_restore -> drm_client_dev_restore -> drm_release ->
+  62:      __fput -> task_work_run -> do_exit
+  63:  [ 2899.954215] *ERROR* flip_done timed out
+  64:  [ 2899.954223] *ERROR* [CRTC:38:crtc-0] commit wait timed out
+  65:  [ 2910.194059] *ERROR* flip_done timed out
+  66:  [ 2910.194067] *ERROR* [PLANE:36:plane-0] commit wait timed out
+  67:  [ 2910.194126] refcount_t: underflow; use-after-free.
+  68:  [ 2910.194133] WARNING: lib/refcount.c:28 at refcount_warn_saturate+0x59/0x90,
+  69:                 CPU#0: kworker/0:1/316731
+  70:    Workqueue: events drm_fb_helper_damage_work
+  71:    call trace: __drm_atomic_helper_plane_destroy_state ->
+  72:      drm_gem_simple_kms_destroy_plane_state -> drm_atomic_commit_default_clear ->
+  73:      __drm_atomic_commit_free -> drm_atomic_helper_dirtyfb ->
+  74:      drm_fbdev_shmem_helper_fb_dirty -> drm_fb_helper_fb_dirty
+  75:  [ 2920.432972] *ERROR* flip_done timed out
+  76:  [ 2920.432986] *ERROR* [CONNECTOR:35:HDMI-A-1] commit wait timed out
+  78:  Counts in this boot: 'failed to enable HDMI mode' 1, 'flip_done timed out' 3,
+  79:  'refcount_t: underflow' 1. All inside that one window.
+  81:  AFTERMATH - the display survived the whole episode:
+  82:    /sys/class/drm/card0-HDMI-A-1/status=enabled dpms=On enabled=enabled
+  83:    CRTC 38 at (0,0) 1920x1080, /sys/module/sm750hdmidrm/refcnt=0
+  84:    kmscube still reported 299 rendered frames before exiting 0.
+
+Four facts follow directly from the numbers:
+
+F1. The failing commit is the fbdev client's restore commit issued by
+    drm_release (lines 57-62): the userspace client (kmscube) is the last user,
+    its close triggers drm_client_dev_restore, which submits 1920x1080 and runs
+    pipe_disable() then pipe_enable() inside one commit_tail.
+F2. The three 10 s timeouts are one per atomic object (CRTC 38, PLANE 36,
+    CONNECTOR 35), 10.24 s apart (2899.954, 2910.194, 2920.432). They are the
+    commit's crtc_commit flip_done never being signalled, waited on by the
+    generic commit-tracking code, once per object made part of the commit.
+    include/drm/drm_atomic.h:93-99 (kernel headers) states the rule: flip_done
+    "is signalled implicitly by calling drm_crtc_send_vblank_event() on
+    &drm_crtc_state.event".
+F3. The underflow is 10.24 s after the PLANE timeout and happens in a different
+    context (kworker/0:1, workqueue `events`, drm_fb_helper_damage_work), i.e. in
+    the fbcon dirty path's own commit, not in the restore commit (lines 70-74).
+F4. The panel survived: enabled/On, CRTC at 1920x1080, module refcnt 0 (lines
+    82-83). Something re-enabled the panel after the failed restore, which is
+    consistent with 19-a27-fix-reproduce.txt:48-53 (the -110 is followed 3.63 s
+    later by a successful "staging enabled" pair). The failed commit's hardware
+    work is simply abandoned; core DRM believes the pipe is enabled.
+
+
+================================================================================
+2. ANSWERS TO THE FIVE QUESTIONS
+================================================================================
+
+--------------------------------------------------------------------------------
+Q1. Which call inside sm750_program_mode() returns -110? Which one behaves
+    differently on re-enable? How the timing arithmetic narrows it.
+--------------------------------------------------------------------------------
+
+sm750_program_mode() (src/sm750_drm.c:1319-1408) has exactly five fallible
+calls, each preceded by a stage tag (T27, src/sm750_drm.c:263-286):
+
+  stage SII_BEGIN    : sm750_sii902x_begin_mode(&sdev->pdev->dev, false,
+                       sii9024_scl, sii9024_sda)                   :1362
+  stage DISPLAY_CTRL : ddk750_set_display_control(SM750_DRM_CONTROLLER, false)
+                                                                   :1367
+  stage TIMING       : ddk750_set_mode_timing(&timing, SM750_DRM_PLL, true)
+                                                                   :1371
+  stage LOGICAL_OUT  : ddk750_set_logical_disp_out(SM750_DRM_OUTPUT) :1399
+  stage SII_ENABLE   : sm750_sii902x_enable(&sdev->pdev->dev, &var, false,
+                       sii9024_scl, sii9024_sda)                   :1403
+
+Every -ETIMEDOUT (-110) producer reachable from those five calls, with the poll
+loop body:
+
+(a) wait_display_value(), src/ddk750_display.c:14-27 (100 ms budget, ONE poke
+    before the loop, exact full-register compare):
+
+        for (elapsed = 0; elapsed < DISPLAY_TRANSITION_TIMEOUT_US;
+             elapsed += 10) {
+                if ((peek32(reg) & ~reserved) == (value & ~reserved))
+                        return 0;
+                udelay(10);
+        }
+        return -ETIMEDOUT;
+
+    Reached from ddk750_set_display_control(), src/ddk750_display.c:29-66, on
+    both the enable side (TIMING then PLANE, each 100 ms, :49 and :55) and the
+    disable side (PLANE wait result deliberately IGNORED at :61, TIMING wait
+    returned at :65):
+
+        val &= ~DISPLAY_CTRL_PLANE;
+        poke32(reg, val);
+        /* A plane transition may wait for vertical sync. It must not hang. */
+        wait_display_value(reg, val, reserved);      /* :61, ignored */
+
+        val &= ~DISPLAY_CTRL_TIMING;
+        poke32(reg, val);
+        return wait_display_value(reg, val, reserved);   /* :65 */
+
+    ddk750_set_display_control() is stage DISPLAY_CTRL (off path) and is called
+    again from ddk750_set_logical_disp_out() for PRI_TP
+    (src/ddk750_display.c:162-166), i.e. stage LOGICAL_OUT, on the enable side.
+
+(b) program_mode_registers(), PRIMARY_PLL branch, src/ddk750_mode.c:280-297
+    (ten re-pokes, ~10 ms budget, again an exact full-register compare):
+
+        /* ... The hardware will wait for the next vertical sync to turn
+         * on/off the plane. */
+        poke32(PANEL_DISPLAY_CTRL, tmp | reg);
+
+        while ((peek32(PANEL_DISPLAY_CTRL) & ~reserved) !=
+               (tmp | reg)) {
+                cnt++;
+                if (cnt > 1000)
+                        return -ETIMEDOUT;
+                poke32(PANEL_DISPLAY_CTRL, tmp | reg);
+                udelay(10);
+        }
+
+    Reached through ddk750_set_mode_timing(), src/ddk750_mode.c:303-365
+    (returns program_mode_registers(parm, &pll) at :364), i.e. stage TIMING.
+
+(c) primary_wait_vertical_sync(), src/ddk750_display.c:68-99: two 50 ms loops
+    polling SYSTEM_CTRL / SYSTEM_CTRL_PANEL_VSYNC_ACTIVE, -ETIMEDOUT at :85 and
+    :95. Only reachable through sw_panel_power_sequence() for an output with
+    PNL_SEQ_USAGE; SM750_DRM_OUTPUT does not have it, so this path is not part
+    of the observed failure.
+
+(d) Software I2C: src/ddk750_swi2c.c:229, :293, :306, :349 return -ETIMEDOUT
+    when SCL cannot be driven/raised; sm750_sw_i2c_recover_bus() returns -EBUSY,
+    not -110. sii902x_read()/sii902x_write() mask bus errors to -ENXIO
+    (src/sii902x.c:233-249), but sii902x_write_block() propagates the raw
+    sm750_sw_i2c_write_block() error (src/sii902x.c:251-259). So stage
+    SII_BEGIN, and any block write inside stage SII_ENABLE, can in principle
+    return -110. Stage SII_ENABLE cannot return it from its own logic: it
+    returns -EPIPE (-32) when the mode was not prepared (src/sii902x.c:796-797),
+    -EINVAL on a bus mismatch, and sii902x_wait_receiver_ready() logs and
+    continues rather than failing.
+
+So a stage name is what settles this, and it is exactly what T27 added and what
+gap B8 still lacks (EVIDENCE-GAPS.md:745: the instrumented build has never been
+loaded).
+
+What differs on re-enable versus cold enable (this is the load-bearing part of
+the answer):
+
+  Cold enable (first modeset after load): the CRTC has never been enabled, so
+  the commit contains only enables. PANEL_DISPLAY_CTRL already has TIMING=0 and
+  PLANE=0, therefore ddk750_set_display_control(false) at :1367 compares equal on
+  its very first read and returns 0 without delay. program_mode_registers()
+  writes PANEL_PLL_CTRL and the timing registers from a quiet raster: no old
+  mode is running, so the PANEL_DISPLAY_CTRL write with TIMING and PLANE cleared
+  (src/ddk750_mode.c:288) latches against a stopped panel.
+
+  Re-enable (client exit): the same commit first runs sm750_pipe_disable()
+  (src/sm750_drm.c:3616-3644), which calls sm750_sii902x_disable_link() and
+  ddk750_set_display_control(SM750_DRM_CONTROLLER, false) at :3631 and DISCARDS
+  the return value. Then sm750_pipe_enable() runs milliseconds later while the
+  previous 1024x768 raster, PLL and FIFO state are still settling and while the
+  SiI9024 is muted for 150 ms (src/sii902x.c:745-746). Two consequences:
+  (i) the panel-off sequence may have timed out silently, leaving TIMING set, so
+  the enable path's own off-stage now has to complete a transition the disable
+  path had already failed to complete; (ii) both wait loops compare the whole
+  read-only-masked register rather than the transition bits, and the writable
+  but hardware-updated fields in PANEL_DISPLAY_CTRL (bits 19-16 DUAL_DISPLAY/
+  DOUBLE_PIXEL/FIFO request field, bits 7-4 pan, bit 3 gamma, bits 14-12 phase
+  bits) are carried through a read-modify-write snapshot taken before the poke.
+  Any of those bits changing between the peek and the poke makes the equality
+  test unsatisfiable, so the loop burns its whole budget and returns -110 even
+  though the bits that matter (TIMING, PLANE) did latch.
+
+Timing arithmetic (from docs/evidence/runtime/09-hdmi-minus-110.txt section 5):
+the -110 lands 330.003 ms after the preceding "staging enabled" line, of which
+~150 ms is the unconditional msleep in sii902x_begin_control()
+(src/sii902x.c:745-746) plus a few ms of I2C. That leaves ~175 ms, which fits
+exactly one 100 ms wait_display_value() budget (plus the ~10 ms verify loop and
+overheads) and does not fit two. The failure is therefore at the FIRST long wait
+that never matches: an off-path TIMING wait (a), an enable-side TIMING or PLANE
+wait through ddk750_set_logical_disp_out() (a), or the 10 ms verify loop (b) with
+the surplus going to I2C. It is not consistent with the 50 ms PNL_SEQ path (c),
+and it is not consistent with a stage that can only return -EPIPE/-EINVAL.
+
+--------------------------------------------------------------------------------
+Q2. Is there a "skip if already on" short circuit, a latch, a first_enable flag?
+    What does the hardware do differently on re-enable?
+--------------------------------------------------------------------------------
+
+No. There is no first_enable flag, no "already at this mode" fast path and no
+enable-once latch anywhere in the path:
+
+  - sm750_program_mode() unconditionally resets the stage
+    (sdev->mode_stage = SM750_MODE_STAGE_NONE, src/sm750_drm.c:1332) and
+    unconditionally re-runs all five stages; the only branch in it is the
+    softscale geometry (sm750_softscale_output_mode() at :1333), not a skip.
+  - sm750_pipe_enable() has no early return for "same mode": it always
+    reinitialises the shadow/backbuffer bookkeeping (:3448-3509) and always calls
+    sm750_program_mode() under mode_lock (:3510-3513).
+  - The only latch-like state is the async shadow uploader
+    (backbuffer_available/ready/mirror, shadow_upload_offset), and it is cleared
+    on both sides: in the enable prologue (:3450-3454) and in the fail path
+    (:3545-3548), and in sm750_pipe_disable() (:3640-3643).
+
+What is different on re-enable is the hardware and driver state the enable
+inherits, not a flag:
+
+  H1. sm750_pipe_disable() ran in the same commit a few ms earlier. It
+      quiesced the async worker, suspended CRC, called
+      drm_crtc_vblank_off(), sent the pending vblank event, disabled the link
+      and wrote ddk750_set_display_control(false) with the result discarded
+      (src/sm750_drm.c:3620-3631). It does NOT power down PANEL_PLL_CTRL, does
+      NOT wait for PANEL_VSYNC to stop, does NOT wait for the current line to
+      freeze, and does NOT tell the enable path whether its own transition
+      succeeded (the return value is dropped at :3631).
+  H2. The panel datapath is mid-transition: the previous mode's raster is still
+      running (or has just stopped at a VSYNC boundary), the FIFO field and the
+      pan/phase bits still describe 1024x768, and the SiI9024 is in TMDS-off for
+      150 ms between the two register phases.
+  H3. Vblank accounting was torn down and rebuilt: drm_crtc_vblank_off() in
+      disable, drm_crtc_vblank_on() in enable (:3528 success, :3563 fail path).
+      The vblank timer parameters are recomputed from pipe->crtc.mode in
+      sm750_pipe_enable_vblank() (src/sm750_drm.c:3360-3390), so the first
+      flip_done can only be signalled after the rebuilt timer fires.
+  H4. The fbdev console has already started its damage worker (the same worker
+      that trips the underflow at log line 70): console commits are queued
+      behind the restore commit, so any commit that does not terminate is
+      visible as 10 s stalls for the console, not just for the exiting client.
+
+--------------------------------------------------------------------------------
+Q3. What does sm750_pipe_disable() leave behind that the enable path must clear?
+    Does disable clear the pending vblank event / staged-flip state / dirtyfb
+    state?
+--------------------------------------------------------------------------------
+
+sm750_pipe_disable() (src/sm750_drm.c:3616-3644), in order:
+
+  3619  sm750_async_quiesce(sdev);              -> cancels the shadow work item
+  3620  sm750_crc_suspend(sdev);                -> cancels the CRC vblank work
+  3621  drm_crtc_vblank_off(&pipe->crtc);       -> disables vblank accounting
+  3622  sm750_send_vblank_event(pipe);          -> consumes crtc_state->event
+  3624  cursor off (hardware_cursor only)
+  3630  sm750_sii902x_disable_link();           -> TMDS off
+  3631  ddk750_set_display_control(SM750_DRM_CONTROLLER, false);  (return dropped)
+  3633-3643 softscale_*, shadow_source_*, snapshots, backbuffer_* reset to 0/false
+
+So the pending vblank event IS consumed (in the correct order: vblank_off first,
+then send, see sm750_send_vblank_event() at :3027-3038) and the staged-flip
+bookkeeping IS reset. What survives into the re-enable:
+
+  S1. A possibly still-asserted DISPLAY_CTRL_TIMING / DISPLAY_CTRL_PLANE, because
+      the return of ddk750_set_display_control(false) at :3631 is discarded and
+      its own PLANE wait is discarded inside the helper (:61). A timed-out
+      disable is invisible. This is the only driver-side "leftover" that the
+      enable path then has to clean up, and it is exactly the transition the
+      enable path's first hardware stage re-attempts.
+  S2. A live PANEL_PLL_CTRL (never powered down in disable) and whatever
+      raster/FIFO state the old timing produced.
+  S3. scanout_offset is not reset here (it is reset in the enable prologue,
+      :3453), which is harmless.
+  S4. The dirtyfb state of the fbdev console: nothing in disable touches it,
+      and it cannot - console damage is submitted as an independent commit by
+      drm_fb_helper_damage_work. If a commit is outstanding, those commits wait
+      on it.
+
+--------------------------------------------------------------------------------
+Q4. Which reference is put twice in drm_atomic_helper_dirtyfb, and which driver
+    callback is responsible?
+--------------------------------------------------------------------------------
+
+The underflow is NOT a driver refcount bug: `grep -n refcount src/sm750_drm.c`
+is empty, and the stack (log lines 71-74) is entirely core DRM plus the fbdev
+client:
+
+    __drm_atomic_helper_plane_destroy_state
+      <- drm_gem_simple_kms_destroy_plane_state
+      <- drm_atomic_commit_default_clear
+      <- __drm_atomic_commit_free
+      <- drm_atomic_helper_dirtyfb
+      <- drm_fbdev_shmem_helper_fb_dirty
+      <- drm_fb_helper_fb_dirty   (workqueue: events drm_fb_helper_damage_work)
+
+Mechanically: drm_atomic_helper_dirtyfb() allocates an atomic state, commits it,
+and releases it; when the last reference goes, __drm_atomic_commit_free() ->
+drm_atomic_commit_default_clear() destroys the per-object states via the
+driver's state destructor. __drm_atomic_helper_plane_destroy_state() is where
+the three refcounted members are released: state->commit (struct drm_crtc_commit,
+kref), state->fb (drm_framebuffer) and state->fence (dma_fence). The warning says
+one of those was already at count zero when this destructor put it.
+
+The strongest identification is state->commit, i.e. the drm_crtc_commit, and the
+reason is in the headers rather than in the log:
+include/drm/drm_atomic.h:151-157 documents struct drm_crtc_commit.abort_completion
+as the flag "set after drm_atomic_helper_setup_commit() takes a second reference
+for the completion of $drm_crtc_state.event. It's used by the free code to remove
+the second reference if commit fails". The failed restore commit took that second
+reference when setup_commit() armed the event, then never completed it: the
+WARN_ON(new_crtc_state->event) at drm_atomic_helper_commit_hw_done (log line 55,
+the WARN the pre-A27 fail path caused by returning with crtc_state->event still
+armed) aborted commit_tail before hw_done and cleanup_done were signalled, so
+flip_done was never sent (log lines 63/65/75) and the commit was freed through
+the abort path. The abort path drops the event's reference; the plane state that
+was swapped in by drm_atomic_helper_swap_state() still points at the same
+drm_crtc_commit and puts it again, now from zero. state->fb (the fbdev
+framebuffer) is the alternative candidate, if the fbdev client's fb was released
+while a dirtyfb state still referenced it; the same never-completed commit is
+what keeps that state alive past the fb's owner.
+
+Answering the three alternatives in the question directly:
+  - the fbdev client's dirty path: it is the *victim*, the stack that trips the
+    warning, not the cause. It is also the first path that queues a commit
+    behind the wedged one, which is why it fires 10 s after the PLANE timeout
+    and 42-62 s after the episode in the T16 capture;
+  - the restore commit's completion: yes, that is the enabler - the commit was
+    finalised (freed) without hw_done/cleanup_done ever firing;
+  - "an atomic state finalized twice because the commit failed after
+    drm_atomic_helper_commit_tail already ran": yes, that is the class. The
+    commit was swapped in, its hardware stage aborted, and its objects were then
+    released down both the normal and the abort path.
+The responsible driver callback is sm750_pipe_enable()'s fail path: returning
+without terminating the commit. A27 fixed exactly that (:3536-3569) and
+19-a27-fix-reproduce.txt records 0 underflows in 108 post-fix attempts.
+
+--------------------------------------------------------------------------------
+Q5. Which kernel rule is being violated?
+--------------------------------------------------------------------------------
+
+Three rules are in play; only the first was violated by the code that produced
+the log, and it is already fixed in the tree.
+
+R-a. An atomic enable must always terminate the commit. In
+     struct drm_simple_display_pipe_funcs, .enable returns void, so a driver
+     cannot fail the commit: core DRM has already swapped the state in and
+     considers the CRTC enabled. The event in crtc_state->event must therefore
+     be consumed on every path. The pre-A27 code returned from the fail label
+     with it armed, which trips WARN_ON(new_crtc_state->event) in
+     drm_atomic_helper_commit_hw_done() (log lines 55-56), aborts commit_tail and
+     leaves flip_done unsignalled (log 63-76). A27 (src/sm750_drm.c:3563-3568)
+     complies: drm_crtc_vblank_on(), sm750_crc_resume(), then
+     sm750_arm_vblank_event(); sm750_arm_vblank_event() either arms on the
+     driver's vblank timer or sends immediately if no vblank can be started
+     (:3009-3025), so both branches are terminal.
+
+R-b. disable must call drm_crtc_vblank_off(). It does (:3621), before sending the
+     event (:3622), and it cancels the CRC work first (:3620) - correct order
+     for the T30 vblank-work source, see the comment at src/sm750_drm.c:3166-3171.
+
+R-c. atomic_commit_tail must not run drm_atomic_helper_commit_tail after a failed
+     enable. It does not: the driver installs drm_atomic_helper_commit as
+     .atomic_commit (src/sm750_drm.c:3704 and :3710) and defines no
+     .atomic_commit_tail, so commit_tail is core's. The commit is not "failed"
+     from core's point of view at all; that is precisely why R-a matters.
+
+The residual rule deviation after A27 is softer: the driver logs an error and
+leaves core believing the CRTC is enabled while the hardware has display control
+off. That is legal (there is no way to report it) but it means the console shows
+nothing until the next commit re-enables the pipe, which is what the 3.63 s gap
+in 19-a27-fix-reproduce.txt:48-53 shows.
+
+
+================================================================================
+3. THE FAILURE MECHANISM AS A CAUSAL CHAIN
+================================================================================
+
+Pre-A27 (the log analysed here):
+
+  1. kmscube exits; drm_release() drops the last user and drm_client_dev_restore()
+     submits the fbdev console's 1920x1080 restore through
+     drm_atomic_helper_commit (log 57-62).
+  2. commit_tail() runs modeset disables: sm750_pipe_disable() clears display
+     control with the result discarded (src/sm750_drm.c:3631), leaving the panel
+     transition possibly incomplete and the raster/PLL/FIFO state of 1024x768
+     live.
+  3. commit_tail() runs modeset enables: sm750_pipe_enable() ->
+     sm750_program_mode(); stage SII_BEGIN mutes TMDS and sleeps 150 ms
+     (src/sii902x.c:745-746); stage DISPLAY_CTRL or TIMING then waits for a
+     PANEL_DISPLAY_CTRL transition with a single-poke or short re-poke loop and
+     an exact full-register comparison (src/ddk750_display.c:14-27,
+     src/ddk750_mode.c:288-297). Against a mid-transition register the
+     comparison never matches and the loop returns -ETIMEDOUT.
+  4. sm750_pipe_enable() logs -110 (log 53) and returns with crtc_state->event
+     still armed; the WARN_ON in drm_atomic_helper_commit_hw_done fires (log
+     55-56) and commit_tail aborts before hw_done/cleanup_done.
+  5. flip_done for that commit is never signalled because only
+     drm_crtc_send_vblank_event() completes it (drm_atomic.h:93-99); each atomic
+     object of the commit waits 10 s (log 63-66, 75-76) and every later commit,
+     including the console's, queues behind it.
+  6. The aborted commit is freed through the abort path while its swapped-in
+     plane state still references the same objects; when the console's
+     drm_atomic_helper_dirtyfb() commit is destroyed, the plane state destructor
+     puts an already-zero reference (log 67-74): refcount underflow,
+     use-after-free class.
+
+Post-A27: step 4 becomes "terminate the commit" and steps 5-6 cannot occur; what
+remains is step 3, which is the defect this file proposes to fix.
+
+
+================================================================================
+4. RANKED HYPOTHESES AND WHAT WOULD FALSIFY EACH
+================================================================================
+
+H1 (top). Stage DISPLAY_CTRL: the off-path TIMING wait in
+   ddk750_set_display_control(SM750_DRM_CONTROLLER, false) burns its 100 ms
+   budget because the exact full-register comparison cannot match while the
+   panel is mid-transition (bits outside
+   PANEL_DISPLAY_CTRL_RESERVED_MASK|PANEL_DISPLAY_CTRL_VSYNC change between peek
+   and poke, and the loop never re-reads), so it returns -ETIMEDOUT although
+   TIMING did latch. On a cold enable the same call compares equal immediately.
+   Falsified by: an instrumented run whose error prints
+   `at stage ddk750_set_display_control` together with a timeout dump whose
+   mismatch bits are only TIMING/PLANE (i.e. the bits that matter really did not
+   latch) - then the mechanism is a genuine latch failure, not a comparison
+   artefact, and the fix is the longer budget, not the mask; or by a stage name
+   that is not ddk750_set_display_control.
+
+H2. Stage TIMING: program_mode_registers()'s 10 ms / 1000-poke verify loop
+   (src/ddk750_mode.c:288-297) exhausts because the write with TIMING and PLANE
+   cleared has to win a race with the old mode's VSYNC while the new PLL is
+   applied, and the loop re-pokes the same stale snapshot value.
+   Falsified by: a stage name other than ddk750_set_mode_timing, or a timeout
+   dump showing the register equal to the written value at the moment of return.
+
+H3. Stage LOGICAL_OUT: the first enable-side wait inside
+   ddk750_set_display_control() reached through
+   ddk750_set_logical_disp_out()/PRI_TP (src/ddk750_display.c:162-166) - the
+   same wait primitive as H1 but on the TIMING-set then PLANE-set transitions,
+   where the PLANE bit is documented to wait for the next VSYNC and the new
+   PLL has just been programmed.
+   Falsified by: a stage name of ddk750_set_display_control combined with an
+   earlier-stage success plus a timeout dump showing PLANE already set (then the
+   failure was the TIMING wait of the same helper, which is H1 rather than H3;
+   keep the two apart by the readback).
+
+H4. Stage SII_BEGIN / SII_ENABLE: a software-I2C -ETIMEDOUT
+   (src/ddk750_swi2c.c:229/:293/:306/:349) propagating through
+   sii902x_write_block() (src/sii902x.c:251-259). This is the only route by
+   which a stage whose own logic returns -EPIPE/-EINVAL can surface as -110.
+   Falsified by: any "SiI902x control bus is stuck on GPIO" or "SiI9024A did not
+   acknowledge" line in the same window (src/sii902x.c:660-677, :753-756), or a
+   stage name from the register stages. It is also disfavoured by the arithmetic
+   in Q1: the I2C bytes hold for ~155 ms, not for a 100 ms budget boundary.
+
+H5. Cold-vs-warm difference in the panel itself: on re-enable the SiI9024 has
+   just been muted and the panel has been driven with a 1024x768 timing; some
+   panel-side state makes the TIMING/PLANE transition take longer than 100 ms
+   once per some dozens of attempts (PLL relock, FIFO not empty).
+   Falsified by: a timeout dump in which the register equals the expected value
+   on the first iteration after the poke (then the budget was never the issue),
+   or by reproducing -110 on a cold enable.
+
+H6. The -110 is not a timeout of these loops at all but an -ETIMEDOUT returned by
+   a different helper inside one of the stages (for example a DRM core helper
+   called by sm750_sii902x_enable()).
+   Falsified by: the stage name plus a readback dump; also by
+   `grep -n "ETIMEDOUT" src/*.c`, which shows only the loops listed in Q1 plus
+   src/sii902x.c DDC grant (EDID read only, src/sii902x.c:1004-1015, not on the
+   modeset path).
+
+
+================================================================================
+5. MINIMAL PATCH PROPOSAL (sketch, NOT applied to the tree)
+================================================================================
+
+Design constraints taken as fixed:
+  - do not undo A27: src/sm750_drm.c:3552-3568 stays as it is (drm_crtc_vblank_on,
+    sm750_crc_resume, sm750_arm_vblank_event);
+  - do not undo the T30 CRC path: the disable order
+    sm750_async_quiesce -> sm750_crc_suspend -> drm_crtc_vblank_off ->
+    sm750_send_vblank_event (:3619-3622) and the resume after vblank_on (:3529-3532,
+    :3564-3567) stay as they are;
+  - no automatic replay of a half-progressed modeset (recorded decision in
+    docs/plan/20261117-sm750-driver-prod/plan.yaml, T27 acceptance): the retry
+    below is a retry of the individual register transition inside the poll, never
+    a second sm750_program_mode();
+  - one new diagnostic is added so that the next occurrence names itself without
+    another build (gap B8).
+
+P1. src/ddk750_display.c - poll only the bits that are being changed, re-poke
+    the value while polling, and print the readback once on timeout.
+
+    Replace the body of wait_display_value() with a targeted helper; keep the
+    existing name and (reg, value, reserved) signature so the three call sites do
+    not move, and derive the compared mask from the two transition bits:
+
+    -static int wait_display_value(unsigned long reg, unsigned long value,
+    -                             unsigned long reserved)
+    +static int wait_display_bits(unsigned long reg, unsigned long value,
+    +                            unsigned long mask, unsigned int timeout_us,
+    +                            const char *what)
+     {
+             unsigned int elapsed;
+    +        u32 last = 0;
+
+    -        for (elapsed = 0; elapsed < DISPLAY_TRANSITION_TIMEOUT_US;
+    -             elapsed += 10) {
+    -                if ((peek32(reg) & ~reserved) == (value & ~reserved))
+    -                        return 0;
+    -                udelay(10);
+    -        }
+    +        for (elapsed = 0; elapsed < timeout_us; elapsed += 10) {
+    +                last = peek32(reg);
+    +                if ((last & mask) == (value & mask))
+    +                        return 0;
+    +                /* Hardware may need several writes before a value latches. */
+    +                if (what)
+    +                        poke32(reg, value);
+    +                udelay(10);
+    +        }
+    +        pr_err_ratelimited("sm750: %s wait failed: reg %#lx want %#lx mask %#lx "
+    +                           "last %#08x after %u us\n",
+    +                           what ?: "display", reg, value, mask, last, timeout_us);
+             return -ETIMEDOUT;
+     }
+
+    and rewrite ddk750_set_display_control() to use masks of the transition bits
+    only (for ctrl == 0, the panel):
+
+      enabled: poke val|TIMING; wait_display_bits(reg, val|TIMING,
+                     DISPLAY_CTRL_TIMING, DISPLAY_TRANSITION_TIMEOUT_US, "timing on");
+               poke val|TIMING|PLANE; wait_display_bits(reg, ...,
+                     DISPLAY_CTRL_PLANE, DISPLAY_TRANSITION_TIMEOUT_US, "plane on");
+      disabled: poke val&~PLANE (ignore the result, as now);
+                poke val&~TIMING; wait_display_bits(reg, ...,
+                     DISPLAY_CTRL_TIMING, DISPLAY_TRANSITION_TIMEOUT_US, "timing off");
+
+    Why: the -110 can only be reported when the bit that carries the documented
+    VSYNC semantics (TIMING or PLANE) really did not change. Every other
+    writable bit (FIFO request field, pan, gamma, phase, DUAL_DISPLAY,
+    DOUBLE_PIXEL, FORMAT) stops being able to make the loop unsatisfiable, and
+    the re-poke gives the hardware the "few writes" that
+    src/ddk750_mode.c:280-287 says it needs. The readback line is the instrument
+    for Q1/H1-H3 and closes half of gap B8 (which stage, which register).
+
+P2. src/ddk750_mode.c program_mode_registers() - same treatment for the
+    PANEL_DISPLAY_CTRL verify loop. Keep the write-verify semantics (the value
+    with TIMING|PLANE cleared must land) but compare only TIMING|PLANE, keep the
+    re-poke, and give it a budget derived from the mode instead of a fixed 1000
+    iterations:
+
+    -        while ((peek32(PANEL_DISPLAY_CTRL) & ~reserved) !=
+    -               (tmp | reg)) {
+    -                cnt++;
+    -                if (cnt > 1000)
+    -                        return -ETIMEDOUT;
+    +        /*
+    +         * Only the transition bits obey the VSYNC handshake; the rest of
+    +         * the register may be updated by the hardware, so an exact
+    +         * comparison can never converge.
+    +         */
+    +        for (elapsed_us = 0;
+    +             elapsed_us < max(20000u, 2 * frame_us);
+    +             elapsed_us += 10) {
+    +                if ((peek32(PANEL_DISPLAY_CTRL) &
+    +                     (DISPLAY_CTRL_TIMING | DISPLAY_CTRL_PLANE)) ==
+    +                    ((tmp | reg) & (DISPLAY_CTRL_TIMING |
+    +                                    DISPLAY_CTRL_PLANE)))
+    +                        break;
+                     poke32(PANEL_DISPLAY_CTRL, tmp | reg);
+                     udelay(10);
+             }
+    +        if (elapsed_us >= max(20000u, 2 * frame_us)) {
+    +                pr_err_ratelimited("sm750: panel control latch timeout: want %#x last %#x\n",
+    +                                   (tmp | reg) & 0x3ff,
+    +                                   peek32(PANEL_DISPLAY_CTRL) & 0x3ff);
+    +                return -ETIMEDOUT;
+    +        }
+
+    with frame_us computed from the mode being programmed
+    (1000000 / max(1, mode_param->vertical_frequency), i.e. one frame), so the
+    budget always covers at least two vertical periods and can never be shorter
+    than the 20 ms floor. (Names and locals are illustrative; the point is the
+    mask and the frame-derived budget.)
+
+P3. src/sm750_drm.c sm750_pipe_disable() - stop discarding the panel-off
+    result, and remember it so the enable path can report a coherent story:
+
+    +       ret = ddk750_set_display_control(SM750_DRM_CONTROLLER, false);
+    +       if (ret)
+    +               drm_warn(&sdev->drm,
+    +                        "panel did not acknowledge display-off: %d (PANEL_DISPLAY_CTRL=%#08x)\n",
+    +                        ret, peek32(PANEL_DISPLAY_CTRL));
+             mutex_unlock(&sdev->mode_lock);
+
+    This alone converts the current silent failure into a named one, and it is
+    the line that tells the next investigator whether the enable path inherited
+    a still-running raster (H1) or a clean one.
+
+P4. src/sm750_drm.c sm750_pipe_enable() fail path - keep A27 exactly as is, and
+    extend only the message with the register state, so the log of the next
+    -110 carries the evidence that is missing today:
+
+      drm_err(&sdev->drm,
+              "failed to enable HDMI mode: %d at stage %s (commit finished, event consumed)\n",
+              ret, sm750_mode_stage_name(sdev->mode_stage));
+    + drm_err(&sdev->drm,
+    +         "enable-fail state: PANEL_DISPLAY_CTRL=%#08x PANEL_PLL_CTRL=%#08x SYSTEM_CTRL=%#08x LINE=%#08x\n",
+    +         peek32(PANEL_DISPLAY_CTRL), peek32(PANEL_PLL_CTRL),
+    +         peek32(SYSTEM_CTRL), peek32(PANEL_CURRENT_LINE));
+
+    Do NOT add a modeset replay here (plan.yaml: no automatic retry) and do not
+    touch drm_crtc_vblank_on/sm750_crc_resume/sm750_arm_vblank_event; the
+    sequence must stay exactly as A27 wrote it, including the
+    LINUX_VERSION_CODE >= 7.0 guard around sm750_crc_resume.
+
+P5 (optional, only if P1-P3 leave H4 alive). src/sii902x.c sii902x_write_block():
+    on -ETIMEDOUT, call sm750_sw_i2c_recover_bus() once and retry the block once,
+    mirroring what sm750_sii902x_set_black() already does; then translate a
+    second failure to -EIO so an I2C fault is distinguishable from a register
+    latch timeout in dmesg. This is a behaviour change on the error path only;
+    it must be justified with a captured bus-stuck line, not added speculatively.
+
+Expected effect: the restore commit either succeeds (P1/P2 remove the
+unsatisfiable comparisons, which is H1, H2 and H3 at once) or fails with a
+message that names the stage, the register and the readback in a single line
+(P1/P3/P4), so the next occurrence is diagnosable without a debug rebuild. The
+refcount underflow stays closed by A27; P1-P5 do not touch commit termination,
+the CRC path, or any core DRM helper.
+
+
+================================================================================
+6. WHAT EVIDENCE IS STILL MISSING, AND THE ONE RUN THAT SETTLES IT
+================================================================================
+
+Missing:
+  M1. The stage name of an actual -110 (gap B8). The T27 instrumentation exists
+      (src/sm750_drm.c:263-286, :1361-1406, message at :3549-3551) but the
+      instrumented build has never been loaded on a recurrence
+      (EVIDENCE-GAPS.md:745).
+  M2. The register state at the moment of the timeout: PANEL_DISPLAY_CTRL
+      (written value, last read, mismatch bits), PANEL_PLL_CTRL, SYSTEM_CTRL,
+      PANEL_CURRENT_LINE sampled twice ~20 ms apart. Nothing in the current log
+      shows whether the hardware refused to latch or the driver compared the
+      wrong bits - the two hypotheses need different fixes.
+  M3. Whether the preceding sm750_pipe_disable() succeeded: its
+      ddk750_set_display_control(false) result is discarded
+      (src/sm750_drm.c:3631), so the log cannot say whether the enable path
+      inherited a still-running raster.
+  M4. Whether the -110 ever happens on a cold enable (H5). All recorded hits are
+      re-enables after a client session; there is no negative control.
+  M5. The exact identity of the underflowed reference (state->commit versus
+      state->fb). The log gives the destructor but not the object; KASAN or a
+      refcount_t tracepoint on a pre-A27 build would settle it, and it is of
+      archival value only now that A27 removes the path.
+
+The single instrumented run that settles M1-M4 (no root beyond the two existing
+allowlisted actions: `sudo -n /usr/local/sbin/sm750-crc-cycle` to reload the
+module and `sudo -n dmesg` to read the log; /dev/dri/card0 carries an ACL for
+the unprivileged user, so the trigger itself needs no privilege):
+
+  1. Build and install a debug variant carrying P1's readback line, P3's
+     disable warning and P4's state line (all three print through
+     pr_err_ratelimited/drm_err, so no dynamic debug is needed - dynamic debug
+     is root-only on this host).
+  2. `sudo -n /usr/local/sbin/sm750-crc-cycle` to reload it; confirm the new
+     srcversion and that no stale module is loaded.
+  3. Reproduce with the trigger that has actually worked, in a loop of at least
+     120 attempts (T16 measured 1/205, T20 measured 5/108, so 120 attempts gives
+     a good chance of a hit and is bounded to roughly 45-70 min at 21-34 s per
+     attempt): SIGINT a kmscube 300 ms into its first commit, run
+     `modetest -s 35@38:1024x768-60`, let it close so drm_release issues the
+     1920x1080 restore. Widen the hit rate by adding one plain mode-change
+     iteration per attempt (modetest 1024x768 then 1920x1080 twice), because
+     any mode change exercises the same disable-then-enable pair.
+     Negative control for M4: 20 cold reloads each followed by one 1920x1080
+     modeset, with the same instrumentation.
+  4. After the first occurrence: `sudo -n dmesg | grep -E 'sm750: |failed to
+     enable HDMI mode|enable-fail state|panel did not acknowledge'` and save the
+     window to docs/evidence/runtime/.
+  5. Read the answer off the dump: the stage name selects H1/H2/H3/H4; the
+     "want/last/mask" triple selects comparison artefact (H1/H2/H3, last differs
+     only outside the transition bits) versus genuine latch failure (last still
+     has TIMING or PLANE set); P3's warning selects whether the inherited state
+     was dirty; the cold-enable control selects H5.
+
+That run needs no new privilege, produces one dmesg window, and closes M1-M4
+together. M5 is optional and only relevant if anyone revalidates the pre-A27
+behaviour.
+
+# utc: 2026-11-20T11:10:00Z  T32  analysis only  no tree changes

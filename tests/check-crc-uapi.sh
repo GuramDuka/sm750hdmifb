@@ -13,6 +13,7 @@
 #        tests/check-crc-uapi.sh --single [source file]   (no self-test)
 
 set -euo pipefail
+export TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
@@ -252,7 +253,7 @@ if [ "$mode" = single ]; then
 	exit 0
 fi
 
-scratch=$(mktemp -d "${TMPDIR:-/tmp}/sm750-crc-uapi.XXXXXX")
+scratch=$(mktemp -d "${TMPDIR}/sm750-crc-uapi.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT
 
 plant_no_set_crc() { sed -i '/\.set_crc_source = sm750_crtc_set_crc_source,/d' "$1"; }

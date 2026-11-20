@@ -230,4 +230,17 @@ test "$stage_count" -ge 6 || {
 # the callbacks, the deleted shim, the tick's re-arm and the value count, and
 # re-runs itself against planted defects.
 ./tests/check-crc-uapi.sh "$source_file"
+# T31: a blank console buffer (foreground VT in KD_GRAPHICS) is named once
+# instead of being mistaken for a display-path regression. Source-level, with
+# its own planted-defect controls.
+./tests/check-console-blank.sh "$source_file"
+# T32: the reconsole restore path (masked transition compare, mode-derived
+# budget, kept display-off result, terminal fail path). Source-level, with its
+# own planted-defect controls.
+./tests/check-restore-path.sh
+# T35: AGENTS.md:26 scratch rule. Every mktemp caller exports
+# TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp} before its first call and interpolates
+# it, and the restore harness greps the same nine-marker census as the hardware
+# proof. With its own planted-defect controls.
+./tests/check-scratch-policy.sh
 echo "DRM mode policy checks passed"

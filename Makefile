@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
-.PHONY: all clean check check-deps check-package check-all-kernels module-info package static vbios-re vbios-trace crc-check
+.PHONY: all clean check check-deps check-package check-all-kernels module-info package static vbios-re vbios-trace crc-check console-check
 
 all:
 	$(MAKE) -C $(KDIR) M=$(CURDIR)/src modules
@@ -85,6 +85,14 @@ vbios-trace:
 # run and the recipe turns that into a skip), same rule as vbios-trace.
 crc-check:
 	@./tests/check-scanout-crc.sh; rc=$$?; \
+	if [ $$rc -eq 77 ]; then exit 0; fi; \
+	exit $$rc
+
+# Opt-in console scanout check: proves the console reaches the panel when the
+# foreground VT is in KD_TEXT, and exits 77 (a skip) when it is in KD_GRAPHICS
+# or when root, debugfs or the card are missing. Root-only, so not in `check`.
+console-check:
+	@./tests/check-console-scanout.sh; rc=$$?; \
 	if [ $$rc -eq 77 ]; then exit 0; fi; \
 	exit $$rc
 

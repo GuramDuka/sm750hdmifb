@@ -74,12 +74,12 @@ typedef struct drm_atomic_state sm750_atomic_commit;
 #define SM750_DRM_NAME "sm750hdmidrm"
 /* Keep in step with the package version in build-package.sh and dkms.conf;
  * tests/check-release-version.sh fails when the three disagree. */
-#define SM750_DRM_VERSION "0.6.0"
+#define SM750_DRM_VERSION "0.6.1"
 /* modetest reports these as the driver version, so they must track the release
  * number above; tests/check-release-version.sh fails when they drift. */
 #define DRIVER_MAJOR 0
 #define DRIVER_MINOR 6
-#define DRIVER_PATCHLEVEL 0
+#define DRIVER_PATCHLEVEL 1
 #define SM750_DRM_MAX_WIDTH 2560
 #define SM750_DRM_PHYSICAL_MAX_WIDTH 2048
 #define SM750_DRM_PLL PRIMARY_PLL
@@ -345,6 +345,7 @@ struct sm750_drm_device {
 	unsigned int async_damage_count;
 	u32 shadow_source_width;
 	u32 shadow_source_height;
+	u32 shadow_source_pitch;
 	u32 disconnected_width;
 	u32 disconnected_height;
 	u32 disconnected_refresh;
@@ -3390,6 +3391,45 @@ static void sm750_crtc_disable_vblank(struct drm_crtc *crtc)
 }
 #endif
 
+/*
+ * The fbdev client's buffer is painted by fbcon, and fbcon only paints while
+ * the foreground VT is in KD_TEXT: do_con_write() drops console output before
+ * fbcon when vc_mode is KD_GRAPHICS. A module load on such a host therefore
+ * leaves that buffer all-zero, the shadow path uploads the zeros faithfully
+ * and the panel scans a blank frame with nothing else wrong. Sample the frame
+ * being committed on a coarse grid so that precondition can be named once
+ * instead of being mistaken for a display-path regression. Diagnostic only:
+ * no caller changes what it uploads, keeps or fails.
+ */
+static bool sm750_shadow_frame_is_blank(struct sm750_drm_device *sdev,
+					const struct drm_shadow_plane_state *shadow)
+{
+	unsigned int width = sdev->shadow_source_width;
+	unsigned int height = sdev->shadow_source_height;
+	unsigned int pitch = sdev->shadow_source_pitch;
+	unsigned int x;
+	unsigned int y;
+
+	if (iosys_map_is_null(&shadow->data[0]) || width < 64 ||
+	    height < 64 || pitch < width * sizeof(u32))
+		return false;
+
+	for (y = 0; y < height; y += 16) {
+		for (x = 0; x < width; x += 16) {
+			u32 pixel = 0;
+
+			iosys_map_memcpy_from(&pixel, &shadow->data[0],
+					      (size_t)y * pitch +
+					      (size_t)x * sizeof(u32),
+					      sizeof(pixel));
+			if (pixel)
+				return false;
+		}
+	}
+
+	return true;
+}
+
 static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 			      struct drm_crtc_state *crtc_state,
 			      struct drm_plane_state *plane_state)
@@ -3401,6 +3441,8 @@ static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 	u64 frame_size;
 	u8 cpp;
 	int ret;
+	/* Once per module load: the precondition does not vary per modeset. */
+	static bool blank_frame_reported;
 
 	sdev->mode_stage = SM750_MODE_STAGE_NONE;
 	if (sdev->shadow_scanout) {
@@ -3416,6 +3458,8 @@ static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 			crtc_state->adjusted_mode.hdisplay : 0;
 		sdev->shadow_source_width = crtc_state->adjusted_mode.hdisplay;
 		sdev->shadow_source_height = crtc_state->adjusted_mode.vdisplay;
+		sdev->shadow_source_pitch = plane_state->fb ?
+			plane_state->fb->pitches[0] : 0;
 		sdev->shadow_source_snapshot_valid = false;
 		sdev->rgb565_scanout_snapshot_valid = false;
 		if (sdev->softscale_active &&
@@ -3473,6 +3517,14 @@ static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 			drm_info(&sdev->drm,
 				 "full-frame backbuffer staging enabled (%u bytes per buffer)\n",
 				 sdev->scanout_frame_size);
+		if (sdev->shadow_scanout && plane_state->fb &&
+		    !blank_frame_reported &&
+		    sm750_shadow_frame_is_blank(sdev,
+				to_drm_shadow_plane_state(plane_state))) {
+			blank_frame_reported = true;
+			drm_info(&sdev->drm,
+				 "console framebuffer is blank: the panel now scans a frame nobody has painted (is the foreground VT in KD_TEXT?)\n");
+		}
 		drm_crtc_vblank_on(&pipe->crtc);
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
 		/* After vblank_on(): the re-arm targets the rebuilt count. */
@@ -3487,6 +3539,7 @@ fail:
 	sdev->softscale_source_width = 0;
 	sdev->shadow_source_width = 0;
 	sdev->shadow_source_height = 0;
+	sdev->shadow_source_pitch = 0;
 	sdev->shadow_source_snapshot_valid = false;
 	sdev->rgb565_scanout_snapshot_valid = false;
 	sdev->backbuffer_available = false;
@@ -3496,6 +3549,17 @@ fail:
 	drm_err(&sdev->drm,
 		"failed to enable HDMI mode: %d at stage %s (commit finished, event consumed)\n",
 		ret, sm750_mode_stage_name(sdev->mode_stage));
+	/*
+	 * The register state answers the ranked hypotheses in the A32 RCA:
+	 * a still-running raster (TIMING/PLANE set in PANEL_DISPLAY_CTRL),
+	 * a PLL that never left the old mode, a power/clock gate left off, or
+	 * a display control that latched but never reached the visible scan.
+	 * All four print through drm_err, so no dynamic debug needed.
+	 */
+	drm_err(&sdev->drm,
+		"enable-fail state: PANEL_DISPLAY_CTRL=%#08x PANEL_PLL_CTRL=%#08x SYSTEM_CTRL=%#08x PANEL_CURRENT_LINE=%#08x\n",
+		peek32(PANEL_DISPLAY_CTRL), peek32(PANEL_PLL_CTRL),
+		peek32(SYSTEM_CTRL), peek32(PANEL_CURRENT_LINE));
 	/*
 	 * The commit that reached this label has already swapped its state in,
 	 * so crtc_state->event is the event this commit has to deliver.
@@ -3563,6 +3627,7 @@ event:
 static void sm750_pipe_disable(struct drm_simple_display_pipe *pipe)
 {
 	struct sm750_drm_device *sdev = pipe_to_sm750(pipe);
+	int ret;
 
 	sm750_async_quiesce(sdev);
 	sm750_crc_suspend(sdev);
@@ -3575,12 +3640,22 @@ static void sm750_pipe_disable(struct drm_simple_display_pipe *pipe)
 	}
 	mutex_lock(&sdev->mode_lock);
 	sm750_sii902x_disable_link();
-	ddk750_set_display_control(SM750_DRM_CONTROLLER, false);
+	/*
+	 * A timed-out panel-off used to be invisible: the enable path that
+	 * follows in the same commit then inherits a raster that is still
+	 * running and has to finish the transition itself (A32).
+	 */
+	ret = ddk750_set_display_control(SM750_DRM_CONTROLLER, false);
+	if (ret)
+		drm_warn(&sdev->drm,
+			 "panel did not acknowledge display-off: %d (PANEL_DISPLAY_CTRL=%#08x)\n",
+			 ret, peek32(PANEL_DISPLAY_CTRL));
 	mutex_unlock(&sdev->mode_lock);
 	sdev->softscale_active = false;
 	sdev->softscale_source_width = 0;
 	sdev->shadow_source_width = 0;
 	sdev->shadow_source_height = 0;
+	sdev->shadow_source_pitch = 0;
 	sdev->shadow_source_snapshot_valid = false;
 	sdev->rgb565_scanout_snapshot_valid = false;
 	sdev->backbuffer_available = false;

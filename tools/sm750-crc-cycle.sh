@@ -14,13 +14,18 @@
 #   3  interface present, check did not pass (its own output says why)
 #   4  check skipped (environment, see its SKIP line)
 set -eu
+export TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}
 
 PROG=sm750-crc-cycle
 MOD=sm750hdmidrm
-REPO=/home/coder/sm750hdmifb
+OWNER=coder
+# Resolve the checkout through the owner's passwd entry instead of embedding
+# this host's home directory: this script ships in the source archive and
+# tests/audit-release.sh rejects a literal local path in anything that ships.
+owner_home=$(getent passwd "$OWNER" | cut -d: -f6 || true)
+REPO=${SM750_REPO:-${owner_home:-}/sm750hdmifb}
 KO=$REPO/src/sm750hdmidrm.ko
 BDF=pci-0000:01:00.0
-OWNER=coder
 RELOAD=1
 DIAG=0
 DUMP=0
@@ -160,7 +165,7 @@ if [ "$DIAG" -eq 1 ]; then
 fi
 
 say "--- tests/check-scanout-crc.sh (runs as root)"
-chk_out=$(mktemp /tmp/sm750-crc-cycle.XXXXXX)
+chk_out=$(mktemp "${TMPDIR}/sm750-crc-cycle.XXXXXX")
 chk_rc=0
 "$REPO/tests/check-scanout-crc.sh" >"$chk_out" 2>&1 || chk_rc=$?
 sed 's/^/  /' "$chk_out"

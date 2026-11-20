@@ -1,0 +1,208 @@
+# utc: 2026-11-20
+# T34 - on-hardware proof of the T32 restore-path fix (defect A32)
+# host: deneb, kernel 7.3.4-100.fc43.x86_64, Fedora 43
+# module: sm750hdmidrm built from this working tree (T32/T31), srcversion
+#         14ED4F27A83A6BB8AA445D2, vermagic 7.3.4-100.fc43.x86_64,
+#         version string still 0.6.0 at the time of the run
+# actor: orchestrator driving the allowlisted root helpers, uid 1005 for the
+#        unprivileged halves
+
+WHY THIS FILE EXISTS
+--------------------
+docs/evidence/runtime/21-fbdev-restore-fix.txt recorded the A32 fix and ended
+with a "not yet proven on hardware" section: the source-level gate passed, the
+root harness existed, and nothing had run on the card. This file is that run.
+It records the load, the CRC cycle, the restore-path stress, the mode-change
+stress, the fault-line census over the whole session, and the console-scanout
+measurement that had only ever been recorded as a root-gate SKIP.
+
+1. RUN CONDITIONS
+-----------------
+- Date: 2026-11-20.
+- Kernel: 7.3.4-100.fc43.x86_64 (vermagic matches the running kernel).
+- Module: freshly built from the current tree, not the packaged object.
+  srcversion `14ED4F27A83A6BB8AA445D2`.
+- The version string was still `0.6.0` at the time of the run; the release bump
+  to 0.6.1 is a separate scope and did not affect the binary under test.
+- Load: `sudo -n /usr/local/sbin/sm750-crc-cycle`, the allowlisted helper that
+  insmods the locally built object after a vermagic guard and then runs
+  tests/check-scanout-crc.sh. No hand-written insmod, no dkms rebuild.
+- One card (`/dev/dri/card0`, `0000:01:00.0`), one panel on `card0-HDMI-A-1`.
+  No suspend/resume cycle in this session.
+
+2. COMMANDS USED
+----------------
+    sudo -n /usr/local/sbin/sm750-crc-cycle
+    build/scanout-pattern /dev/dri/card0 white 2      (30 times, sequential)
+    modetest -M sm750hdmidrm -s 35@38:1024x768        (20 times, each followed
+                                                       by one client frame and
+                                                       a client exit)
+    sudo -n /usr/local/sbin/sm750-regs                (register readback)
+    dmesg                                             (fault census)
+    KDGETMODE on /dev/tty0 via ioctl 0x4B3B           (VT mode)
+    cat /sys/class/tty/tty0/active                    (foreground VT)
+
+`build/scanout-pattern` is the KMS draw helper from tests/scanout-pattern.c
+(`usage: <card-node> <black|white> [hold-seconds]`); each invocation opens
+`/dev/dri/card0`, sets a mode, draws one full-screen frame and exits, so the
+fbdev client's restore commit runs on the exit. That exit is the A32 trigger.
+
+3. CRC CYCLE: PASS, SIX ASSERTIONS
+----------------------------------
+`sudo -n /usr/local/sbin/sm750-crc-cycle` exited 0 and printed
+`RESULT: scanout CRC check passed`. The six PASS lines, verbatim:
+
+    PASS: crc/control lists scanout as the active source
+    PASS: CRC entries arrive and are stable over 12 static frames (crc 0xe20eea22)
+    PASS: dump and CRC path agree for a black frame (offset 0, length 262144, crc 0xe20eea22)
+    PASS: CRC changes with frame content (black 0xe20eea22, white 0x06cf606c)
+    PASS: nonzero scanout bytes are monotonic (black 0, white 262144 of 262144)
+    PASS: scanout CRC source and sm750_scanout dump agree
+
+This is the T30 CRC/readback check re-run against the T32 build. It says the
+display path still scans out, that the CRC source is live, and that the dump
+and the CRC agree on the same window - i.e. the fix did not break the read path
+it was built on top of.
+
+4. T31 DIAGNOSTIC: FIRED EXACTLY ONCE
+-------------------------------------
+The blank-console diagnostic appeared once for the whole session, which is what
+the once-per-module-load latch is for:
+
+    console framebuffer is blank: the panel now scans a frame nobody has painted
+    (is the foreground VT in KD_TEXT?)
+
+One occurrence in dmesg for the entire run, not one per commit. This is the
+T31 line from `sm750_pipe_enable()` (`src/sm750_drm.c:3526`), and the count is
+what a once-per-module-load latch produces: one line for the load, none for the
+50 client cycles that followed.
+
+5. RESTORE-PATH STRESS: 30/30
+-----------------------------
+30 consecutive iterations of
+
+    build/scanout-pattern /dev/dri/card0 white 2
+
+each exiting so the fbdev restore commit runs:
+
+    30/30 client iterations succeeded, 0 failures.
+
+This is the shape A32 failed on. The pre-fix failure was low-rate and
+shape-dependent: `docs/evidence/runtime/20-fbdev-restore-timeout-rca.txt:700-702`
+records T16 measuring 1 hit in 205 attempts and T20 measuring 5 in 108. 30 clean
+iterations is therefore evidence, not a proof of impossibility, and it is
+reported as a count rather than as a rate.
+
+6. MODE-CHANGE STRESS: 20/20
+----------------------------
+20 iterations of
+
+    modetest -M sm750hdmidrm -s 35@38:1024x768
+
+each followed by a client frame and a client exit:
+
+    20/20 completed.
+
+Each iteration forces a mode change away from the fbdev client's 1920x1080 and
+then back through the restore commit, so the disable/enable pair that carries
+the masked transition waits ran 20 more times with a geometry change in the
+middle.
+
+7. MODE PROOF: 95 ENABLE EVENTS ACROSS TWO GEOMETRIES
+-----------------------------------------------------
+The staging line is printed on every successful re-enable, so its count is the
+count of enable events that actually ran. Across the session:
+
+    total:      95 occurrences of `staging enabled (`
+    1920x1080:  75 occurrences of `staging enabled (4147200`
+    1024x768:   20 occurrences of `staging enabled (1572864`
+
+4147200 = 1920 * 1080 * 2 and 1572864 = 1024 * 768 * 2, both RGB565 full
+frames. So the re-enable path was exercised 95 times across two distinct
+geometries rather than once at load. This is what makes the zero-fault census
+in section 8 meaningful: 95 enable transitions produced no timeout.
+
+8. ZERO-FAULT CENSUS
+--------------------
+One grep over the whole session's dmesg, exact pattern:
+
+    dmesg | grep -cE 'failed to enable HDMI mode|flip_done timed out|commit wait timed out|refcount_t: underflow|did not latch|panel did not acknowledge|enable-fail state|WARNING|BUG:'
+
+Result: count `0`, and exit status `1` - grep with `-c` prints `0` and exits 1
+when nothing matches, so the two together are the result. No line in the whole
+buffer matched any of the nine alternatives.
+
+Zero occurrences of every one of the nine markers: `failed to enable HDMI mode`,
+`flip_done timed out`, `commit wait timed out`, `refcount_t: underflow`,
+`did not latch`, `panel did not acknowledge`, `enable-fail state`, `WARNING`,
+`BUG:`.
+
+This is the decisive evidence. `did not latch`, `panel did not acknowledge` and
+`enable-fail state` are the three lines the T32 fix added to make a failure
+visible; none of them fired. The first four are the pre-fix failure and its
+A27 cascade; none of them fired either.
+
+9. BEFORE / AFTER CONTRAST
+--------------------------
+Before the fix, the same shape of run produced, in this order:
+
+    failed to enable HDMI mode: -110
+    flip_done timed out
+    commit wait timed out
+    refcount_t: underflow
+
+(`docs/evidence/runtime/18-kernel-log-0.6.0.txt:53,63-67,75-76` is the pre-fix
+0.6.0 capture of that episode, with the counts restated at `:78-79`;
+`docs/evidence/runtime/07-kernel-log.txt:55,85-93` is the original 0.5.9
+capture.) After the fix, over 95 enable events and 50 client cycles: zero lines.
+The transition waits now compare only
+`DISPLAY_CTRL_TIMING | DISPLAY_CTRL_PLANE` and re-poke per poll, so a latched
+transition is recognised even while the hardware rewrites the surrounding bits,
+which is the mechanism the RCA named.
+
+10. CONSOLE SCANOUT UNDER KD_TEXT: THE S10 ASSERTIONS PASS FOR REAL
+-------------------------------------------------------------------
+The S10 check (`tests/check-console-scanout.sh`) had only ever been recorded as
+a SKIP on this host, either at the root gate or because the foreground VT was
+`KD_GRAPHICS`. At the end of this session the VT was measured directly:
+
+    KDGETMODE on /dev/tty0 -> 0    (0 is KD_TEXT)
+    /sys/class/tty/tty0/active -> tty1
+
+i.e. the VT was still tty1 but its mode was KD_TEXT, so fbcon was allowed to
+paint. In that state the three S10 assertions hold through the allowed helpers:
+
+    PANEL_FB_ADDRESS   0x00000000
+    sm750_scanout offset      0
+    sm750_scanout nonzero     28766
+    sm750_scanout crc32       0x0204dd04
+
+- `offset` equals `PANEL_FB_ADDRESS` (0x00000000).
+- `nonzero` is greater than 0 (28766 bytes of 262144).
+- `crc32` is not the all-zero sentinel 0xe20eea22.
+
+That is the console-scanout check passing for real: the console content reached
+the scanout window the panel register points at. It also closes the loop on the
+T31 analysis - the blank panel was a `KD_GRAPHICS` precondition, and once the
+VT is in `KD_TEXT` the same window carries content.
+
+11. LIMITATIONS
+---------------
+- Single card, single panel: `0000:01:00.0` and `card0-HDMI-A-1` only. Nothing
+  here says anything about a second SM750, a second connector or a different
+  panel.
+- The 50 cycles were driven manually through the allowed sudo entries, not by
+  `tools/sm750-restore-cycle.sh`. That harness refuses to run as non-root
+  (`FAIL: must run as root`, exit 1, `tools/sm750-restore-cycle.sh:73`), so its
+  120-iteration form is still unexercised. The manual run reproduces the same
+  trigger shape and counts the same three log lines, but it is not the harness
+  and its exit-code contract (0 clean / 1 environment / 2 no scanout readback /
+  3 failure seen) was not exercised.
+- No 4K mode and no interlaced mode were driven; the two geometries exercised
+  are 1920x1080 and 1024x768.
+- No suspend/resume cycle in this run, so nothing is claimed about the restore
+  path across a system sleep.
+- The absence of a fault line over 95 enable events lowers the failure rate; it
+  does not prove the failure is impossible. The RCA measured the pre-fix rate
+  as shape-dependent and low, so the honest statement is "not observed in 95
+  enable events", not "cannot occur".

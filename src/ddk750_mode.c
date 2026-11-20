@@ -149,7 +149,6 @@ static int adjust_mode_for_pll(struct mode_parameter *mode,
 static int program_mode_registers(struct mode_parameter *mode_param,
 				  struct pll_value *pll)
 {
-	int cnt = 0;
 	unsigned int tmp, reg;
 
 	if (pll->clock_type == SECONDARY_PLL) {
@@ -209,7 +208,8 @@ static int program_mode_registers(struct mode_parameter *mode_param,
 		}
 
 	} else if (pll->clock_type == PRIMARY_PLL) {
-		unsigned int reserved;
+		unsigned int reserved, mask, last;
+		unsigned long frame_us, budget_us, elapsed_us;
 
 		poke32(PANEL_PLL_CTRL, sm750_format_pll_reg(pll));
 
@@ -284,16 +284,35 @@ static int program_mode_registers(struct mode_parameter *mode_param,
 		 * Added some masks to mask out the reserved bits.
 		 * Note: This problem happens by design. The hardware will wait
 		 *       for the next vertical sync to turn on/off the plane.
+		 *
+		 * Only TIMING and PLANE obey that handshake; the hardware
+		 * rewrites the other fields of the register during the
+		 * transition, so an exact comparison against the snapshot
+		 * never converges (A32). The budget is derived from the mode
+		 * being programmed: two vertical periods of
+		 * mode_param->vertical_frequency (one frame per period), with
+		 * a 20 ms floor because the bit can only change at the next
+		 * vertical sync.
 		 */
 		poke32(PANEL_DISPLAY_CTRL, tmp | reg);
 
-		while ((peek32(PANEL_DISPLAY_CTRL) & ~reserved) !=
-			(tmp | reg)) {
-			cnt++;
-			if (cnt > 1000)
-				return -ETIMEDOUT;
-			poke32(PANEL_DISPLAY_CTRL, tmp | reg);
+		mask = DISPLAY_CTRL_TIMING | DISPLAY_CTRL_PLANE;
+		frame_us = 1000000UL / (mode_param->vertical_frequency ?
+					mode_param->vertical_frequency : 1UL);
+		budget_us = max(20000UL, 2UL * frame_us);
+		for (elapsed_us = 0; elapsed_us < budget_us; elapsed_us += 10) {
+			last = peek32(PANEL_DISPLAY_CTRL);
+			if ((last & mask) == ((tmp | reg) & mask))
+				break;
+			poke32(PANEL_DISPLAY_CTRL,
+			       (last & ~mask) | ((tmp | reg) & mask));
 			udelay(10);
+		}
+		if (elapsed_us >= budget_us) {
+			pr_err_ratelimited("sm750: PANEL_DISPLAY_CTRL transition did not latch: want %#x mask %#x last %#08x after %lu us\n",
+					   (tmp | reg) & mask, mask, last,
+					   budget_us);
+			return -ETIMEDOUT;
 		}
 	}
 

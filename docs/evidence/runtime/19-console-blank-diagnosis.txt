@@ -1,0 +1,179 @@
+# utc: 2026-11-20T08:55:08Z
+# T31 - why the SM750 HDMI panel was black, and the two gates that keep it named
+# host: deneb, kernel 7.3.4-100.fc43.x86_64
+# module: sm750hdmidrm 0.6.0 built from this working tree (T31), not installed
+# actor: gem-implementer, uid 1005; this session has no root, so no fresh
+#        register dump, no install and no root-only run are part of this file
+
+WHY THIS FILE EXISTS
+--------------------
+A multi-hour investigation read a black panel as a fault in the driver's
+display path. It was not: the foreground VT was in KD_GRAPHICS, so fbcon never
+painted the in-kernel fbdev client's buffer, the shadow path uploaded the blank
+buffer faithfully and the panel scanned zeros. The driver now names that
+precondition once per module load, and two gates keep the state diagnosable
+instead of re-opening the same investigation. This file records the
+measurements, the register and scanout states, and the gate transcripts.
+
+1. SYMPTOM AS REPORTED
+----------------------
+After loading sm750hdmidrm the HDMI panel stayed black while the modeset
+reported success: the kernel log carried
+"full-frame backbuffer staging enabled (4147200 bytes per buffer)" followed by
+"Console: switching to colour frame buffer device 240x67" and
+"fb0: sm750hdmidrmdrm frame buffer device"
+(quoted from docs/evidence/runtime/13-module-reload.txt:52 and
+docs/evidence/runtime/07-kernel-log.txt:43), the monitor reported "connected",
+and the screen stayed dark. Drawing from a userspace DRM client lit the panel,
+which is what separated "the display path is broken" from "nobody painted the
+console buffer".
+
+2. THE FOREGROUND VT IS IN KD_GRAPHICS
+--------------------------------------
+Measured 2026-11-19T19:48Z, exact command and output:
+
+  $ cat /sys/class/tty/tty0/active
+  tty1
+  $ python3 -c 'import fcntl, struct; f = open("/dev/tty0", "rb"); \
+      print(struct.unpack("i", fcntl.ioctl(f.fileno(), 0x4B3B, \
+      struct.pack("i", 0)))[0])'
+  1
+
+1 is KD_GRAPHICS. tty1 was running the Wayland session at the time, and
+drivers/tty/vt/vt.c do_con_write() drops console output before fbcon while
+vc_mode != KD_TEXT:
+
+  if (vc->vc_mode != KD_TEXT)
+          goto quit;    /* output is discarded, fbcon never sees it */
+
+So the fbdev client registered by drm_client_setup()
+(src/sm750_drm.c:4305) exists, is bound to fbcon, and is never painted. It is
+blank, not inert: the earlier explanation "inert because CONFIG_FB_DEVICE is
+unset" is wrong for this reason, since that option removes /dev/fbN and
+/sys/class/graphics/fbN, not fbcon (corrected in docs/LOGBOOK.md, T26
+follow-up entry, and recorded as A31).
+
+Re-measured 2026-11-20T08:55:08Z on the same host: the active VT is still tty1
+but the session there is plasmalogin, KDGETMODE now returns 0 (KD_TEXT). The
+VT state is a property of the running session, not of the driver; both values
+were observed on this host with no module change in between.
+
+3. THE SCANNED WINDOW IS ARITHMETICALLY BLANK
+---------------------------------------------
+  $ python3 -c 'import zlib; print(hex(zlib.crc32(bytes(262144))))'
+  0xe20eea22
+
+262144 is the visible window of the 1920x1080 RGB565 scanout: 512 * 512
+sampled bytes over the region the sm750_scanout dump reads (offset 4147200,
+length 262144 in docs/evidence/scanout/09-crc-single-owner.txt:138). crc32 of
+262144 zero bytes is 0xe20eea22, which is exactly what the driver reported for
+the black console state with nonzero = 0. The panel was scanning zeros; no
+display-path arithmetic was wrong.
+
+4. REGISTER AND SCANOUT STATE
+-----------------------------
+This session has no root, so the register rows below are quoted from
+docs/evidence/runtime/08-register-dump.txt (2026-11-18, root helper
+/usr/local/sbin/sm750-regs) and the scanout fields from
+docs/evidence/scanout/09-crc-single-owner.txt section 5 (2026-11-19, root run
+of /usr/local/sbin/sm750-crc-cycle). Both were taken on this host at the
+fbdev client's 1920x1080 mode. The panel register file does not depend on
+frame content, so the same rows apply to both states below; only the scanout
+readback of the buffer content differs.
+
+4a. Blank console state (KD_GRAPHICS, fbdev client's buffer never painted)
+
+  0x080000 PANEL_DISPLAY_CTRL           0x0f010105   (08-register-dump.txt:44, :160)
+  0x08000c PANEL_FB_ADDRESS             0x00000000   (08-register-dump.txt:47) then 0x003f4800 (:163)
+  0x080010 PANEL_FB_WIDTH               0x0f000f00   (08-register-dump.txt:48, :164)
+  0x080014 PANEL_WINDOW_WIDTH           0x077f0000   (08-register-dump.txt:49, :165)
+  0x080020 PANEL_PLANE_BR               0x0437077f   (08-register-dump.txt:52)
+
+  sm750_scanout: offset 4147200, length 262144, nonzero 0, crc32 0xe20eea22
+  (09-crc-single-owner.txt:138, the black-frame row of the same run)
+
+  0x003f4800 = 4147200 = ALIGN(1920 * 1080 * 2, 16) is not a buffer object
+  being re-allocated: it is the second buffer, and
+  sm750_present_staged_frame() (src/sm750_drm.c:2388-2425) reaches it by
+  flipping SM750_DRM_FB_ADDRESS after uploading the frame. The upload happens;
+  what it uploads is the blank console buffer. docs/evidence/runtime/08-register-dump.txt:219-224 and
+  docs/evidence/EVIDENCE-GAPS.md:471-473 carry the corrected attribution.
+
+4b. Working state (userspace DRM client, full-screen white frame)
+
+  Same mode, same registers: the client commits a frame at the same geometry,
+  the driver stages it the same way, and PANEL_FB_ADDRESS ends at 0x003f4800.
+  The readback is what differs:
+
+  sm750_scanout: offset 4147200, length 262144, nonzero 262144,
+  crc32 0x06cf606c
+  (09-crc-single-owner.txt:137-140: "dump and CRC path agree for a black
+  frame (offset 4147200, length 262144, crc 0xe20eea22)", "CRC changes with
+  frame content (black 0xe20eea22, white 0x06cf606c)", "nonzero scanout bytes
+  are monotonic (black 0, white 262144 of 262144)")
+
+  So the path VRAM -> panel was intact in both states; only the content of the
+  uploaded frame differed, and in the KD_GRAPHICS case the content was zero by
+  construction.
+
+5. CONCLUSION
+-------------
+No driver code was at fault. The console buffer was blank because the
+foreground VT was in KD_GRAPHICS and the kernel discards console output before
+fbcon, the shadow path uploaded that blank buffer exactly as designed, and the
+panel scanned it. The remedy is a named precondition, not a code change:
+sm750_shadow_frame_is_blank() samples the frame being committed
+(src/sm750_drm.c:3404-3431) and sm750_pipe_enable() emits, at most once per
+module load and after sm750_program_mode() succeeded, one neutral line:
+
+  console framebuffer is blank: the panel now scans a frame nobody has painted
+  (is the foreground VT in KD_TEXT?)
+
+Nothing else changes: no upload is skipped, no stale frame is kept, no commit
+fails. A userspace DRM client's frame still displays (the white frame above).
+
+6. GATE TRANSCRIPTS
+-------------------
+6a. S9, source level, part of make check through tests/check-drm-policy.sh
+
+  $ ./tests/check-console-blank.sh
+  Console blank-frame diagnostics check passed: /home/coder/sm750hdmifb/src/sm750_drm.c
+  negative control no_message: rejected (exit 1): Console blank: sm750_pipe_enable never names the blank console buffer
+  negative control emit_before_program_mode: rejected (exit 1): Console blank: the blank-console diagnostic is emitted before sm750_program_mode()
+  negative control no_map_bail: rejected (exit 1): Console blank: the blank-frame helper samples an unmapped buffer
+  negative control no_warn_once_latch: rejected (exit 1): Console blank: the latch never guards the diagnostic
+  Console blank-frame diagnostics checks passed
+  exit=0
+
+6b. S10, root only, opt-in
+
+  $ ./tests/check-console-scanout.sh
+  SKIP: root is required: /sys/kernel/debug and its sm750_scanout are mode 0700
+  exit=77
+
+  $ make console-check
+  SKIP: root is required: /sys/kernel/debug and its sm750_scanout are mode 0700
+  exit=0            (the target maps exit 77 to success, like crc-check)
+
+  Run as root on a graphical VT the same script stops one gate later, on the
+  precondition itself, and writes exactly:
+
+  SKIP: foreground VT is KD_GRAPHICS; the kernel console discards output
+  before fbcon, so an all-zero scanout window is expected - run this on a text
+  VT
+
+  (one line in the script; wrapped here for the page width). On a text VT it
+  writes 40 lines to /dev/tty0 and then requires nonzero > 0,
+  crc32 != 0xe20eea22 and offset == PANEL_FB_ADDRESS.
+
+7. WHAT THIS FILE DOES NOT PROVE
+--------------------------------
+- No fresh register pair for the two states was taken in this session: the
+  host is used by other sessions, this task runs without root, and the
+  existing root captures at the same mode and offset answer the question.
+- The KD_GRAPHICS SKIP path is stated from the script source, not from a root
+  run of it: the host has had no root access in this session.
+- The S10 text-mode PASS path has not been executed in this session for the
+  same reason; it is opt-in and root-only by design.
+- The diagnostic appears in dmesg only after the fixed module is installed;
+  this task does not install it (no version-string change, no root).

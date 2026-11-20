@@ -1,6 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0-only
 set -euo pipefail
+export TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}
 test "$EUID" -eq 0
 project=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 parameters=/sys/module/sm750hdmidrm/parameters
@@ -9,7 +10,7 @@ test "$(cat "$parameters/backbuffer_staging")" = Y
 desktop_display=${1:-:0}
 desktop_auth=${2:-$HOME/.Xauthority}
 test -r "$desktop_auth"
-output=$(mktemp -d "${TMPDIR:-/tmp}/sm750-batch-benchmark-XXXXXX")
+output=$(mktemp -d "${TMPDIR}/sm750-batch-benchmark-XXXXXX")
 chmod 0755 "$output"
 old_timing=$(cat "$parameters/staging_timing")
 cleanup() {

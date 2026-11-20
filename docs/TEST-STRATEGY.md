@@ -77,6 +77,9 @@ against the stale 0.5.9 module that was loaded on the host. Such a row is real
 evidence about that build, but it is the BEFORE half of a before/after pair and
 must not be read as a result for the fixed build.
 
+Transient output from every suite goes to `/mega/tmp/sm750/tmp` (each script
+exports `TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}`), never to `/tmp`.
+
 | ID | Suite | Role | Status |
 | --- | --- | --- | --- |
 | S1 | In-repo `make check` (17 recipe commands) | Primary software regression gate | PASS |
@@ -87,6 +90,9 @@ must not be read as a result for the fixed build.
 | S6 | IGT GPU Tools KMS subset | Independent conformance, stretch artifact | FAIL (pre-fix baseline, 1 real) + GAP (VT-blocked subset) |
 | S7 | `v4l-utils` | Excluded: no capture path on this board | Not run by design |
 | S8 | `edid-decode` | EDID decoder, baseline diagnostic only | Reference only |
+| S9 | In-repo `tests/check-console-blank.sh` (via `make check`) | Source-level gate: the blank-console precondition is named, ordered after the modeset and inert | PASS |
+| S10 | In-repo `tests/check-console-scanout.sh` (`make console-check`, opt-in) | Root-only: the console reaches the panel on a `KD_TEXT` VT; skips with a named cause under `KD_GRAPHICS` | PASS on the card under `KD_TEXT` (2026-11-20, all three assertions); the script still skips with exit 77 when the VT is `KD_GRAPHICS` or the caller is not root |
+| S11 | In-repo `tests/check-restore-path.sh` (via `make check`) | Source-level restore-path gate: masked transition compare with re-poke, mode-derived budget, kept display-off result, terminal fail path | PASS (source gate) plus PASS on hardware 2026-11-20: 30 restore cycles, 20 mode changes, 95 enable events, zero fault lines |
 
 ### S1: in-repo `make check`
 
@@ -319,6 +325,99 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
 - Status: reference capture from 2026-11-17, before T5. It is not a result row
   and is not used to claim a post-fix pass. It records the panel identity and
   extension-block checksum so later EDID comparisons have a baseline.
+
+### S9: source-level blank-console diagnostic
+
+- Command: `./tests/check-console-blank.sh` (also run by
+  `tests/check-drm-policy.sh`, which is the 17th command of `make check`, so
+  the recipe stays at 17). Takes an optional source path, defaulting to
+  `src/sm750_drm.c`.
+- Holds: `sm750_shadow_frame_is_blank()` exists and samples the shadow source
+  on a coarse 16-row/16-pixel grid with a NULL-map bail-out and no allocation;
+  the exact text `console framebuffer is blank` is emitted inside
+  `sm750_pipe_enable()` after the `sm750_program_mode()` call; the line is
+  behind a `static bool` latch so it prints once per module load; the guard
+  contains no `return`/`goto`, so it cannot change behaviour.
+- Negative controls, each planted on a temporary copy and rejected with exit 1:
+  message deleted, diagnostic moved above the mode programming call, NULL-map
+  bail-out removed, once-per-load latch removed.
+- Status: PASS, `Console blank-frame diagnostics checks passed`.
+
+### S10: root console-scanout content
+
+- Command: `sudo ./tests/check-console-scanout.sh` or `make console-check`.
+  Opt-in, outside `make check`, because it needs root, the card and a mounted
+  debugfs; the target turns exit 77 into success.
+- Holds: on a `KD_TEXT` foreground VT, 40 lines written to `/dev/tty0` leave a
+  non-blank `sm750_scanout` window (nonzero bytes > 0), a `crc32` that is not
+  the all-zero sentinel `0xe20eea22`, and an `offset` equal to
+  `PANEL_FB_ADDRESS` in the register dump.
+- Skip paths, each one `SKIP:` line and exit 77: no root, no debugfs, no SM750
+  card, no readable `sm750_scanout`, no `/dev/tty0`, no `python3`, unreadable
+  VT mode, and the measured precondition `KD_GRAPHICS`:
+  `SKIP: foreground VT is KD_GRAPHICS; the kernel console discards output
+  before fbcon, so an all-zero scanout window is expected - run this on a text
+  VT`.
+- Status: PASS on the card, 2026-11-20. With the foreground VT measured at
+  `KDGETMODE` 0 (`KD_TEXT`) while `/sys/class/tty/tty0/active` still read
+  `tty1`, the three assertions held: `sm750_scanout` `offset` 0 equal to
+  `PANEL_FB_ADDRESS` 0x00000000, `nonzero` 28766 of 262144, `crc32` 0x0204dd04
+  (not the all-zero sentinel 0xe20eea22). That is the check passing for real,
+  replacing the earlier root-gate and `KD_GRAPHICS` SKIPs. Transcript:
+  `docs/evidence/runtime/22-restore-fix-hardware-proof.txt` section 10. The
+  script's own skip paths are unchanged, so it still exits 77 with a `SKIP:`
+  line when the VT is `KD_GRAPHICS` or the caller is not root.
+
+### S11: source-level restore-path invariants
+
+- Command: `./tests/check-restore-path.sh` (also run by
+  `tests/check-drm-policy.sh`, which is the 17th command of `make check`, so
+  the recipe stays at 17). Takes an optional source directory and a
+  `--single` mode the negative controls use.
+- Holds, against `src/ddk750_display.c`, `src/ddk750_mode.c` and
+  `src/sm750_drm.c`, four properties that the A32 RCA needs: the display
+  transition wait takes a mask, compares `(last & mask) == (value & mask)`,
+  re-pokes inside the poll loop, keeps the 100 ms budget and logs
+  `want`/`mask`/`last`; the mode transition loop has no `cnt > N` cap, derives
+  its budget from `mode_param->vertical_frequency` with a 20 ms floor, re-pokes
+  per iteration and still returns `-ETIMEDOUT`; `sm750_pipe_disable()` assigns
+  the display-off result, contains no unchecked display-off call and warns with
+  the `PANEL_DISPLAY_CTRL` readback; the `sm750_pipe_enable()` fail path names
+  the stage, calls `drm_crtc_vblank_on()` before `sm750_arm_vblank_event()` and
+  prints the four registers on one `enable-fail state:` line.
+- Negative controls, each planted on a temporary copy and rejected with exit 1:
+  whole-register compare restored (`& ~mask`), event armed before
+  `drm_crtc_vblank_on()`, display-off result discarded again, register-state
+  line deleted.
+- Status: PASS, `Restore path checks passed`; all four controls rejected. The
+  behaviour it guards is in `docs/evidence/runtime/21-fbdev-restore-fix.txt`
+  sections 1-5.
+- The on-card half is `tools/sm750-restore-cycle.sh` (root only, outside
+  `make check`): it repeats the client-exit restore trigger against the loaded
+  module and fails on any of the three new log lines. Exit 0 clean, 1
+  environment, 2 no scanout readback, 3 failure seen.
+- Hardware result instead, recorded 2026-11-20 on the module built from this
+  tree (srcversion `14ED4F27A83A6BB8AA445D2`, kernel 7.3.4-100.fc43), driven
+  manually through the allowlisted sudo entries:
+  - 30 consecutive `build/scanout-pattern /dev/dri/card0 white 2` exit/restore
+    cycles: 30/30 succeeded, 0 failures.
+  - 20 `modetest -M sm750hdmidrm -s 35@38:1024x768` mode changes, each followed
+    by a client frame and exit: 20/20 completed.
+  - 95 `staging enabled (` lines, the count of enable events that actually ran:
+    75 at 1920x1080 (`4147200`) and 20 at 1024x768 (`1572864`).
+  - `dmesg | grep -cE 'failed to enable HDMI mode|flip_done timed out|commit
+    wait timed out|refcount_t: underflow|did not latch|panel did not
+    acknowledge|enable-fail state|WARNING|BUG:'` -> 0. The pre-fix shape of run
+    produced `failed to enable HDMI mode: -110` followed by `flip_done timed
+    out`, `commit wait timed out` and a refcount underflow.
+  - The T31 blank-console line fired once for the whole session, as the
+    once-per-load latch intends.
+- Why the harness form stays unexercised: its root check is a hard gate
+  (`FAIL: must run as root`, exit 1, `tools/sm750-restore-cycle.sh:73`) and this
+  session had no interactive root, so its 120-iteration run has not happened.
+  The 50 cycles above reproduce the same trigger shape through the allowlisted
+  helpers but do not exercise the harness's exit-code contract. Recorded in
+  `docs/evidence/runtime/22-restore-fix-hardware-proof.txt` sections 5-11.
 
 ## 3. `make check`: the 17 recipe commands
 

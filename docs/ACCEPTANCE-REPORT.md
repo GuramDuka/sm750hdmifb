@@ -632,3 +632,61 @@ Status after this addendum:
   exactly what the missing run observes. The emitted pixel stream itself is
   still not observable on this host, so tier 5 would remain a statement about
   the scanout source buffer even after that run.
+
+## Round 3: restore-path fix confirmed on hardware (2026-11-20)
+
+This section is appended, not a rewrite: rounds 1 and 2 above stay as the
+record of what they measured. Round 3 does not re-verdict AC-1 .. AC-7; it
+records one hardware run that closes the "not proven on the card" caveat
+carried by the A32 defect row and by the S10/S11 suite rows.
+
+Run conditions: module built from the working tree, srcversion
+`14ED4F27A83A6BB8AA445D2`, vermagic `7.3.4-100.fc43.x86_64`, version string
+still `0.6.0` at the time of the run, loaded through
+`sudo -n /usr/local/sbin/sm750-crc-cycle`. One card (`0000:01:00.0`), one panel
+(`card0-HDMI-A-1`). Evidence:
+`docs/evidence/runtime/22-restore-fix-hardware-proof.txt`.
+
+### Affected criteria and their status after this run
+
+| Criterion / row | Before round 3 | After round 3 | Basis |
+| --- | --- | --- | --- |
+| AC-3 tier 3, modeset with restore | PASS (0.5.9 and 0.6.0 held-client proofs) | PASS, unchanged | 20 mode changes `35@38:1024x768`, each followed by a client frame and exit, 20/20 completed |
+| AC-3 tier 4, framebuffer readback | GAP (round 2: the "48 nonzero bytes of 8294400" readback was unevidenced; T26/T28/T30 later built the readback itself, still without a root transcript) | PASS for the scanout source buffer | Six PASS lines from the root CRC cycle, including `dump and CRC path agree for a black frame (offset 0, length 262144, crc 0xe20eea22)` and `nonzero scanout bytes are monotonic (black 0, white 262144 of 262144)` |
+| AC-3 tier 5, scanout CRC stream | partial (round 2, and after the T26-T30 addendum: the source is reachable from userspace but stability on the card was unobserved) | PASS for the source buffer; the emitted pixel stream is still not observable | `CRC entries arrive and are stable over 12 static frames (crc 0xe20eea22)`; `CRC changes with frame content (black 0xe20eea22, white 0x06cf606c)` |
+| AC-3 tier 6, external capture | GAP | GAP, unchanged | No capture hardware; nobody has looked at the panel in this run either |
+| AC-3 overall | GAP | GAP, unchanged | Tier 6 is still open, so the criterion verdict does not move |
+| Defect A32, restore path | fixed in source, pending on-card confirmation | fixed, confirmed on hardware | 95 enable events, zero fault lines, 30/30 restore cycles |
+| Suite S11, restore-path gate | PASS (source gate only) | PASS (source gate) plus PASS on hardware | The run above; the harness form stays unexercised |
+| Suite S10, console scanout | PASS (source), SKIP on this host | PASS on the card | `KDGETMODE` 0 (`KD_TEXT`) with `offset` 0 = `PANEL_FB_ADDRESS` 0x00000000, `nonzero` 28766, `crc32` 0x0204dd04 |
+
+### Numbers from the run
+
+| Measurement | Value |
+| --- | --- |
+| CRC cycle result | `RESULT: scanout CRC check passed`, exit 0, six PASS lines |
+| Static-frame CRC | 0xe20eea22 over 12 static frames |
+| Content-change CRC pair | black 0xe20eea22, white 0x06cf606c |
+| Dump agreement (black) | offset 0, length 262144, crc 0xe20eea22 |
+| Nonzero scanout bytes | black 0, white 262144 of 262144 |
+| T31 blank-console diagnostic | 1 occurrence for the whole session (once-per-load latch) |
+| Client exit/restore cycles | 30/30 succeeded, 0 failures |
+| Mode changes `35@38:1024x768` with client frame and exit | 20/20 completed |
+| Enable events (`staging enabled (`) | 95 total: 75 at 1920x1080 (`4147200`), 20 at 1024x768 (`1572864`) |
+| Fault-line census over the session | 0 matches for `failed to enable HDMI mode`, `flip_done timed out`, `commit wait timed out`, `refcount_t: underflow`, `did not latch`, `panel did not acknowledge`, `enable-fail state`, `WARNING`, `BUG:` |
+| S10 console scanout under `KD_TEXT` | `PANEL_FB_ADDRESS` 0x00000000, offset 0, nonzero 28766 of 262144, crc32 0x0204dd04 |
+
+### What this run does not establish
+
+- One card, one panel. Nothing about a second SM750, a second connector or a
+  different panel.
+- The 50 cycles were driven manually through the allowlisted sudo entries.
+  `tools/sm750-restore-cycle.sh` refuses to run as non-root (`FAIL: must run as
+  root`, exit 1, `tools/sm750-restore-cycle.sh:73`), so its 120-iteration form
+  and its exit-code contract (0 clean / 1 environment / 2 no scanout readback /
+  3 failure seen) are still unexercised.
+- Two geometries only (1920x1080 and 1024x768); no 4K, no interlaced mode, no
+  suspend/resume.
+- Zero fault lines over 95 enable events lowers the failure rate; it does not
+  prove the failure impossible. The RCA recorded the pre-fix rate as
+  shape-dependent and low.
