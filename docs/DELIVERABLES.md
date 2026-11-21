@@ -507,7 +507,8 @@ list.
 | `docs/evidence/packaging/03-rpm-qlp.log` | `%files` list, 36 files |
 | `docs/evidence/packaging/04-rpm-qpR.log` | dependency assertions |
 | `docs/evidence/packaging/05-dkms-sandbox.log` | sandbox DKMS `built` with a real module |
-| `docs/evidence/packaging/06-posttrans-missing-headers.log` | missing-header branch of `%posttrans`, plus the stale-purge run whose `dkms remove` fails (exit 4) |
+| `docs/evidence/runtime/28-dangling-kernel-link.txt` | T42: the three dangling `/var/lib/dkms/sm750hdmifb/kernel-<kernel>-x86_64` symlinks verbatim, the `/usr/sbin/dkms` lines that turn one into `die 6`, the transcript excerpt of the abort, the fix with spec line numbers, the six-control gate transcript, and an explicit `NOT YET OBSERVED ON THE HOST` section |
+| `docs/evidence/packaging/06-posttrans-missing-headers.log` | missing-header branch of `%posttrans`, plus the stale-purge run whose `dkms remove` fails (exit 4) and the dangling-link run (A40) |
 | `docs/evidence/packaging/07-check-rpm-dkms.log` | full `tests/check-rpm-dkms.sh` run |
 | `docs/evidence/packaging/0.5.9/01-rpmbuild.log` | `rpmbuild -ba` at 0.5.9, exit 0 |
 | `docs/evidence/packaging/0.5.9/02-rpm-qp-scripts.log` | scriptlet assertions at 0.5.9 |

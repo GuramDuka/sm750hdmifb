@@ -595,6 +595,10 @@ does not change.
 
 ### 3.5 Installing the 0.6.2 package
 
+Historical: the commands below name the 0.6.2-2 and earlier artifacts. The build
+now in the tree is 0.6.2-3, whose path is not allowlisted yet; section 3.7 has
+the current recovery.
+
 The allowlist names four `dnf install` paths, one per released package
 (0.6.0, 0.6.1, 0.6.2-1), plus `/usr/local/sbin/sm750-console`. The 0.6.2-2
 build needs **one more line** - the 0.6.2-1 path is granted, the 0.6.2-2 path
@@ -629,6 +633,9 @@ hardware evidence in `docs/evidence/runtime/26-test-card-crc-fix.txt` still
 applies; only the version string differs.
 
 ### 3.6 Recovering from a broken 0.6.1 DKMS registration
+
+Historical runbook for the 0.6.2-1 to 0.6.2-2 transition; section 3.7 covers
+the dangling active-version link and the 0.6.2-3 build.
 
 The state this section starts from, observed on 2026-11-21
 (`docs/evidence/runtime/27-posttrans-install-failure.txt`): the 0.6.2-1 package
@@ -681,6 +688,54 @@ The last successful rootless run and the reason each step is needed are in
 has been run on this host yet; the account holding this repository is
 unprivileged, and the 0.6.2-2 `dnf install` path is not in the allowlist
 (section 1).
+
+### 3.7 Dangling DKMS kernel links, recovery with no new package (A40)
+
+A second leftover survives an erase and is invisible to `dkms status`: for each
+kernel dkms built the module for, `/var/lib/dkms/sm750hdmifb/` carries a symlink
+`kernel-<kernel>-<arch>` to `<version>/<kernel>/<arch>`, and the link keeps
+pointing at the erased version. `do_install()` in dkms 3.4.4 reads the version
+out of that link target alone (`/usr/sbin/dkms:1783-1784`) and dies 6 trying to
+uninstall it before installing the new one (`:1866-1868`), so `dkms install`
+aborts for every kernel while `dkms status -m sm750hdmifb` shows only the new
+version as `built` (`docs/evidence/runtime/28-dangling-kernel-link.txt`).
+
+The 0.6.2-3 package clears these links itself, but the host can be repaired
+without it. Step 1 lists them, step 2 removes only the ones whose target is
+gone (`ls` shows the link in red or `-d` on it fails), step 3 reinstalls.
+
+1. List the links and their targets (any user):
+
+```sh
+ls -l /var/lib/dkms/sm750hdmifb/kernel-*
+dkms status -m sm750hdmifb
+```
+
+2. Remove the dangling ones (root; `rm` is not on the allowlist, so this asks
+   for a password). The glob covers every kernel; a link that resolves is a
+   working install and must be kept, so pass only the names step 1 showed as
+   dangling:
+
+```sh
+sudo rm -f /var/lib/dkms/sm750hdmifb/kernel-7.2.15-100.fc43.x86_64-x86_64
+sudo rm -f /var/lib/dkms/sm750hdmifb/kernel-7.3.3-100.fc43.x86_64-x86_64
+sudo rm -f /var/lib/dkms/sm750hdmifb/kernel-7.3.4-100.fc43.x86_64-x86_64
+```
+
+3. Remove and reinstall the package so `%posttrans` runs again, then verify:
+
+```sh
+sudo dnf remove -y sm750hdmifb
+sudo dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-3.fc43.noarch.rpm
+sudo modprobe sm750hdmidrm
+cat /sys/module/sm750hdmidrm/version
+sudo dkms status -m sm750hdmifb
+```
+
+The version must read `0.6.2` and `dkms status` must show one row per installed
+kernel with `installed`, not `built`. Neither the `rm` lines nor the 0.6.2-3
+`dnf install` are in the allowlist yet (section 1), so both ask for a password.
+Nothing in this section has been run on this host.
 
 ## 4. udev ACL rule
 

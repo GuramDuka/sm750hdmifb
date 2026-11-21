@@ -2753,3 +2753,74 @@ and make crc-check all exit 0; four kernel builds exit 0.
   have free inodes. The gates ran with `TMPDIR` on a branch that does not
   traverse mergerfs (`/mega/tmp/sm750/t6` is a symlink to real storage). Freeing
   inodes on that branch is an owner action.
+
+### 2026-11-21T14:35Z | orchestrator | T42: a dangling active-version link, the second shape of the leftover
+
+- The 0.6.2-2 install still failed on the host, with a different message than
+  0.6.2-1: per kernel `Module sm750hdmifb/0.6.2 already built for kernel <k>,
+  skip`, then `Module sm750hdmifb/0.6.1 for kernel <k> (x86_64):`,
+  `Error! Could not locate dkms.conf file.`, `Error! Failed to uninstall
+  sm750hdmifb/0.6.1 ...`, and finally `warning: no kernel received the module`.
+  `dkms status -m sm750hdmifb` listed only `0.6.2, <k>, x86_64: built`.
+- Cause, read from dkms 3.4.4 and measured on the host: `/var/lib/dkms/
+  sm750hdmifb/kernel-<kernel>-<arch>` is the "active version" symlink, and it
+  still pointed into the deleted 0.6.1 tree (`0.6.1/<kernel>/x86_64`, DANGLING
+  for all three kernels). `do_install()` (`/usr/sbin/dkms:1768`) computes
+  `old_active_version=$(readlink "$active_link")` at `:1783-1784` and refuses to
+  proceed unless it can uninstall that version at `:1866-1868`
+  (`die 6 "Failed to uninstall ..."`). A dangling link is not a version, so the
+  version-based purge could never see it - and the escalation added in 0.6.2-2,
+  which deletes a broken version tree, is what leaves the link dangling in the
+  first place.
+- Defect A40 (S2) fixed: the second loop in `%posttrans`
+  (`packaging/sm750hdmifb.spec:245-251`) walks
+  `"$dkms_root/%{dkms_name}"/kernel-*`, skips anything that is not a symlink,
+  and removes only links that do not resolve, printing
+  `removing dangling DKMS kernel link: <path>`. A link whose target exists is
+  never touched. `Release 3%{?dist}` (`:22`) with a `0.6.2-3` changelog entry
+  (`:355-365`); the `0.6.2-2` and `0.6.2-1` entries are untouched.
+- `tests/check-rpm-dkms.sh` gained a static ordering assertion (the loop marker
+  must sit after the version purge and before the build loop), a sandbox
+  `dangling_link_scenario` with a fake dkms root holding a resolvable 7.3.4
+  link, dangling 7.2.15 and 7.3.3 links, a plain file named `kernel-not-a-link`
+  and a canary, plus the mutation control `plant_no_link_purge`; the run reports
+  six planted controls rejected.
+- Docs: A40 row and narrative in `docs/DEFECTS.md` (`:75`, `:705-740`),
+  `docs/PACKAGING-RPM.md:182-210` explains the link mechanism next to the
+  version-tree leftover, `docs/RELEASE-NOTES.md:56-66` names the packaging
+  change, and `docs/ROOT-ACTIONS.md` section 3.7 gives a recovery path that
+  needs no new package.
+- Evidence `docs/evidence/runtime/28-dangling-kernel-link.txt`: the three link
+  lines as measured, the dkms citations, the per-kernel abort, the new loop, the
+  sandbox reproduction and the host after-state - with an explicit NOT YET
+  OBSERVED ON THE HOST section, because the 0.6.2-3 install needs root and the
+  owner had already repaired the host by hand.
+- Host state after the owner's repair, verified here: `rpm -q` gives
+  `sm750hdmifb-0.6.2-2.fc43.noarch`, all three links resolve to
+  `0.6.2/<kernel>/x86_64`, `dkms status` reports `installed`, and
+  `cat /sys/module/sm750hdmidrm/version` gives `0.6.2` with srcversion
+  `760B67791A964AC81795475`. `sm750-crc-cycle` passed end to end as root
+  (`RESULT: scanout CRC check passed`, six PASS lines, readback `nonzero 200394`
+  `crc32 0x3521e059`) and repeated `sm750-console show` calls returned different
+  `crc32` values (`0x3521e059`, `0x45c3bf90`, `0x40e1e61c`), so the disc is
+  moving on the panel.
+- The installed console helper was stale (`e3955655c5c0...`, the A39 defect
+  still on disk): it printed `nothing has painted the window` next to
+  `crc32 0x45c3bf90`. Refreshing it from `tools/sm750-console.sh`
+  (`6e7f5dc758ec...`) produced the conditional sentence, confirmed by the owner.
+- RPM `/mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-3.fc43.noarch.rpm`,
+  120260 bytes, sha256
+  `efb1949a0b689c8f573ae9891f86641e73d94872b87086fa7eef7a498beaf08f`. Installing
+  it needs one allowlist line, because the sudoers entries name exact package
+  paths.
+- Gates, all exit 0: `make CC=/usr/bin/gcc`, the rootless-libdrm `make check`
+  (17 commands), `./tests/check-rpm-dkms.sh`, `./tests/check-test-pattern.sh`,
+  `./tests/check-drm-policy.sh`, `./tests/check-release-version.sh`,
+  `./tests/check-drm-packaging.sh`, `./tests/check-static.sh`,
+  `./tests/check-scratch-policy.sh`, `./tests/audit-release.sh`, `bash -n`,
+  `git diff --check`, ASCII on all eight touched files, `./build-package.sh` and
+  `rpmbuild -ba`.
+- Pre-existing, deliberately not rewritten: the regenerated
+  `docs/evidence/packaging/01`, `03` and `05` carry the host's Russian-locale
+  rpmbuild lines (11/40/1 non-ASCII lines) exactly as the committed versions
+  did; rewriting them would mean re-running rpmbuild under a C locale.

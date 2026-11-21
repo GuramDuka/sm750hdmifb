@@ -1,0 +1,159 @@
+# T42 (A40): the 0.6.2-2 %posttrans could not install the module while the host
+# carried a DANGLING DKMS active-version symlink, because dkms do_install() reads
+# the old version out of that link and uninstalls it before installing the new
+# one. Recorded 2026-11-21 by the implementer (uid 1005). The links were
+# measured by the parent session; this account can read them but cannot create
+# or remove them.
+#
+# status: diagnosis complete, fix in the working tree (0.6.2-3), install of
+#         0.6.2-3 NOT YET OBSERVED (needs root). The host was meanwhile repaired
+#         by its owner and now runs 0.6.2 with no dangling link; section 6
+#         records that after-state, section 7 what is still unobserved.
+
+======== 1. the dangling links, as measured before this task ========
+
+Reported verbatim by the parent session, one per kernel that had a 0.6.1
+registration before rpm erased the 0.6.1 tree (the trailing DANGLING is that
+session's annotation, not part of the listing):
+
+    /var/lib/dkms/sm750hdmifb/kernel-7.2.15-100.fc43.x86_64-x86_64 -> 0.6.1/7.2.15-100.fc43.x86_64/x86_64  DANGLING
+    /var/lib/dkms/sm750hdmifb/kernel-7.3.3-100.fc43.x86_64-x86_64 -> 0.6.1/7.3.3-100.fc43.x86_64/x86_64    DANGLING
+    /var/lib/dkms/sm750hdmifb/kernel-7.3.4-100.fc43.x86_64-x86_64 -> 0.6.1/7.3.4-100.fc43.x86_64/x86_64    DANGLING
+
+Same session: `dkms status -m sm750hdmifb` listed only
+
+    sm750hdmifb/0.6.2, <kernel>, x86_64: built
+
+for each of the three kernels - a link is not a registration, so the failed
+0.6.1 trees never appeared in `dkms status`, which is the enumeration the
+0.6.2-2 purge (A37) used.
+
+======== 2. the mechanism, read from dkms 3.4.4 ========
+
+`dkms --version` prints `dkms-3.4.4`. `grep -n` over /usr/sbin/dkms:
+
+    1768:do_install()
+    1778:    local -r active_link="$dkms_tree/$module/kernel-$kernelver-$arch"
+    1783:        old_active_version=$(readlink "$active_link")
+    1784:        old_active_version=${old_active_version%%/*}
+    1868:            die 6 "Failed to uninstall $module/$old_active_version for kernel $kernelver ($arch)."
+
+The two halves of the mechanism, verbatim (sed -n on the same file):
+
+    local -r active_link="$dkms_tree/$module/kernel-$kernelver-$arch"
+    ...
+    if [[ -L $active_link ]]; then
+        old_active_version=$(readlink "$active_link")
+        old_active_version=${old_active_version%%/*}
+    fi
+    ...
+    if [[ $old_active_version ]]; then
+        (module_version="$old_active_version" delayed_depmod=1 do_uninstall "$kernelver" "$arch") || \
+            die 6 "Failed to uninstall $module/$old_active_version for kernel $kernelver ($arch)."
+    fi
+
+So the old version is taken from the link target alone, with no check that the
+version is still registered or still on disk, and `do_uninstall` for it needs
+`$dkms_tree/$module/$module_version/source/dkms.conf`. The 0.6.1 tree was
+gone, so the uninstall died 6 for every kernel and the install never reached
+the new module. Recreating the link is dkms's own job on the next successful
+install, which is why removing a link with no target is safe.
+
+======== 3. the install transcript, as measured before this task ========
+
+Per installed kernel, quoted from the parent session's measurement of the
+0.6.2-2 install (`<k>` is one of 7.2.15-100.fc43.x86_64, 7.3.3-100.fc43.x86_64
+and 7.3.4-100.fc43.x86_64):
+
+    Module sm750hdmifb/0.6.2 already built for kernel <k>, skip
+    Module sm750hdmifb/0.6.1 for kernel <k> (x86_64):
+    Error! Could not locate dkms.conf file.
+    Error! Failed to uninstall sm750hdmifb/0.6.1 for kernel <k> (x86_64).
+    warning: dkms install failed for <k>
+
+and after the transaction no kernel had received the module, while
+`dkms status -m sm750hdmifb` still showed `0.6.2, <k>, x86_64: built`.
+
+======== 4. what changed (0.6.2-3) ========
+
+`packaging/sm750hdmifb.spec` release 3 adds a second purge loop after the
+version-driven one and before the build loop (:245-251):
+
+    for dkms_link in "$dkms_root/%{dkms_name}"/kernel-*; do
+        [ -L "$dkms_link" ] || continue
+        if [ ! -d "$dkms_link/" ]; then
+            echo "removing dangling DKMS kernel link: $dkms_link" >&2
+            rm -f -- "$dkms_link"
+        fi
+    done
+
+It touches a path only when it is a symlink directly under
+`$dkms_root/%{dkms_name}` and does not resolve; dkms always points these links
+at a version directory, so `[ ! -d "$dkms_link/" ]` is the resolution test.
+
+======== 5. sandbox reproduction, gate transcript ========
+
+`tests/check-rpm-dkms.sh` extracts the scriptlet from the built RPM and runs it
+against a fake dkms root holding one resolvable link, two dangling links, a
+plain file named `kernel-not-a-link` and a canary outside the module tree.
+stderr of that run, from
+`/mega/tmp/sm750/t6/posttrans/dangling/transcript.txt`:
+
+    removing stale DKMS registration: sm750hdmifb/0.6.0
+    removing dangling DKMS kernel link: /mega/tmp/sm750/t6/posttrans/dangling/dkmsroot/sm750hdmifb/kernel-7.2.15-100.fc43.x86_64-x86_64
+    removing dangling DKMS kernel link: /mega/tmp/sm750/t6/posttrans/dangling/dkmsroot/sm750hdmifb/kernel-7.3.3-100.fc43.x86_64-x86_64
+    warning: no kernel received the module; check the warnings above and run: dkms install -m sm750hdmifb -v 0.6.2 -k <kernel>
+
+(the last line is the sandbox's own, because the fake tree carries no kernel
+below the minimum version; the exit status is 0). The `dkms` shim received
+`/mega/tmp/sm750/t6/posttrans/dangling/calls.log`:
+
+    dkms status
+    dkms remove -m sm750hdmifb -v 0.6.0 --all
+
+so the version-driven purge still ran, and no `dkms install` was attempted for
+a kernel the sandbox does not provide. The assertions on the same run: both
+dangling links gone, the resolvable link still a symlink that resolves, the
+plain file and the canary untouched, and no announcement naming
+`kernel-7.3.4-100.fc43.x86_64-x86_64`. The planted control
+`plant_dangling_link_kept` deletes the loop and is rejected with
+`the second dangling kernel link survived`.
+
+======== 6. host state observed after the owner's recovery (not the -3 fix) ========
+
+Captured 2026-11-21 13:3x UTC from this account, `LC_ALL=C`:
+
+    $ rpm -q sm750hdmifb
+    sm750hdmifb-0.6.2-2.fc43.noarch
+    $ rpm -q --qf "%{INSTALLTIME:date}\n" sm750hdmifb
+    Sat Nov 21 12:55:21 2026
+    $ ls -l /var/lib/dkms/sm750hdmifb/
+    total 0
+    drwxr-xr-x 5 root root 108 Nov 21 12:58 0.6.2
+    lrwxrwxrwx 1 root root 35 Nov 21 12:55 kernel-7.2.15-100.fc43.x86_64-x86_64 -> 0.6.2/7.2.15-100.fc43.x86_64/x86_64
+    lrwxrwxrwx 1 root root 34 Nov 21 12:57 kernel-7.3.3-100.fc43.x86_64-x86_64 -> 0.6.2/7.3.3-100.fc43.x86_64/x86_64
+    lrwxrwxrwx 1 root root 34 Nov 21 12:58 kernel-7.3.4-100.fc43.x86_64-x86_64 -> 0.6.2/7.3.4-100.fc43.x86_64/x86_64
+    drwxr-xr-x 5 root root 94 Nov 21 12:58 original_module
+    $ dkms status -m sm750hdmifb
+    sm750hdmifb/0.6.2, 7.2.15-100.fc43.x86_64, x86_64: installed (Original modules exist)
+    sm750hdmifb/0.6.2, 7.3.3-100.fc43.x86_64, x86_64: installed (Original modules exist)
+    sm750hdmifb/0.6.2, 7.3.4-100.fc43.x86_64, x86_64: installed (Original modules exist)
+    $ cat /sys/module/sm750hdmidrm/version
+    0.6.2
+    $ uname -r
+    7.3.4-100.fc43.x86_64
+
+The 0.6.1 tree is absent and `/usr/src/sm750hdmifb-0.6.2` is present (mtime
+12:55). The links now resolve, and each was rewritten at the moment its kernel
+was installed, so the premise state of section 1 no longer exists on this
+host. The commands that cleared it were the owner's recovery, run interactively
+as root; this file does not claim they were the 0.6.2-3 loop.
+
+======== 7. NOT YET OBSERVED ON THE HOST ========
+
+- The 0.6.2-3 package install, and therefore the new loop removing a real
+  dangling link during a real `dnf install`. It needs root; the runbook is
+  `docs/ROOT-ACTIONS.md` section 3.7.
+- Which exact commands the owner used to clear the three links in section 6.
+- A host run in which the purge and the 0.6.2 tree coexist, that is the 0.6.2-3
+  %posttrans clearing a dangling link before building.

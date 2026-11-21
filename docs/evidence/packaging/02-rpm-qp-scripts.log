@@ -1,7 +1,7 @@
-# utc: 2026-11-21T07:56:38Z
+# utc: 2026-11-21T11:18:11Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
-# command: rpm -qp --scripts /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-2.fc43.noarch.rpm
+# command: rpm -qp --scripts /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-3.fc43.noarch.rpm
 # workdir: 
 
 --- output ---
@@ -131,6 +131,30 @@ dkms status 2>/dev/null | while IFS= read -r status_line; do
 	if [ -d "$stale_tree" ] && [ ! -r "$stale_tree/source/dkms.conf" ]; then
 		echo "warning: removing broken DKMS registration tree: $stale_tree" >&2
 		rm -rf -- "$stale_tree"
+	fi
+done
+
+# Second shape of the same leftover (defect A40), and the loop above cannot see
+# it. do_install() in dkms 3.4.4 (/usr/sbin/dkms:1768) builds the active-version
+# link path "$dkms_tree/$module/kernel-$kernelver-$arch", derives the version
+# from the link target alone (:1783-1784, "old_active_version=${old_active_version%/*}")
+# without checking that the version is still registered or still on disk, and
+# at :1866-1868 runs "do_uninstall" for it, dying with die 6
+# ("Failed to uninstall ...") when that fails. A dangling active link is not a
+# dkms registration, so "dkms status" never lists it: the version loop above
+# iterates registrations and skips it, and the link alone is then enough to
+# abort "dkms install" for that kernel. Clearing the link is safe because dkms
+# recreates it on the next successful install and installs nothing through it.
+# Bounded by construction: only symlinks under "$dkms_root/sm750hdmifb" whose
+# name starts with "kernel-" are considered, and a link that resolves is never
+# touched. dkms always points these links at a version directory
+# ("<version>/<kernel>/<arch>"), so -d with a trailing slash is the resolution
+# test; a regular file or directory that merely shares the name is skipped.
+for dkms_link in "$dkms_root/sm750hdmifb"/kernel-*; do
+	[ -L "$dkms_link" ] || continue
+	if [ ! -d "$dkms_link/" ]; then
+		echo "removing dangling DKMS kernel link: $dkms_link" >&2
+		rm -f -- "$dkms_link"
 	fi
 done
 

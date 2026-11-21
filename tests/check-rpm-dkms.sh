@@ -13,9 +13,11 @@
 # unregister because its dkms.conf is gone (A37) - including when one removal
 # fails (dkms exit 4): the purge then warns, keeps exit 0 and continues with
 # the remaining versions. A version that is not a plain release token never
-# reaches a path. Also asserts that dkms.conf carries no directive dkms 3.4.4
-# reports as deprecated (A38), and that the console helper prints its
-# zero-frame hint only for the zero-frame crc32 (A39).
+# reaches a path. A dangling DKMS active-version link (kernel-<kernel>-<arch>
+# pointing at a version rpm already erased) is removed by a second loop without
+# touching a link that resolves (A40). Also asserts that dkms.conf carries no
+# directive dkms 3.4.4 reports as deprecated (A38), and that the console helper
+# prints its zero-frame hint only for the zero-frame crc32 (A39).
 # Root-only install assertions are skipped with a printed
 # reason (docs/evidence/EVIDENCE-GAPS.md, GAP-B7).
 #
@@ -230,6 +232,26 @@ grep -F 'if [ "$stale_version" = "%{dkms_version}" ]; then' "$spec" >/dev/null |
 	fail "spec purge is not written against %{dkms_version}"
 grep -F "$purge_marker" "$spec" >/dev/null ||
 	fail "spec has no stale-registration purge"
+# A40: the active-version link. do_install() derives the version it uninstalls
+# from "$dkms_tree/$module/kernel-<kver>-<arch>" alone (/usr/sbin/dkms:1768,
+# :1783-1784, :1866-1868), so a link whose target rpm erased aborts the install
+# with die 6 even though "dkms status" has no row for it: a dangling link is not
+# a registration, so the version purge above cannot see it. The link purge must
+# exist, must run after the version purge (which may delete the very version a
+# link still points at) and before the build loop.
+link_marker='removing dangling DKMS kernel link'
+printf '%s\n' "$posttrans" | grep -F "$link_marker" >/dev/null ||
+	fail "%posttrans does not clear a dangling DKMS kernel link"
+link_line=$(printf '%s\n' "$posttrans" |
+	grep -nF "$link_marker" | head -n 1 | cut -d: -f1)
+[ "$link_line" -gt "$purge_line" ] ||
+	fail "the dangling-link purge starts before the version purge (line $link_line vs $purge_line)"
+[ "$link_line" -lt "$build_loop_line" ] ||
+	fail "the dangling-link purge starts after the build loop (line $link_line, loop line $build_loop_line)"
+grep -F "$link_marker" "$spec" >/dev/null ||
+	fail "spec has no dangling-link purge"
+printf '%s\n' "$posttrans" | grep -F 'rm -f -- "$dkms_link"' >/dev/null ||
+	fail "the dangling-link purge does not remove the link with rm -f"
 
 for body in "$postin" "$posttrans" "$preun"; do
 	printf '%s\n' "$body" |
@@ -611,6 +633,63 @@ unsafe_scenario "$sandbox/posttrans.sh" "$sandbox/unsafe" ||
 unsafe_transcript=$(cat "$sandbox/unsafe/transcript.txt")
 unsafe_calls=$(cat "$sandbox/unsafe/calls.log")
 
+# --- A40: a dangling active-version link must not block the install ----------
+# Host state measured before this task: /var/lib/dkms/sm750hdmifb/ carries one
+# "kernel-<kernel>-x86_64" symlink per installed kernel, each pointing at
+# 0.6.1/<kernel>/x86_64 with no such directory on disk, so dkms cannot uninstall
+# the version it reads out of the link and aborts "dkms install" for that
+# kernel. The purge must remove exactly those links, keep a link that resolves,
+# leave non-symlinks and paths outside the module tree alone, and still run the
+# version-based purge.
+dangling_link_scenario() { # posttrans script, scenario root; 0 when every property held
+	local script=$1 root=$2 rc=0 out links
+	rm -rf -- "$root"
+	mkdir -p "$root/modules" \
+		"$root/dkmsroot/sm750hdmifb/0.6.2/7.3.4-100.fc43.x86_64/x86_64" \
+		"$root/dkmsroot/sm750hdmifb/0.6.0/source"
+	: >"$root/dkmsroot/canary"
+	: >"$root/dkmsroot/sm750hdmifb/0.6.0/source/dkms.conf"
+	: >"$root/dkmsroot/sm750hdmifb/kernel-not-a-link"
+	ln -s 0.6.2/7.3.4-100.fc43.x86_64/x86_64 \
+		"$root/dkmsroot/sm750hdmifb/kernel-7.3.4-100.fc43.x86_64-x86_64"
+	ln -s 0.6.1/7.2.15-100.fc43.x86_64/x86_64 \
+		"$root/dkmsroot/sm750hdmifb/kernel-7.2.15-100.fc43.x86_64-x86_64"
+	ln -s 0.6.1/7.3.3-100.fc43.x86_64/x86_64 \
+		"$root/dkmsroot/sm750hdmifb/kernel-7.3.3-100.fc43.x86_64-x86_64"
+	cat >"$root/status.txt" <<'EOF'
+sm750hdmifb/0.6.0, 7.3.4-100.fc43.x86_64, x86_64: built
+EOF
+	out=$(SHIM_LOG=$root/calls.log SHIM_STATUS=$root/status.txt \
+		SM750_RPM_MODULES_ROOT=$root/modules \
+		SM750_RPM_DKMS_ROOT=$root/dkmsroot \
+		PATH="$sandbox/bin:$PATH" sh "$script" 2>&1) || rc=$?
+	printf '%s\n' "$out" >"$root/transcript.txt"
+	[ "$rc" -eq 0 ] || { echo "exit $rc"; return 1; }
+	[ ! -e "$root/dkmsroot/sm750hdmifb/kernel-7.2.15-100.fc43.x86_64-x86_64" ] ||
+		{ echo "a dangling kernel link survived"; return 1; }
+	[ ! -L "$root/dkmsroot/sm750hdmifb/kernel-7.3.3-100.fc43.x86_64-x86_64" ] ||
+		{ echo "the second dangling kernel link survived"; return 1; }
+	[ -L "$root/dkmsroot/sm750hdmifb/kernel-7.3.4-100.fc43.x86_64-x86_64" ] &&
+		[ -d "$root/dkmsroot/sm750hdmifb/kernel-7.3.4-100.fc43.x86_64-x86_64/" ] ||
+		{ echo "the resolvable kernel link was removed"; return 1; }
+	[ -e "$root/dkmsroot/sm750hdmifb/kernel-not-a-link" ] ||
+		{ echo "a path that is not a symlink was removed"; return 1; }
+	[ -e "$root/dkmsroot/canary" ] ||
+		{ echo "a path outside the module tree was removed"; return 1; }
+	printf '%s\n' "$out" |
+		grep -F "removing dangling DKMS kernel link: $root/dkmsroot/sm750hdmifb/kernel-7.2.15-100.fc43.x86_64-x86_64" >/dev/null ||
+		{ echo "the dangling link was not announced"; return 1; }
+	links=$(printf '%s\n' "$out" | grep -F "$link_marker" || true)
+	printf '%s\n' "$links" | grep -F 'kernel-7.3.4-100.fc43.x86_64-x86_64' >/dev/null &&
+		{ echo "the resolvable link was announced as dangling"; return 1; }
+	grep -F 'dkms remove -m sm750hdmifb -v 0.6.0 --all' "$root/calls.log" >/dev/null ||
+		{ echo "the version-based purge stopped running"; return 1; }
+	return 0
+}
+dangling_link_scenario "$sandbox/posttrans.sh" "$sandbox/dangling" ||
+	fail "a dangling DKMS kernel link survived the purge: $(cat "$sandbox/dangling/transcript.txt" 2>/dev/null)"
+dangling_transcript=$(cat "$sandbox/dangling/transcript.txt")
+
 # --- A38/A39: dead dkms directive, unconditional console hint --------------
 # dkms 3.4.4 reads CLEAN only to print "Deprecated feature: CLEAN"
 # (/usr/sbin/dkms:582-585 is the sole occurrence in the whole script); the
@@ -694,6 +773,12 @@ plant_unsafe_version() {
 		-e '*[!0-9A-Za-z._-]*) continue ;;' "$1" >"$1.planted"
 	mv "$1.planted" "$1"
 }
+plant_no_link_purge() {
+	awk '/^for dkms_link in / { skip = 1 }
+		skip && /^done$/ { skip = 0; next }
+		!skip' "$1" >"$1.planted"
+	mv "$1.planted" "$1"
+}
 plant_clean_directive() {
 	printf 'CLEAN="make KDIR=${kernel_source_dir} clean"\n' >>"$1"
 }
@@ -713,6 +798,8 @@ plant_functional broken_tree_escalation "$sandbox/posttrans.sh" \
 	plant_no_tree_escalation broken_scenario
 plant_functional unsafe_version "$sandbox/posttrans.sh" \
 	plant_unsafe_version unsafe_scenario
+plant_functional dangling_link_kept "$sandbox/posttrans.sh" \
+	plant_no_link_purge dangling_link_scenario
 
 {
 	log_header "sh posttrans.sh with SM750_RPM_MODULES_ROOT (rootless)"
@@ -755,6 +842,15 @@ plant_functional unsafe_version "$sandbox/posttrans.sh" \
 	printf '%s\n' "$unsafe_transcript"
 	printf '%s\n' '--- recorded calls (unsafe-version run) ---'
 	printf '%s\n' "$unsafe_calls"
+	printf '%s\n' '--- dangling DKMS kernel link (A40), dkms root in the sandbox ---'
+	printf '%s\n' 'state: /var/lib/dkms/sm750hdmifb/kernel-7.2.15-... and'
+	printf '%s\n' 'kernel-7.3.3-... point at 0.6.1/<kernel>/x86_64, which rpm erased'
+	printf '%s\n' 'earlier; do_install() reads the version out of the link and dies 6'
+	printf '%s\n' 'trying to uninstall it, so no kernel receives the module. The purge'
+	printf '%s\n' 'must remove both links, keep the resolvable one and the version purge.'
+	printf '%s\n' "$dangling_transcript"
+	printf '%s\n' '--- recorded calls (dangling-link run) ---'
+	cat "$sandbox/dangling/calls.log"
 	printf '%s\n' '--- planted defects (each must be rejected) ---'
 	printf 'rejected:%s\ntotal: %s\n' "$control_lines" "$controls"
 } >"$evidence/06-posttrans-missing-headers.log" 2>&1
@@ -763,6 +859,7 @@ note "stale purge: sm750hdmifb/0.5.9 and 0.6.0 removed, 0.6.2 and other module n
 note "failed removal: dkms exit 4 downgraded to the spec warning, exit 0, loop continued"
 note "broken 0.6.1 tree: deleted before the build loop, install still attempted, exit 0"
 note "unsafe status field: skipped before any path is formed, dkms root intact"
+note "dangling kernel link: removed before the build loop, resolvable link kept, exit 0"
 note "dkms.conf has no CLEAN directive; console zero-frame hint is conditional"
 note "planted controls: $controls rejected"
 

@@ -19,7 +19,7 @@
 
 Name:           sm750hdmifb
 Version:        0.6.2
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        DKMS source for the SM750G10 SiI9024A HDMI DRM-KMS driver
 License:        GPL-2.0-only
 URL:            https://github.com/KodeMunkie/sm750hdmifb
@@ -226,6 +226,30 @@ dkms status 2>/dev/null | while IFS= read -r status_line; do
 	fi
 done
 
+# Second shape of the same leftover (defect A40), and the loop above cannot see
+# it. do_install() in dkms 3.4.4 (/usr/sbin/dkms:1768) builds the active-version
+# link path "$dkms_tree/$module/kernel-$kernelver-$arch", derives the version
+# from the link target alone (:1783-1784, "old_active_version=${old_active_version%%/*}")
+# without checking that the version is still registered or still on disk, and
+# at :1866-1868 runs "do_uninstall" for it, dying with die 6
+# ("Failed to uninstall ...") when that fails. A dangling active link is not a
+# dkms registration, so "dkms status" never lists it: the version loop above
+# iterates registrations and skips it, and the link alone is then enough to
+# abort "dkms install" for that kernel. Clearing the link is safe because dkms
+# recreates it on the next successful install and installs nothing through it.
+# Bounded by construction: only symlinks under "$dkms_root/%{dkms_name}" whose
+# name starts with "kernel-" are considered, and a link that resolves is never
+# touched. dkms always points these links at a version directory
+# ("<version>/<kernel>/<arch>"), so -d with a trailing slash is the resolution
+# test; a regular file or directory that merely shares the name is skipped.
+for dkms_link in "$dkms_root/%{dkms_name}"/kernel-*; do
+	[ -L "$dkms_link" ] || continue
+	if [ ! -d "$dkms_link/" ]; then
+		echo "removing dangling DKMS kernel link: $dkms_link" >&2
+		rm -f -- "$dkms_link"
+	fi
+done
+
 built_count=0
 for kernel_dir in "$modules_root"/*; do
 	[ -d "$kernel_dir" ] || continue
@@ -328,6 +352,17 @@ exit 0
 %doc README.md LICENSE docs/RELEASE-NOTES.md docs/TESTING.md packaging/copyright
 
 %changelog
+* Sat Nov 21 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.2-3
+- The stale purge in %posttrans now also clears a dangling DKMS active-version
+  link. 0.6.2-2 moved the purge ahead of the build loop, but a host whose
+  /var/lib/dkms/sm750hdmifb/kernel-<kernel>-<arch> link still points at a
+  version rpm erased an earlier time kept failing: do_install() in dkms 3.4.4
+  reads the version out of that link target without checking that it is still
+  registered, uninstalls it before installing the new version, and dies 6 when
+  that fails, so no kernel received the module while "dkms status" listed only
+  the new version. A dangling link is not a registration, so the
+  version-driven purge could not see it; the second loop removes it before the
+  build loop, leaves a link that resolves and any other path alone.
 * Sat Nov 21 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.2-2
 - The stale-registration purge in %posttrans now runs before the DKMS build
   loop: a registration left broken by an earlier package (version directory

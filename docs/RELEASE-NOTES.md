@@ -53,6 +53,17 @@ and `tools/sm750-console.sh` prints its zero-frame hint only when the scanout
 CRC really is `0xe20eea22` (A39). Not yet observed on the host: the 0.6.2-2
 install needs root, and the runbook is `docs/ROOT-ACTIONS.md` section 3.6.
 
+**Packaging: 0.6.2-3** (same source, RPM `Release` 3). 0.6.2-2 fixed the order
+but not the whole leftover: the host also carried a dangling DKMS
+active-version link per kernel (`/var/lib/dkms/sm750hdmifb/kernel-<kernel>-<arch>`
+pointing at the erased `0.6.1/<kernel>/x86_64`), and `do_install()` in dkms
+3.4.4 reads the version out of that link without checking that it is registered,
+so `dkms install` still died trying to uninstall `0.6.1` and no kernel received
+the module (A40). A second purge loop, after the version purge and before the
+build loop, now removes a link that does not resolve and leaves a link that
+does. Not yet observed on the host: the install needs root, and the runbook is
+`docs/ROOT-ACTIONS.md` section 3.7.
+
 ## 0.6.1 - Display-control transition, blank-console diagnostic
 
 - **A modeset no longer fails on this panel.** The display-control transition

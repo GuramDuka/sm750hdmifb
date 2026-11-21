@@ -66,8 +66,8 @@ rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb.spec
 Artifacts (131 tracked files in the tarball, 36 files in the RPM):
 
 ```
-/mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-0.6.2-2.fc43.src.rpm
-/mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-2.fc43.noarch.rpm
+/mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-0.6.2-3.fc43.src.rpm
+/mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-3.fc43.noarch.rpm
 ```
 
 `rpmbuild -ba` exits `0`; the transcript is
@@ -86,7 +86,7 @@ Root only by definition: the payload owns `/usr/src`, `/etc` and
 `/var/lib/dkms`.
 
 ```sh
-sudo dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-2.fc43.noarch.rpm
+sudo dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-3.fc43.noarch.rpm
 sudo dkms status -m sm750hdmifb -v 0.6.2     # expected: ..., <kernel>: installed
 sudo modprobe sm750hdmidrm                   # requires a free DRM minor
 sudo dnf remove -y sm750hdmifb               # erase; %preun unregisters
@@ -179,6 +179,38 @@ must remain, `0.6.2`, `installed` for every installed kernel, with no `0.5.9`
 row and no `: added` line. The purge is idempotent - a second install finds
 nothing to remove.
 
+### The active-version link, a second shape of the leftover (A40)
+
+A registration is not the only thing that survives an erase. For every kernel
+dkms has built this module for, the tree also carries
+`/var/lib/dkms/sm750hdmifb/kernel-<kernel>-<arch>`, a symlink to
+`<version>/<kernel>/<arch>`. On this host the three of them still pointed at
+`0.6.1`, a version rpm had erased, and nothing listed them: `dkms status` shows
+registrations, and a dangling link is not one.
+
+That link is enough to abort an install. `do_install()` in dkms 3.4.4
+(`/usr/sbin/dkms:1768`) computes
+`active_link="$dkms_tree/$module/kernel-$kernelver-$arch"`; `:1783-1784` runs
+`old_active_version=$(readlink "$active_link")` and
+`old_active_version=${old_active_version%%/*}`, so the version comes from the
+link target alone with no check that it is still registered or still on disk;
+`:1866-1868` then runs `delayed_depmod=1 do_uninstall "$kernelver" "$arch"` for
+that version and exits `die 6` when it fails. `do_uninstall` needs
+`$dkms_tree/$module/$module_version/source/dkms.conf`, which the erase removed,
+so every kernel aborted before installing anything, the only visible record
+being `dkms status -m sm750hdmifb` with `0.6.2, <kernel>, x86_64: built`.
+
+The purge therefore clears these links in a second loop, after the version loop
+and before the build loop (`packaging/sm750hdmifb.spec:245-251`):
+`for dkms_link in "$dkms_root/%{dkms_name}"/kernel-*`, `[ -L "$dkms_link" ] ||
+continue`, and only when `[ ! -d "$dkms_link/" ]` - dkms always targets a
+version directory, so `-d` with a trailing slash is the resolution test -
+`echo "removing dangling DKMS kernel link: $dkms_link" >&2` then
+`rm -f -- "$dkms_link"`. A link that resolves is never touched, a regular file
+or directory that merely shares the name prefix is skipped by `-L`, and nothing
+outside `"$dkms_root/%{dkms_name}"` is considered. Removal is safe: the next
+successful install recreates the link, and dkms installs nothing through it.
+
 
 ### When a removal fails (exit-code semantics)
 
@@ -242,7 +274,7 @@ the *source* tree is the leftover, the remedy is manual:
 
 ```sh
 sudo rm -rf /usr/src/sm750hdmifb-<version>
-sudo dnf reinstall -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-2.fc43.noarch.rpm  # re-runs %posttrans
+sudo dnf reinstall -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-3.fc43.noarch.rpm  # re-runs %posttrans
 ```
 
 The purge is idempotent, so re-running it costs nothing; a second pass finds
@@ -270,7 +302,7 @@ never `$HOME`, archives output in `docs/evidence/packaging/` (override
 
 ```
 OK: source payload matches git ls-files (131 files)
-OK: rpmbuild -ba exit 0: sm750hdmifb-0.6.2-2.fc43.src.rpm, sm750hdmifb-0.6.2-2.fc43.noarch.rpm
+OK: rpmbuild -ba exit 0: sm750hdmifb-0.6.2-3.fc43.src.rpm, sm750hdmifb-0.6.2-3.fc43.noarch.rpm
 OK: dependencies: BuildRequires 4, runtime dkms, post dkms+kmod, preun dkms
 OK: scriptlets: add in %post, build+install+depmod in %posttrans, remove in %preun, no %postun
 OK: %files: 36 files, 4 owned directories, 2 %config(noreplace) entries
@@ -279,16 +311,18 @@ plant_clean_directive: rejected
 plant_unconditional_hint: rejected
 plant_broken_tree_escalation: rejected (no broken-tree warning)
 plant_unsafe_version: rejected (an unsafe version reached dkms remove)
+plant_dangling_link_kept: rejected (the second dangling kernel link survived)
 OK: missing headers: warning on stderr, exit 0; purge, build, install, depmod sequence verified
 OK: stale purge: sm750hdmifb/0.5.9 and 0.6.0 removed, 0.6.2 and other module names untouched
 OK: failed removal: dkms exit 4 downgraded to the spec warning, exit 0, loop continued
 OK: broken 0.6.1 tree: deleted before the build loop, install still attempted, exit 0
 OK: unsafe status field: skipped before any path is formed, dkms root intact
+OK: dangling kernel link: removed before the build loop, resolvable link kept, exit 0
 OK: dkms.conf has no CLEAN directive; console zero-frame hint is conditional
-OK: planted controls: 5 rejected
+OK: planted controls: 6 rejected
 OK: dkms sandbox: sm750hdmifb/0.6.2, 7.3.4-100.fc43.x86_64, x86_64: built
 OK: built object: /mega/tmp/sm750/t6/dkms/sm750hdmifb/0.6.2/7.3.4-100.fc43.x86_64/x86_64/module/sm750hdmidrm.ko (361400 bytes, host tree untouched)
-SKIP: dnf install sm750hdmifb-0.6.2-2.fc43.noarch.rpm: needs root (writes /usr/src, /etc, /var/lib/dkms)
+SKIP: dnf install sm750hdmifb-0.6.2-3.fc43.noarch.rpm: needs root (writes /usr/src, /etc, /var/lib/dkms)
 SKIP: dkms status showing 'installed' in the host tree: needs root, follows the skipped dnf install
 SKIP: dkms install (even with --installtree): 'Error! You must be root to use this command.'
 SKIP: dkms remove -m sm750hdmifb -v 0.5.9 --all in the host tree: not in the sudoers allowlist (only -v 0.6.2 is); the purge runs inside the RPM %posttrans instead, and the rootless run above proves the call sequence
@@ -296,7 +330,7 @@ SKIP: modinfo of the installed module: needs root, follows the skipped dnf insta
 SKIP: dnf remove sm750hdmifb: needs root and the skipped dnf install
 SKIP: dkms status after erase (registration gone): needs root, follows the skipped dnf remove
 SKIP: closing commands recorded in docs/evidence/EVIDENCE-GAPS.md GAP-B7
-RPM/DKMS checks passed: sm750hdmifb 0.6.2, sandbox built, 5 planted controls rejected, root-only steps skipped
+RPM/DKMS checks passed: sm750hdmifb 0.6.2, sandbox built, 6 planted controls rejected, root-only steps skipped
 ```
 
 Exit codes: `0` every assertion held; `1` first failed assertion (reason on
@@ -311,7 +345,7 @@ from a fresh `_topdir`, `rpm -qpR` / `rpm -qp --scripts` / `rpm -qp --qf` /
 `dkms`/`depmod` shims over sandbox module and DKMS roots (canned `dkms status`
 listings that prove the purge runs before the build loop, removes every other
 registered version at most once, deletes one demonstrably broken tree, and
-never lets an unsafe version token reach a path), five planted controls that
+never lets an unsafe version token reach a path), six planted controls that
 must each be rejected, and a real DKMS `add` + `build` producing
 `sm750hdmidrm.ko` with a matching vermagic. `dkms install` is the one step that cannot be sandboxed: it refuses
 a non-root caller even with `--dkmstree`, `--sourcetree` and `--installtree`
