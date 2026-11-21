@@ -1,4 +1,4 @@
-# utc: 2026-11-21T06:05:43Z
+# utc: 2026-11-21T06:19:25Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
 # command: rpmbuild -ba --define '_topdir /mega/tmp/sm750/t6/rpmbuild' /home/coder/sm750hdmifb/packaging/sm750hdmifb.spec
@@ -8,8 +8,8 @@
 Платформы для сборки: noarch
 Сборка для платформы noarch
 setting SOURCE_DATE_EPOCH=1795219200
-Выполняется(%mkbuilddir): /bin/sh -e /var/tmp/rpm-tmp.lcXRIK
-Выполняется(%prep): /bin/sh -e /var/tmp/rpm-tmp.gZWlcV
+Выполняется(%mkbuilddir): /bin/sh -e /var/tmp/rpm-tmp.JfxW6e
+Выполняется(%prep): /bin/sh -e /var/tmp/rpm-tmp.NiVINW
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.2-build
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.2-build
@@ -22,7 +22,7 @@ setting SOURCE_DATE_EPOCH=1795219200
 + RPM_EC=0
 ++ jobs -p
 + exit 0
-Выполняется(%build): /bin/sh -e /var/tmp/rpm-tmp.dBPqMl
+Выполняется(%build): /bin/sh -e /var/tmp/rpm-tmp.Y0SifE
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.2-build
 + CFLAGS='-O2 -flto=auto -ffat-lto-objects -fexceptions -g -grecord-gcc-switches -pipe -Wall -Werror=format-security -Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3 -Wp,-D_GLIBCXX_ASSERTIONS -specs=/usr/lib/rpm/redhat/redhat-hardened-cc1 -fstack-protector-strong -specs=/usr/lib/rpm/redhat/redhat-annobin-cc1  -m64 -march=x86-64 -mtune=generic -fasynchronous-unwind-tables -fstack-clash-protection -fcf-protection -mtls-dialect=gnu2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer  '
@@ -49,7 +49,7 @@ setting SOURCE_DATE_EPOCH=1795219200
 + RPM_EC=0
 ++ jobs -p
 + exit 0
-Выполняется(%install): /bin/sh -e /var/tmp/rpm-tmp.zWdFVu
+Выполняется(%install): /bin/sh -e /var/tmp/rpm-tmp.xiReBa
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.2-build
 + '[' /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.2-build/BUILDROOT '!=' / ']'
@@ -113,7 +113,7 @@ Scanned 13 directories and 31 files,
                0 modified (0 replaced + 0 rewritten),
                0 unsupported format, 0 errors
 Processing files: sm750hdmifb-0.6.2-1.fc43.noarch
-Выполняется(%doc): /bin/sh -e /var/tmp/rpm-tmp.c2sHNw
+Выполняется(%doc): /bin/sh -e /var/tmp/rpm-tmp.6iEawK
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.2-build
 + cd sm750hdmifb-0.6.2
@@ -141,7 +141,7 @@ Obsoletes: sm750hdmi-dkms < 0.6.2 sm750hdmidrm-rgb565-dither-dkms < 0.6.2 sm750h
 Проверка на неупакованный(е) файл(ы): /usr/lib/rpm/check-files /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.2-build/BUILDROOT
 Записан: /mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-0.6.2-1.fc43.src.rpm
 Записан: /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-1.fc43.noarch.rpm
-Выполняется(rmbuild): /bin/sh -e /var/tmp/rpm-tmp.79xkpY
+Выполняется(rmbuild): /bin/sh -e /var/tmp/rpm-tmp.CFx3wa
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.2-build
 + test -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.2-build
