@@ -4007,6 +4007,14 @@ static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 		sdev->backbuffer_ready = false;
 		sdev->backbuffer_available = false;
 		sdev->backbuffer_mirror = false;
+		/*
+		 * Not a reset of stale device state: these two become the
+		 * front buffer that the full-frame upload below fills and
+		 * that sm750_program_mode() points PANEL_FB_ADDRESS at.
+		 * The test card and its bounds check address VRAM through
+		 * scanout_offset too, so all three must agree: never carry
+		 * the previous offset across the enable.
+		 */
 		sdev->scanout_offset = 0;
 		sdev->shadow_upload_offset = 0;
 		sdev->softscale_active = sm750_mode_is_softscaled(

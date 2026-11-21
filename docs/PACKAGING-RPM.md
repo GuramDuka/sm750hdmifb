@@ -307,7 +307,27 @@ cd /path/to/sm750hdmifb
 
 Rootless; writes only under `/mega/tmp/sm750/t6` (override `SM750_RPM_WORK`),
 never `$HOME`, archives output in `docs/evidence/packaging/` (override
-`SM750_RPM_EVIDENCE`). Expected on Fedora 43 with kernel 7.3.4-100:
+`SM750_RPM_EVIDENCE`).
+
+The transcripts are the tool output verbatim, so every captured command runs
+under `LC_ALL=C LANG=C` (`tests/check-rpm-dkms.sh:32-33`): a localized host
+would otherwise commit translated `rpm`/`rpmbuild` messages, which is exactly
+what happened before T45 (11 non-ASCII lines in `01-rpmbuild.log`, 40 in
+`03-rpm-qlp.log`, 1 in `05-dkms-sandbox.log`). Nothing post-processes the
+output; the capture environment is the fix. After the last transcript is
+written, `transcripts_ascii` (`tests/check-rpm-dkms.sh:89`, called at `:1002`) fails the run on
+any non-ASCII byte in
+`docs/evidence/packaging/0[1-6]-*.log` and prints each offending file with its
+line numbers, so the defect cannot come back silently. The planted control
+`plant_localized_evidence` injects one Russian `rpmbuild` status line (as octal
+escapes, so the script itself stays ASCII) into a copy of `01-rpmbuild.log` and
+must be rejected. This was an evidence-hygiene fix, not a shipped-behaviour
+defect: the spec, the driver and the packaged payload are unchanged. The
+`docs/evidence/packaging/0.5.9/` archive is the frozen transcript of the
+rejected 0.5.9 revision, produced before the C-locale capture; it is kept
+unedited as the historical record and is not covered by the gate.
+
+Expected on Fedora 43 with kernel 7.3.4-100:
 
 ```
 OK: source payload matches git ls-files (131 files)
@@ -321,6 +341,7 @@ plant_unconditional_hint: rejected
 plant_broken_tree_escalation: rejected (no broken-tree warning)
 plant_unsafe_version: rejected (an unsafe version reached dkms remove)
 plant_dangling_link_kept: rejected (the second dangling kernel link survived)
+plant_localized_evidence: rejected
 OK: missing headers: warning on stderr, exit 0; purge, build, install, depmod sequence verified
 OK: stale purge: sm750hdmifb/0.5.9 and 0.6.0 removed, 0.6.2 and other module names untouched
 OK: failed removal: dkms exit 4 downgraded to the spec warning, exit 0, loop continued
@@ -328,7 +349,8 @@ OK: broken 0.6.1 tree: deleted before the build loop, install still attempted, e
 OK: unsafe status field: skipped before any path is formed, dkms root intact
 OK: dangling kernel link: removed before the build loop, resolvable link kept, exit 0
 OK: dkms.conf has no CLEAN directive; console zero-frame hint is conditional
-OK: planted controls: 6 rejected
+OK: planted controls: 7 rejected
+OK: evidence transcripts 01-06: no non-ASCII byte, captured under LC_ALL=C
 OK: dkms sandbox: sm750hdmifb/0.6.2, 7.3.4-100.fc43.x86_64, x86_64: built
 OK: built object: /mega/tmp/sm750/t6/dkms/sm750hdmifb/0.6.2/7.3.4-100.fc43.x86_64/x86_64/module/sm750hdmidrm.ko (361400 bytes, host tree untouched)
 SKIP: dnf install sm750hdmifb-0.6.2-3.fc43.noarch.rpm: needs root (writes /usr/src, /etc, /var/lib/dkms)
@@ -339,7 +361,7 @@ SKIP: modinfo of the installed module: needs root, follows the skipped dnf insta
 SKIP: dnf remove sm750hdmifb: needs root and the skipped dnf install
 SKIP: dkms status after erase (registration gone): needs root, follows the skipped dnf remove
 SKIP: closing commands recorded in docs/evidence/EVIDENCE-GAPS.md GAP-B7
-RPM/DKMS checks passed: sm750hdmifb 0.6.2, sandbox built, 6 planted controls rejected, root-only steps skipped
+RPM/DKMS checks passed: sm750hdmifb 0.6.2, sandbox built, 7 planted controls rejected, root-only steps skipped
 ```
 
 Exit codes: `0` every assertion held; `1` first failed assertion (reason on
@@ -359,7 +381,7 @@ from a fresh `_topdir`, `rpm -qpR` / `rpm -qp --scripts` / `rpm -qp --qf` /
 `dkms`/`depmod` shims over sandbox module and DKMS roots (canned `dkms status`
 listings that prove the purge runs before the build loop, removes every other
 registered version at most once, deletes one demonstrably broken tree, and
-never lets an unsafe version token reach a path), six planted controls that
+never lets an unsafe version token reach a path), seven planted controls that
 must each be rejected, and a real DKMS `add` + `build` producing
 `sm750hdmidrm.ko` with a matching vermagic. `dkms install` is the one step that cannot be sandboxed: it refuses
 a non-root caller even with `--dkmstree`, `--sourcetree` and `--installtree`

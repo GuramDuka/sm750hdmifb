@@ -1,4 +1,4 @@
-# utc: 2026-11-21T12:21:42Z
+# utc: 2026-11-21T15:54:19Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
 # command: sh posttrans.sh with SM750_RPM_MODULES_ROOT (rootless)
@@ -94,5 +94,5 @@ warning: no kernel received the module; check the warnings above and run: dkms i
 dkms status
 dkms remove -m sm750hdmifb -v 0.6.0 --all
 --- planted defects (each must be rejected) ---
-rejected: plant_purge_after_build plant_clean_directive plant_unconditional_hint plant_broken_tree_escalation plant_unsafe_version plant_dangling_link_kept
-total: 6
+rejected: plant_purge_after_build plant_clean_directive plant_unconditional_hint plant_broken_tree_escalation plant_unsafe_version plant_dangling_link_kept plant_localized_evidence
+total: 7

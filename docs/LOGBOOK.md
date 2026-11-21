@@ -2859,3 +2859,72 @@ and make crc-check all exit 0; four kernel builds exit 0.
   `tests/check-rpm-dkms.sh:644-691`.
 - Gates: ASCII 0 on all four touched files; `./build-package.sh` and
   `./tests/audit-release.sh` exit 0 after the logbook edit.
+
+### 2026-11-21T18:55Z | orchestrator | T44-T47: R3 closed as not-a-defect, evidence locale fixed, gaps re-run on hardware
+
+- T44 (gem-debugger, read-only) answered the long-open suspicion R3: it is not a
+  defect. `sm750_pipe_enable()` resets `scanout_offset` and
+  `shadow_upload_offset` to zero (`src/sm750_drm.c:4018-4019`, comment added by
+  T47 at `:4010-4017`), and in the same function the full-frame upload
+  (`src/sm750_drm.c:4053-4058`) fills exactly that offset while
+  `sm750_program_mode()` points `PANEL_FB_ADDRESS` at it (`:4076-4077`). The
+  test card (`:3676`) and its bounds check (`:3712`) read the same field, so all
+  three agree. Nothing pending is dropped: the staged-frame flip is actionable
+  only while `backbuffer_ready` (`:2417-2440`, `:2442-2479`, cleared at
+  `:2427-2428`). Report: `docs/evidence/runtime/29-scanout-offset-reset-rca.txt`.
+- Limitation recorded with the verdict: layer 2 assumes the simple-pipe CRTC
+  defines `.atomic_disable` and no `.atomic_prepare`, but
+  `drivers/gpu/drm/drm_simple_kms_helper.c` is absent from
+  `/usr/src/kernels/7.3.4-100.fc43.x86_64`, so that layer is unverified; layer 1
+  (the re-upload) closes the item without it. The fragile point is named too:
+  `src/sm750_drm.c:4053-4058` must stay unconditional, because async damage
+  queued earlier in the commit is built before `shadow_source_width` and
+  `shadow_source_height` are set (`:4024-4025`) and uploads nothing.
+- T47 recorded the closure: new row A41 in `docs/DEFECTS.md:78` (S3, `closed;
+  not a defect - RCA`), intro count at `:4` now "plus sixteen found later",
+  narrative `:757-775`, and a one-line R3 note in
+  `docs/evidence/EVIDENCE-GAPS.md:393-398`.
+- T45 fixed the last non-ASCII leak in the evidence at its source: the packaging
+  transcripts were captured under the host locale, so `tests/check-rpm-dkms.sh`
+  now exports `LC_ALL=C` and `LANG=C` for every captured command (`:28-33`), a
+  new gate rejects any non-ASCII byte in the six produced transcripts
+  (`transcript_ascii()` `:86`, `transcripts_ascii()` `:89`, called at `:1002`,
+  failing when the file count is not exactly six), and the planted control
+  `plant_localized_evidence` (`:817-823`) injects a localized line through
+  octal escapes so the script itself stays ASCII. Seven planted controls now.
+  Non-ASCII lines before -> after: 11, 40, 1 -> 0, 0, 0.
+- Deliberate exception: the frozen `docs/evidence/packaging/0.5.9/` archive
+  keeps its pre-fix transcripts. A rerun at HEAD cannot honestly be labelled
+  0.5.9, so the archive is documented as frozen (PACKAGING-RPM section 5,
+  TEST-STRATEGY row S13) instead of scrubbed.
+- Hardware re-runs, executed by the orchestrator through the existing allowlist
+  (no new rights needed; `modetest` reaches the card through the ACL on
+  `/dev/dri/by-path/pci-0000:01:00.0-card`):
+  - GAP-B8: 120 cycles of `modetest -M sm750hdmidrm -s 35:1024x768` and back to
+    1920x1080 (240 mode sets) produced zero `at stage` lines and zero
+    failed-to-enable lines, so the gap now stands at one occurrence in 446
+    attempts and still needs a recurrence. Log:
+    `/mega/tmp/sm750/t46/dmesg-modeset-loop.txt`.
+  - `sm750-crc-cycle` passed end to end (`RESULT: scanout CRC check passed`)
+    after rebuilding the in-tree object it requires
+    (`/usr/local/sbin/sm750-crc-cycle:27` uses `$REPO/src/sm750hdmidrm.ko`).
+  - Animation liveness: two `sm750-console show` samples three seconds apart
+    gave `scanout nonzero 200394 -> 200524` and `crc32 0x45c3bf90 -> 0x85219c58`,
+    with the conditional hint `(crc32 0xe20eea22 is 262144 zero bytes; this
+    frame is not it)`, which also confirms A39 in the installed file.
+  - GAP-B7 re-run at 0.6.2-3: `dnf remove` deleted the DKMS tree completely
+    (`Deleting module sm750hdmifb/0.6.2 completely from the DKMS tree.`) and left
+    no sm750hdmifb row in `dkms status` while the module stayed loaded; the
+    reinstall rebuilt all three kernels and reloading gave version `0.6.2` with
+    srcversion `760B67791A964AC81795475`.
+- Plan bookkeeping: three decisions appended (61-63) for T44, T45 and T46; the
+  plan is `completed`, 24 tasks, 63 decisions. First splice failed with
+  `expected <block end>, but found ','` because a trailing comma was added to a
+  block-sequence scalar; fixed by stripping it from every line matching
+  `^  - ".*",$`.
+- Gates: `make CC=/usr/bin/gcc`, `make check` (17 commands), `./tests/check-rpm-dkms.sh`,
+  `./build-package.sh` and `./tests/audit-release.sh` all exit 0; ASCII 0 on
+  every touched file.
+- What remains needs hands, not rights: a physical monitor power cycle to fish
+  for another `-110` (GAP-B8), and external capture hardware for the last
+  GAP-B3 item.

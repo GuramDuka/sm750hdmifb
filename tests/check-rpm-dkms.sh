@@ -25,6 +25,12 @@
 # SM750_RPM_EVIDENCE. Scratch stays under /mega/tmp/sm750/t6 and never touches
 # $HOME.
 set -euo pipefail
+# Every command whose output is captured into the committed transcripts runs
+# under the C locale: a localized rpm/rpmbuild prints non-ASCII messages, and
+# scrubbing them out afterwards would leave evidence that is not what the tool
+# said. Post-process nothing; capture under C.
+export LC_ALL=C
+export LANG=C
 export TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -72,6 +78,32 @@ for file in "$spec" "$0"; do
 	LC_ALL=C grep -nP '[^\x00-\x7F]' "$file" &&
 		fail "non-ASCII byte in $file"
 done
+
+# ASCII gate for the transcripts this script commits. The evidence is the tool
+# output verbatim, so the capture environment has to be C (see the LC_ALL
+# export at the top); this assertion proves the capture really was, instead of
+# silently carrying a localized host's messages into the repository.
+transcript_ascii() { # one transcript: 0 when it holds no non-ASCII byte
+	! LC_ALL=C grep -qP '[^\x00-\x7F]' "$1"
+}
+transcripts_ascii() { # evidence dir: 0 when every produced transcript is ASCII
+	local file status=0 checked=0
+	for file in "$1"/0[1-6]-*.log; do
+		[ -f "$file" ] || continue
+		checked=$((checked + 1))
+		transcript_ascii "$file" && continue
+		printf '%s:\n' "$file" >&2
+		LC_ALL=C grep -nP '[^\x00-\x7F]' "$file" >&2 || true
+		status=1
+	done
+	# A renamed transcript would otherwise drop out of the gate silently.
+	[ "$checked" -eq 6 ] || {
+		printf 'expected 6 transcripts under %s, found %s\n' \
+			"$1" "$checked" >&2
+		status=1
+	}
+	return "$status"
+}
 
 mkdir -p "$evidence"
 rm -rf -- "$topdir" "$dkms_root" "$work/payload" "$work/posttrans"
@@ -788,6 +820,13 @@ plant_unconditional_hint() {
 		done = 1
 	} { print }' "$1" >"$1.planted" && mv "$1.planted" "$1"
 }
+# T45: a localized host wrote the strings that were committed as evidence. The
+# plant injects one Russian rpmbuild status line, escaped so this script stays
+# ASCII itself.
+plant_localized_evidence() {
+	printf '\320\227\320\260\320\277\320\270\321\201\320\260\320\275: %s\n' \
+		'/mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/x.noarch.rpm' >>"$1"
+}
 plant purge_after_build "$sandbox/posttrans.sh" \
 	plant_purge_after_build purge_before_build
 plant clean_directive "$project_dir/dkms.conf" \
@@ -800,6 +839,8 @@ plant_functional unsafe_version "$sandbox/posttrans.sh" \
 	plant_unsafe_version unsafe_scenario
 plant_functional dangling_link_kept "$sandbox/posttrans.sh" \
 	plant_no_link_purge dangling_link_scenario
+plant localized_evidence "$evidence/01-rpmbuild.log" \
+	plant_localized_evidence transcript_ascii
 
 {
 	log_header "sh posttrans.sh with SM750_RPM_MODULES_ROOT (rootless)"
@@ -958,6 +999,9 @@ host_ko=/lib/modules/$kernel/updates/dkms/$module.ko
 	printf '%s\n' '--- vermagic ---'
 	modinfo -F vermagic "$built_ko" 2>/dev/null || true
 } >>"$evidence/05-dkms-sandbox.log" 2>&1
+transcripts_ascii "$evidence" ||
+	fail "non-ASCII bytes in the transcripts under $evidence (listed above): every captured command must run under LC_ALL=C"
+note "evidence transcripts 01-06: no non-ASCII byte, captured under LC_ALL=C"
 printf '%s\n' "$(modinfo -F vermagic "$built_ko" 2>/dev/null)" |
 	grep -F "$kernel" >/dev/null ||
 	fail "built module vermagic does not target $kernel"

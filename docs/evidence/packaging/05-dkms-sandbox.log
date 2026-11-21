@@ -1,4 +1,4 @@
-# utc: 2026-11-21T12:21:42Z
+# utc: 2026-11-21T15:54:19Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
 # command: host headers for 7.3.4-100.fc43.x86_64
@@ -11,7 +11,7 @@ sandbox header link: /mega/tmp/sm750/t6/dkms/install/7.3.4-100.fc43.x86_64/build
 note: the header tree is present on this host; an earlier failure of
 this script was an installtree-relative lookup artifact, not a
 missing kernel-devel package.
-# utc: 2026-11-21T12:21:42Z
+# utc: 2026-11-21T15:54:19Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
 # command: dkms --dkmstree /mega/tmp/sm750/t6/dkms --sourcetree /mega/tmp/sm750/t6/dkms/src --installtree /mega/tmp/sm750/t6/dkms/install -m sm750hdmifb -v 0.6.2 add (running kernel 7.3.4-100.fc43.x86_64)
@@ -41,7 +41,7 @@ Error! You must be root to use this command.
 sm750hdmifb/0.6.2, 7.3.4-100.fc43.x86_64, x86_64: built
 
 --- built object (sandbox tree, install is root-only) ---
--rw-r--r-- 1 coder coder 361400 ноя 21 15:21 /mega/tmp/sm750/t6/dkms/sm750hdmifb/0.6.2/7.3.4-100.fc43.x86_64/x86_64/module/sm750hdmidrm.ko
+-rw-r--r-- 1 coder coder 361400 Nov 21 18:54 /mega/tmp/sm750/t6/dkms/sm750hdmifb/0.6.2/7.3.4-100.fc43.x86_64/x86_64/module/sm750hdmidrm.ko
 --- host module tree (must be absent) ---
 absent: /lib/modules/7.3.4-100.fc43.x86_64/updates/dkms/sm750hdmidrm.ko
 --- vermagic ---

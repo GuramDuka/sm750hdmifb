@@ -502,15 +502,15 @@ list.
 | `docs/evidence/builds/23-static-coccinelle.log` | T19: coccinelle 1.3, 12 patches (3 local, 9 kernel), zero findings, with the planted-defect control |
 | `docs/evidence/builds/24-static-pahole.log` | T19: pahole v1.32, BTF absent and every driver struct layout |
 | `docs/evidence/builds/25-static-gate.log` | T19: the gate passing on the tree, failing on a planted copy, and skipping with exit 0 when the analysers are absent |
-| `docs/evidence/packaging/01-rpmbuild.log` | `rpmbuild -ba`, exit 0 (0.6.0; the 0.5.9 run is archived in `docs/evidence/packaging/0.5.9/`) |
+| `docs/evidence/packaging/01-rpmbuild.log` | `rpmbuild -ba`, exit 0, captured under `LC_ALL=C` and ASCII-gated (regenerated at 0.6.2; the 0.5.9 run is archived in `docs/evidence/packaging/0.5.9/`) |
 | `docs/evidence/packaging/02-rpm-qp-scripts.log` | scriptlet assertions |
-| `docs/evidence/packaging/03-rpm-qlp.log` | `%files` list, 36 files |
+| `docs/evidence/packaging/03-rpm-qlp.log` | `%files` list, 36 files, captured under `LC_ALL=C` and ASCII-gated |
 | `docs/evidence/packaging/04-rpm-qpR.log` | dependency assertions |
-| `docs/evidence/packaging/05-dkms-sandbox.log` | sandbox DKMS `built` with a real module |
+| `docs/evidence/packaging/05-dkms-sandbox.log` | sandbox DKMS `built` with a real module, captured under `LC_ALL=C` and ASCII-gated |
 | `docs/evidence/runtime/28-dangling-kernel-link.txt` | T42: the three dangling `/var/lib/dkms/sm750hdmifb/kernel-<kernel>-x86_64` symlinks verbatim, the `/usr/sbin/dkms` lines that turn one into `die 6`, the transcript excerpt of the abort, the fix with spec line numbers, the six-control gate transcript, and an explicit `NOT YET OBSERVED ON THE HOST` section |
 | `docs/evidence/packaging/06-posttrans-missing-headers.log` | missing-header branch of `%posttrans`, plus the stale-purge run whose `dkms remove` fails (exit 4) and the dangling-link run (A40) |
 | `docs/evidence/packaging/07-check-rpm-dkms.log` | full `tests/check-rpm-dkms.sh` run |
-| `docs/evidence/packaging/0.5.9/01-rpmbuild.log` | `rpmbuild -ba` at 0.5.9, exit 0 |
+| `docs/evidence/packaging/0.5.9/01-rpmbuild.log` | `rpmbuild -ba` at 0.5.9, exit 0, frozen: produced before the T45 `LC_ALL=C` capture, non-ASCII lines left unedited as the historical record |
 | `docs/evidence/packaging/0.5.9/02-rpm-qp-scripts.log` | scriptlet assertions at 0.5.9 |
 | `docs/evidence/packaging/0.5.9/03-rpm-qlp.log` | `%files` list at 0.5.9 |
 | `docs/evidence/packaging/0.5.9/04-rpm-qpR.log` | dependency assertions at 0.5.9 |

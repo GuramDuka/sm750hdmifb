@@ -94,6 +94,7 @@ exports `TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}`), never to `/tmp`.
 | S10 | In-repo `tests/check-console-scanout.sh` (`make console-check`, opt-in) | Root-only: the console reaches the panel on a `KD_TEXT` VT; skips with a named cause under `KD_GRAPHICS` | PASS on the card under `KD_TEXT` (2026-11-20, all three assertions); the script still skips with exit 77 when the VT is `KD_GRAPHICS` or the caller is not root |
 | S11 | In-repo `tests/check-restore-path.sh` (via `make check`) | Source-level restore-path gate: masked transition compare with re-poke, mode-derived budget, kept display-off result, terminal fail path | PASS (source gate) plus PASS on hardware 2026-11-20: 30 restore cycles, 20 mode changes, 95 enable events, zero fault lines |
 | S12 | In-repo `tests/check-test-pattern.sh` (via `make check`) | Source-level test-card gate: the three writable parameters and their defaults and clamps, the bounded painter, the rectangle writer used by both the full card and the animation tick, the pitch-padded row copy, both pixel encodings, the card elements, the disc's motion and reflection, the exact paint message and call ordering, the rotation's cancel sites and tick silence, and the CRC-ownership rules (an armed scanout CRC source owns the window; a userspace master's black frame is a picture) | PASS (source gate); eighteen planted defects rejected. Bars and the 5 s palette jump observed on the panel 2026-11-20; the animated disc is not yet observed |
+| S13 | In-repo `tests/check-rpm-dkms.sh` (outside `make check`) | Evidence-hygiene gate on the packaging transcripts: every captured command runs under `LC_ALL=C LANG=C`, and after the last transcript is written the run fails on any non-ASCII byte in `docs/evidence/packaging/0[1-6]-*.log`, printing the file and its line numbers | PASS; `plant_localized_evidence` (one injected Russian `rpmbuild` line) rejected. 01-06 regenerated ASCII-clean at 0.6.2; the frozen `0.5.9/` archive predates the fix and is not covered |
 
 ### S1: in-repo `make check`
 
@@ -473,6 +474,32 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   palette jump were seen on the panel on 2026-11-20; the animated disc and the
   CRC-ownership fix have no on-panel observation yet, and the evidence files say
   so in a `NOT YET OBSERVED ON THE PANEL` section.
+
+### S13: packaging-transcript ASCII gate
+
+- Command: `./tests/check-rpm-dkms.sh` (not part of `make check`; it builds an
+  RPM and a DKMS module).
+- Why: the transcripts under `docs/evidence/packaging/` are committed tool
+  output. On a localized host `rpm`/`rpmbuild` print translated messages, and
+  nothing checked the produced files, so 11 non-ASCII lines in
+  `01-rpmbuild.log`, 40 in `03-rpm-qlp.log` and 1 in `05-dkms-sandbox.log`
+  (Russian dates and progress lines) were carried through several commits.
+- Holds: `tests/check-rpm-dkms.sh:32-33` exports `LC_ALL=C LANG=C` for every
+  command whose output reaches a transcript, so the capture is ASCII at the
+  source and no output is scrubbed afterwards; `transcripts_ascii`
+  (`tests/check-rpm-dkms.sh:89`, called at `:1002`) then walks `0[1-6]-*.log` and fails with the
+  offending file and `grep -n` line numbers.
+- Negative control: `plant_localized_evidence` appends one Russian `rpmbuild`
+  status line, written as octal escapes so the gate script itself stays ASCII,
+  to a copy of `01-rpmbuild.log`; `transcript_ascii` must reject that copy. It
+  is counted in the run's planted-control total (7).
+- Status: PASS, `OK: evidence transcripts 01-06: no non-ASCII byte, captured
+  under LC_ALL=C`, `plant_localized_evidence: rejected`, zero non-ASCII lines
+  in all six regenerated transcripts. The pre-fix shape reproduced the same
+  counts (11/40/1) and failed the gate with exit 1. The
+  `docs/evidence/packaging/0.5.9/` archive is the frozen transcript of the
+  rejected 0.5.9 revision: regenerating it would fabricate a run that did not
+  happen, so it is left unedited and the gate does not read it.
 
 ## 3. `make check`: the 17 recipe commands
 

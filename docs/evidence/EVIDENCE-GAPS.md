@@ -358,6 +358,45 @@ Status: `PARTIAL` - modeset and conformance evidence now exists; readback and
 CRC remain `GAP`. The CRC half is `GAP` because the driver implements no CRC
 source, not because of a permission.
 
+Update (T46, 2026-11-21): the CRC half of this row is **CLOSED**, and the
+paragraph above is superseded on that point. The driver now registers a CRC
+source, which the earlier text said was missing:
+
+- `sm750_crtc_get_crc_sources()` at `src/sm750_drm.c:3388` and
+  `sm750_crtc_set_crc_source()` at `src/sm750_drm.c:3395`, wired into
+  `drm_crtc_funcs` at `src/sm750_drm.c:4320` and `:4322`. The core therefore
+  creates `/sys/kernel/debug/dri/0/crtc-0/crc/data`, the file this row
+  previously called impossible for any privilege level.
+- The CRC is computed over the live scanout window
+  (`sm750_scanout_crc32()`, 256-byte chunks, one entry per vblank), so it is a
+  genuine reader of the pixels the panel is scanning - exactly the framebuffer
+  readback tier this row listed as unreachable.
+- Hardware evidence, on the panel, verbose 0.6.2:
+  `PASS: CRC entries arrive and are stable over 12 static frames (crc
+  0xe20eea22)` and `PASS: CRC changes with frame content (black 0xe20eea22,
+  white 0x06cf606c)` from `/usr/local/sbin/sm750-crc-cycle`, with the window
+  read back as `nonzero 200394 crc32 0x3521e059`; transcripts in
+  `docs/evidence/runtime/26-test-card-crc-fix.txt` and the host results in
+  `docs/evidence/runtime/28-dangling-kernel-link.txt`.
+- What this does NOT close, and should not be read as closing: there is still
+  no `/dev/fb*` node (A24) and no unprivileged reader of the scanned pixels.
+  The readback tier is closed by a root helper, not by a new interface, and the
+  external-capture tier remains `GAP` because no capture hardware is attached.
+  Whether that is acceptable for the row is stated in the final status line
+  below rather than implied.
+
+Status: `PARTIAL`, re-scoped - device access, connector and mode enumeration,
+modeset, `kmscube`, IGT, and scanout-CRC readback are all verified; the only
+remaining `GAP` is external capture of the signal by hardware not attached to
+this host, which no permitted command can close.
+
+Update (T44, 2026-11-21): the open question R3 from the test-card CRC work -
+whether `sm750_pipe_enable()` loses a frame by setting `scanout_offset` to zero
+after the enabling commit's plane update - is answered: it is not a defect, it
+is adjudicated in `docs/evidence/runtime/29-scanout-offset-reset-rca.txt` and
+carried as A41 in `docs/DEFECTS.md`. Nothing in this row's `PARTIAL` status
+changes: that verdict rests on source reading, and no capture path was added.
+
 ## GAP-B4: MMIO register dumps
 
 No unprivileged path to the SM750 register file exists on this host:

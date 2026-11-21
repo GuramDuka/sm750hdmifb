@@ -1,0 +1,420 @@
+T44 - RCA: R3, "sm750_pipe_enable() resets scanout_offset after the
+enabling commit's plane update"
+========================================================================
+
+Actor: diagnostic subagent (T44).
+Date: 2026-11-21 (UTC).
+Tree: /home/coder/sm750hdmifb, HEAD a2ed6ed, clean worktree at start.
+Scope: read-only adjudication of open question R3. No source change, no
+hardware access (no sudo), no commit. This file is the only artefact.
+Method: code reading of src/sm750_drm.c in THIS tree (line numbers shifted
+after T37/T38/T40/T42; every line number below was re-verified here) plus
+the host's own drm_atomic_helper.c, whose provenance is established in
+section 2.
+
+Claim under test (docs/evidence/runtime/24-test-card-crc-conflict-rca.txt:
+592-597, repeated at docs/evidence/runtime/26-test-card-crc-fix.txt:222 and
+docs/LOGBOOK.md:2635):
+
+  "pipe_enable() resets scanout_offset = 0 (:3695) after the enabling
+   commit's plane update has already run (F15), so an enabling commit's
+   frame can be clobbered or dropped."
+
+There are three separable premises in that sentence:
+  P1  the plane update of the same commit runs before pipe_enable();
+  P2  at the moment of the reset a client frame has been staged, and a flip
+      is pending (background: sm750_pipe_update() uploaded into
+      backbuffer_offset and called sm750_present_staged_frame());
+  P3  the reset to 0 therefore loses or clobbers that frame.
+
+Verdict in one line: P1 is true, P2 is false (there is no pending flip and
+the staging gate is closed in every enabling commit), P3 is false because
+pipe_enable() re-uploads the complete plane frame into offset 0 before it
+programs the hardware. R3 is NOT a defect. Details and the residual
+assumptions are in sections 4 and 6.
+
+========================================================================
+1. MECHANISM AS IMPLEMENTED
+========================================================================
+
+Scanout geometry is four fields in struct sm750_drm_device
+(src/sm750_drm.c:391-394) plus three booleans (:434-436):
+
+  :391  u32 shadow_upload_offset;   destination of the NEXT upload
+  :392  u32 scanout_offset;         VRAM offset the display engine scans
+  :393  u32 backbuffer_offset;      second buffer, staging destination
+  :394  u32 scanout_frame_size;
+  :434  bool backbuffer_available;  geometry test computed in pipe_enable
+  :435  bool backbuffer_ready;      the staging gate
+  :436  bool backbuffer_mirror;
+
+They are zero at probe: the device is allocated with devm_drm_dev_alloc()
+(src/sm750_drm.c:4738), which zero-fills, so backbuffer_ready is false
+until some enable path sets it.
+
+Complete write set for the four offsets and the gate:
+
+  :2432  shadow_upload_offset = backbuffer_offset   (staging begin)
+  :2466  backbuffer_ready = false                   (flip timed out)
+  :2468  shadow_upload_offset = scanout_offset      (flip timed out)
+  :2474-2477  swap: scanout_offset = backbuffer_offset;
+              backbuffer_offset = old_scanout;
+              shadow_upload_offset = scanout_offset (flip succeeded)
+  :4007  backbuffer_ready = false                   (pipe_enable entry)
+  :4008  backbuffer_available = false
+  :4009  backbuffer_mirror = false
+  :4010  scanout_offset = 0                         (the R3 line)
+  :4011  shadow_upload_offset = 0
+  :4038  backbuffer_offset = ALIGN(scanout_frame_size, LINE_ALIGN)
+  :4040-4043  backbuffer_available = backbuffer_staging && fits
+  :4063  scanout_offset = offset                    (non-shadow backend)
+  :4075  backbuffer_ready = backbuffer_available    (after program_mode OK)
+  :4137  backbuffer_ready = false                   (pipe_enable fail path)
+  :4139  shadow_upload_offset = 0                   (pipe_enable fail path)
+  :4221  scanout_offset = offset                    (non-shadow update)
+  :4266  backbuffer_ready = false                   (pipe_disable)
+  :4268  shadow_upload_offset = 0                   (pipe_disable)
+
+Note that sm750_pipe_disable() (:4230-4269) does not touch
+scanout_offset; :4010 is the only place that zeroes it, and it is inside
+the shadow branch of pipe_enable().
+
+Staging machinery:
+
+  static bool sm750_begin_staged_frame(struct sm750_drm_device *sdev,
+                                       const struct drm_rect *rects,
+                                       unsigned int count)
+      :2417-2440
+      gate: :2427-2428
+        if (!sdev->backbuffer_ready ||
+            !sm750_damage_is_full_frame(sdev, rects, count))
+                return false;
+      then :2432 shadow_upload_offset = backbuffer_offset.
+
+  static bool sm750_present_staged_frame(struct sm750_drm_device *sdev)
+      :2442-2479
+      mutex_lock(&sdev->mode_lock) :2449,
+      poke32(SM750_DRM_FB_ADDRESS, STATUS | backbuffer_offset) :2450-2451,
+      readl_poll_timeout(... SM750_DRM_FLIP_TIMEOUT_US) :2452-2454,
+      mutex_unlock :2455; on timeout :2463-2471 backbuffer_ready = false,
+      backbuffer_mirror = true; on success the offset swap :2474-2477.
+
+The flip is synchronous inside the caller. There is no pending-flip field,
+no completion and no deferred work that could complete after
+sm750_present_staged_frame() returns: it either swapped the offsets or
+recorded the failure, both under mode_lock. There are exactly two callers,
+:2652 (the async worker) and :4211 (sm750_pipe_update()).
+
+========================================================================
+2. CALL-ORDER EVIDENCE AND ITS PROVENANCE
+========================================================================
+
+The kernel source used is /mega/tmp/sm750/atomic_helper.c. It is the host
+7.3.4 drm_atomic_helper.c: its WARN_ON(new_crtc_state->event) sits at
+:2758, which is the exact file:line the runtime stack reports
+("WARNING: drivers/gpu/drm/drm_atomic_helper.c:2758",
+docs/evidence/runtime/07-kernel-log.txt:57; the same citation is used at
+docs/DEFECTS.md:63). The pruned tree under
+/usr/src/kernels/7.3.4-100.fc43.x86_64 contains no drm_atomic_helper.c,
+so this copy is the best available and it is anchored to an observed host
+stack line.
+
+  void drm_atomic_helper_commit_tail(struct drm_atomic_commit *state)
+      :1989-2007
+      :1993  disable_outputs()          -> sm750_pipe_disable()
+      :1995  commit_planes(dev, state, 0) -> sm750_pipe_update()
+      :1997  commit_modeset_enables()   -> sm750_pipe_enable()
+      :1999  fake_vblank, :2001 hw_done, :2003 wait_for_vblanks,
+      :2005  cleanup_planes
+
+So within one commit the order is disable, then plane update, then enable.
+P1 of the R3 note is correct, and the driver already states the same fact
+in its own comment at src/sm750_drm.c:4188-4191.
+
+The driver uses this default tail: mode_config_funcs at :4326-4336 sets
+only .atomic_commit = drm_atomic_helper_commit (:4329/:4335); there is no
+.atomic_commit_tail in src/sm750_drm.c and no struct
+drm_mode_config_helper_funcs at all.
+
+Two further kernel facts are load-bearing:
+
+  - commit_planes() with flags = 0 does not skip planes on an inactive
+    CRTC: the skip block exists only under DRM_PLANE_COMMIT_ACTIVE_ONLY
+    (:2987, :3016-3028) and the decisive branch is :3043-3044
+        else if (new_plane_state->crtc || disabling)
+                funcs->atomic_update(plane, state);
+    i.e. atomic_update runs for the pipe's plane in the very commit that
+    enables the CRTC.
+
+  - commit_crtc_disable() (:1260-1311) calls the crtc disable hook for any
+    CRTC that needs a modeset and was active:
+      :1271-1272 skip unless drm_atomic_crtc_needs_modeset(new)
+      :1274-1275 skip unless crtc_needs_disable(old, new)
+      :1278-1286 if (new_crtc_state->enable && funcs->prepare)
+                     funcs->prepare(crtc);
+                 else if (funcs->atomic_disable)
+                     funcs->atomic_disable(crtc, state);
+    static bool crtc_needs_disable() :1142-1170 returns
+      old_state->active || (old_state->self_refresh_active &&
+                            !new_state->active) ||
+      new_state->self_refresh_active                       (:1167-1169)
+    which is TRUE whenever the CRTC was active, including a pure mode
+    change that keeps it active.
+
+========================================================================
+3. THE FIVE QUESTIONS
+========================================================================
+
+Q1. Where are the offsets and the gate written, and in which order relative
+    to sm750_program_mode()?
+
+    Full write set is listed in section 1. Ordering inside
+    sm750_pipe_enable() (:3990-4171), which is the only function that both
+    resets scanout_offset and programs the mode:
+
+      :4004  mode_stage = NONE
+      :4005  if (sdev->shadow_scanout) {
+      :4006  sm750_async_quiesce(sdev);     (cancel_work_sync)
+      :4007  backbuffer_ready = false
+      :4008  backbuffer_available = false
+      :4009  backbuffer_mirror = false
+      :4010  scanout_offset = 0             <-- the R3 line
+      :4011  shadow_upload_offset = 0
+      :4012-4015  softscale decision
+      :4016-4017  shadow_source_width/height = adjusted_mode
+      :4018-4019  shadow_source_pitch = fb ? pitches[0] : 0
+      :4020-4021  snapshot flags
+      :4029-4033  cpp, pitch -> scanout_pitch
+      :4035-4037  scanout_frame_size
+      :4038  backbuffer_offset = ALIGN(frame_size)
+      :4040-4043  backbuffer_available
+      :4045  offset = 0
+      :4046-4050  full-mode damage rect, sm750_shadow_rect() upload
+      :4051  sm750_async_seed_source()
+      :4067-4070  mutex(mode_lock); sm750_program_mode(..., pitch,
+                  offset, cpp); mutex_unlock
+      :4075  backbuffer_ready = backbuffer_available
+
+    So the reset at :4010 is not "after program_mode"; it is 58 lines
+    before it, inside the same function, and it is immediately consumed:
+    :4045 sets the local offset to 0, :4046-4050 uploads the WHOLE plane
+    frame (x1=y1=0, x2=hdisplay, y2=vdisplay of the adjusted mode) into
+    VRAM offset 0 through sm750_shadow_rect(), and :4068-4069 hands that
+    same offset to sm750_program_mode(), which pokes it into
+    PANEL_FB_ADDRESS at :1429-1430 and sets the pitch at :1431-1435.
+    program_mode() never writes sdev->scanout_offset.
+
+Q2. Can sm750_pipe_update() run for a plane whose CRTC is being enabled,
+    and what is the staging gate?
+
+    Yes, it runs: see the commit_planes evidence in section 2 (:3043-3044
+    with flags = 0). The driver applies no CRTC-active gate of its own.
+
+    The staging gate is backbuffer_ready and nothing else:
+    :2427-2428 in sm750_begin_staged_frame(). Neither
+    sm750_begin_staged_frame() nor sm750_async_shadow_work() nor
+    sm750_async_queue_damage() reads crtc_state->active, crtc->state
+    ->enable, or scanout_pitch. The related knob is backbuffer_staging
+    (module param, :238, :4040-4043), which only affects
+    backbuffer_available, i.e. the later :4075.
+
+    backbuffer_ready is true only after a successful program_mode in
+    pipe_enable (:4075). It is cleared at :4007 (entry of every enable),
+    :4137 (enable fail), :2466 (flip timeout) and :4266 (pipe_disable),
+    and it is false at probe. Therefore, for the plane update of any
+    commit that calls sm750_pipe_enable():
+      - if the CRTC was off, the pipe was already not ready; and
+      - if the CRTC was on, sm750_pipe_disable() ran earlier in the SAME
+        commit (section 2: :1167 makes crtc_needs_disable true for any
+        active old state, :1274-1279 then reaches atomic_disable for a
+        simple pipe, whose .prepare hook would have to exist to divert it)
+        and cleared it at :4266.
+    Either way backbuffer_ready is false when the update runs, so
+    sm750_begin_staged_frame() returns false, so no upload into
+    backbuffer_offset, no sm750_present_staged_frame() call and no offset
+    swap happens in that commit.
+
+    Corroboration that the disable half of an enabling commit is real on
+    this hardware, not just on paper: docs/DEFECTS.md:67 (A32) records the
+    observed order "commit_tail ran sm750_pipe_disable() ... and then
+    sm750_pipe_enable()" for the fbcon restore commit, and the driver's
+    own comment at :4247-4251 refers to "the enable path that follows in
+    the same commit".
+
+Q3. Does sm750_present_staged_frame() or the async worker lose a staged
+    frame when scanout_offset is rewritten to 0 afterwards?
+
+    No, and the question turns out to be counterfactual: there is no
+    pending flip to lose. present_staged_frame() is synchronous
+    (:2449-2477); it either swapped the offsets at :2474-2477 or set
+    backbuffer_ready = false at :2466 before returning. The async worker
+    (:2646-2652) does the same under the same locks. Nothing re-presents a
+    frame because there is no queued presentation: the worker is quiesced
+    at :4006 before any of this, and a frame queued by the update earlier
+    in the commit is drained by that quiesce.
+
+    In the hypothetical where a flip did complete before the reset, the
+    content is still safe: the swap leaves the client frame at
+    scanout_offset (:2475), the reset moves the scan pointer to 0, and
+    :4045-4050 immediately re-uploads the same plane_state->fb into 0 from
+    the same source, before program_mode() points the hardware at 0. The
+    frame that was "swapped in" is byte-for-byte the frame that is
+    re-uploaded, because both come from the same framebuffer in the same
+    commit. Nothing is left behind in the backbuffer that the user could
+    miss; the backbuffer is simply stale until the next staged commit.
+
+    One asymmetry worth recording: if a flip had happened, backbuffer
+    offset and scanout_offset would be swapped, and :4038 would then
+    recompute backbuffer_offset from scratch anyway. The reset at :4010 is
+    therefore not even a state transition that survives pipe_enable().
+
+Q4. Is the update of an enabling commit reached with a framebuffer, and
+    does sm750_pipe_update() bail on !old_state->fb?
+
+    Reached: yes. Commit_planes() runs unconditionally for the plane in
+    that commit (section 2), and drm_simple_kms_plane_atomic_update() is
+    the plane's atomic_update hook (src/sm750_drm.c:4280-4290 and
+    :4292-4304 hold the funcs tables).
+
+    No fb bail in the shadow half. sm750_pipe_update() (:4173-4228) has
+    three early exits only: the test-card cancel at :4193-4194 (a paint,
+    not a return), `goto event` at :4200-4202 when the async path accepted
+    the damage, and the non-shadow half at :4219-4223 which does bail on a
+    null fb. Nothing dereferences old_plane_state->fb; the damage iterator
+    is fed the plane states directly :4197-4198.
+
+    sm750_pipe_check() (:3031-3048) does not require a framebuffer either:
+    it checks pitch alignment only when plane_state->fb is set and
+    !shadow_scanout, and mode_valid only when crtc_state->enable. So the
+    driver authorises an enabling commit with no fb. That is a separate
+    lead, not R3 (see section 6, item 4).
+
+    It does not matter for the verdict whether the damage iterator yields
+    zero rects or the full plane rect in this situation: with
+    rect_count == 0 the update does nothing and pipe_enable() uploads at
+    :4050; with rect_count > 0 the update's upload goes to the front
+    buffer at offset 0 (staging is closed per Q2) and pipe_enable()
+    uploads the same frame over it at :4050. Both branches end with the
+    commit's plane frame at offset 0 and the hardware scanning offset 0.
+
+Q5. Verdict and confidence.
+
+    R3 as filed: NOT A DEFECT. PROVEN UNREACHABLE, in two layers.
+
+    Layer 1, "no client frame is dropped or clobbered" (confidence: very
+    high; depends only on files read here). The only writes that can put a
+    client frame into VRAM in an enabling commit are :4050 (full plane
+    frame into offset 0, before program_mode) and the hypothetical staged
+    upload. :4050 is unconditional inside the shadow branch, runs after
+    the reset and before the hardware is reprogrammed, and is sourced from
+    the same plane_state that the commit sets. So the buffer the panel
+    scans after the commit always contains this commit's plane frame, and
+    the test card painted at :4096-4117 later writes at
+    sdev->scanout_offset (:3676, :3679), which is that same front buffer,
+    which is exactly the T37 design ("card is only painted when no client
+    owns the device", comment :4188-4191).
+
+    Layer 2, "a staged flip cannot even be attempted in an enabling
+    commit" (confidence: high, one assumption). Requires
+    backbuffer_ready == false, which follows from :2427 plus :4075/:4266
+    plus the kernel's disable-before-update order. The one assumption is
+    that the simple-pipe CRTC helper funcs provide .atomic_disable and do
+    not provide .atomic_prepare, since drm_atomic_helper_commit_crtc_disable
+    :1278-1286 prefers .prepare when the new state is enabled. That file
+    is not present on this host (section 6, item 1).
+
+    If Layer 2's assumption were wrong, Layer 1 still holds: the frame
+    would be re-uploaded by :4050 and the verdict on R3 ("no lost or
+    clobbered frame") would be unchanged.
+
+========================================================================
+4. CORRECTION TO THE R3 NOTE (text for docs/DEFECTS.md)
+========================================================================
+
+R3 was filed on the premise that "the enabling commit's plane update has
+already run", which is true, and on the unstated premise that a flip is
+pending across the offset reset, which is false. The driver has no pending
+flip: sm750_present_staged_frame() (src/sm750_drm.c:2442-2479) completes
+the flip synchronously under mode_lock, and the staging gate at :2427
+requires sdev->backbuffer_ready, which is cleared at :4007/:4266 and only
+set at :4075 after program_mode(), so it is false at the plane update of
+every commit that also calls sm750_pipe_enable(). In addition the reset at
+:4010 is immediately followed in the same function by a full-frame upload
+of the commit's plane frame into VRAM offset 0 (:4045-4050) and by
+program_mode() pointing PANEL_FB_ADDRESS at 0 (:4068-4069 ->
+:1429-1430), so even a hypothetical swap would be invisible. Correction:
+R3 should be closed as not-a-defect, with this file as evidence, and
+docs/DEFECTS.md should carry no R3 row; the note's own closing condition
+("a client whose first frame is non-blank arriving in the same commit as
+an enable") was in fact exercised by every fbcon restore commit recorded
+at docs/DEFECTS.md:67 (A32) and is handled by the :4050 upload.
+
+The one part of the old note that should survive is the observation that
+the reset happens after the update; the error is the causal step from that
+ordering to frame loss.
+
+========================================================================
+5. FIX PROPOSAL
+========================================================================
+
+No fix is required, and none should be made to the offsets. Do not
+"preserve" scanout_offset across the enable path: :4010 must equal the
+buffer that :4050 fills and that sm750_program_mode() programs, because
+the test card (:3676, :3679) and its bounds check (:3712) address the
+hardware scan pointer through sdev->scanout_offset. Diverging the two
+would let the card paint outside the scanned buffer or refuse to paint at
+all.
+
+The only defensible change is documentation: extend the comment next to
+:4010 to say that scanout_offset is being set to the front-buffer address
+that :4045-4050 fills and :4068 scans, not reset as a piece of device
+state, and that the shadow_upload_offset reset at :4011 mirrors it. That
+is a comment-only edit and carries no behavioural risk for the case where
+the front buffer is the scanned buffer.
+
+========================================================================
+6. WHAT WAS NOT VERIFIED
+========================================================================
+
+1. drm_simple_kms_helper.c is not on this host. The pruned tree
+   /usr/src/kernels/7.3.4-100.fc43.x86_64 has no copy under
+   drivers/gpu/drm, and include/drm/drm_simple_kms_helper.h carries no
+   kernel-doc comments. I could not read for myself that the simple-pipe
+   crtc helper defines .atomic_disable and leaves .atomic_prepare unset.
+   That assumption is the only support for the strongest form of the
+   verdict (Layer 2, Q5).
+
+2. drm_damage_helper.c is not on disk either. The "no damage clip implies
+   the full plane rect" rule is documented in
+   include/drm/drm_damage_helper.h:43-49; the "old_state->fb == NULL
+   implies full_update" rule is upstream code I did not read here. The
+   verdict does not depend on which rects the iterator yields (Q4).
+
+3. No runtime observation at all: no sudo, no module load, no hardware.
+   Everything above is source reading plus the A32 observation already
+   recorded in docs/DEFECTS.md:67. In particular I did not capture a
+   trace showing backbuffer_ready at the moment of an update; that value
+   is inferred from the kernel's ordering and the driver's clears.
+
+4. Separate lead, NOT proven and NOT part of the verdict:
+   sm750_pipe_check() (:3031-3048) accepts an enabling commit with
+   plane_state->fb == NULL, and the shadow branch of pipe_enable()
+   dereferences plane_state->fb through sm750_shadow_rect()
+   (:4050 -> :2398-2406 -> sm750_shadow_rect_locked, whose :2395 argument
+   is plane_state->fb->pitches[0]). Whether the DRM core allows a CRTC
+   enable with no primary fb (drm_atomic_helper_check_plane_state() and
+   drm_atomic_helper_set_config() are also not on this host) is unknown to
+   me. If it is reachable, the failure mode is a NULL dereference in
+   pipe_enable(), not a dropped frame. Worth its own check.
+
+5. The async path's behaviour in an enabling commit is read but not
+   tested: sm750_async_queue_damage() (:2664-2705) runs before :4016-4017
+   have set shadow_source_width/height, so it builds a degenerate
+   zero-size "full" rect and the queued worker uploads nothing. This is
+   benign only because :4050 has already uploaded the frame and :4051
+   re-seeds the async source afterwards. If :4050 is ever made
+   conditional, this becomes a real first-frame drop; it is the one place
+   where the order dependence is fragile rather than merely odd.
+
+6. Line numbers are for HEAD a2ed6ed only. The R3 note quoted :3695 for
+   the same statement; that offset no longer holds after T37/T38/T40/T42.
