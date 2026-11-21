@@ -93,8 +93,10 @@ sudo dnf remove -y sm750hdmifb               # erase; %preun unregisters
 sudo dkms status -m sm750hdmifb -v 0.6.2     # expected: no such module
 ```
 
-None of these have run on this host: the account is unprivileged (`uid 1005`).
-They are `GAP-B7` in `docs/evidence/EVIDENCE-GAPS.md`.
+These steps run as root by definition. The install and the module reload have
+been run on this host by its owner for `0.6.2-3`
+(`docs/evidence/runtime/28-dangling-kernel-link.txt` section 8); the erase and
+reinstall steps remain `GAP-B7` in `docs/evidence/EVIDENCE-GAPS.md`.
 
 ### Upgrade path (`$1 == 1` / `--rpm_safe_upgrade`)
 
@@ -210,6 +212,13 @@ version directory, so `-d` with a trailing slash is the resolution test -
 or directory that merely shares the name prefix is skipped by `-L`, and nothing
 outside `"$dkms_root/%{dkms_name}"` is considered. Removal is safe: the next
 successful install recreates the link, and dkms installs nothing through it.
+
+The `0.6.2-3` upgrade ran on this host on 2026-11-21 and took the successful
+half of the branch above: the three links resolved to `0.6.2`, `do_install()`
+read that version out of them and uninstalled it as the version active for the
+kernel, and the module was installed for all three kernels; no
+`removing dangling DKMS kernel link:` line appeared because no link dangled
+(`docs/evidence/runtime/28-dangling-kernel-link.txt` section 8).
 
 
 ### When a removal fails (exit-code semantics)
@@ -338,6 +347,11 @@ stderr), a planted control that was not rejected, or a usage/environment error
 (running as root, missing spec, unexpected `$HOME/rpmbuild`). `SKIP` lines are
 printed, never silent. The count in the last line is the number of planted
 controls the run rejected; it must equal the number defined in the script.
+The root-only steps hidden behind those `SKIP` lines have since run on this
+host for `0.6.2-3`, run interactively by its owner; section 8 of
+`docs/evidence/runtime/28-dangling-kernel-link.txt` holds that transcript, and
+it shows the active-version branch of `do_install()` completing against a
+healthy registration for all three kernels.
 
 Rootless checks: payload equality with `git ls-files`, full `rpmbuild -ba`
 from a fresh `_topdir`, `rpm -qpR` / `rpm -qp --scripts` / `rpm -qp --qf` /

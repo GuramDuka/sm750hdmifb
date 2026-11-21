@@ -5,10 +5,11 @@
 # measured by the parent session; this account can read them but cannot create
 # or remove them.
 #
-# status: diagnosis complete, fix in the working tree (0.6.2-3), install of
-#         0.6.2-3 NOT YET OBSERVED (needs root). The host was meanwhile repaired
-#         by its owner and now runs 0.6.2 with no dangling link; section 6
-#         records that after-state, section 7 what is still unobserved.
+# status: diagnosis complete, fix released in 0.6.2-3, and the 0.6.2-3 package
+#         was installed on the host by its owner on 2026-11-21 (section 8). The
+#         host was repaired by its owner before that and carried no dangling
+#         link at install time; section 6 records that recovered after-state,
+#         section 7 what is still unobserved, section 8 the 0.6.2-3 result.
 
 ======== 1. the dangling links, as measured before this task ========
 
@@ -149,11 +150,67 @@ was installed, so the premise state of section 1 no longer exists on this
 host. The commands that cleared it were the owner's recovery, run interactively
 as root; this file does not claim they were the 0.6.2-3 loop.
 
-======== 7. NOT YET OBSERVED ON THE HOST ========
+======== 7. STILL NOT OBSERVED ON THE HOST ========
 
-- The 0.6.2-3 package install, and therefore the new loop removing a real
-  dangling link during a real `dnf install`. It needs root; the runbook is
-  `docs/ROOT-ACTIONS.md` section 3.7.
+- The new loop removing a real dangling link during a real `dnf install`. The
+  0.6.2-3 install itself has run (section 8), but on a host whose three links
+  already resolved, so the removal branch was not taken. It needs root on a
+  host that carries such a link; the runbook is `docs/ROOT-ACTIONS.md`
+  section 3.7.
 - Which exact commands the owner used to clear the three links in section 6.
 - A host run in which the purge and the 0.6.2 tree coexist, that is the 0.6.2-3
   %posttrans clearing a dangling link before building.
+
+======== 8. Host result, 0.6.2-3 (observed) ========
+
+Measured on this host by its owner, 2026-11-21, and quoted from the owner's
+transcript, which is the only record of the run (`<k>` is one of
+7.2.15-100.fc43.x86_64, 7.3.3-100.fc43.x86_64 and 7.3.4-100.fc43.x86_64). The
+command was
+
+    sudo dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-3.fc43.noarch.rpm
+
+dnf reported the update of the `sm750hdmifb` noarch package to `0.6.2-3.fc43`
+replacing `0.6.2-2.fc43` and printed its usual completion line; those two
+messages are localised in the original and are described here, not quoted.
+`%posttrans` then printed, for each of the three kernels and in this order:
+
+    Module sm750hdmifb/0.6.2 already built for kernel <k> (x86_64), skip. You may override by specifying --force.
+    Module sm750hdmifb/0.6.2 for kernel <k> (x86_64):
+    Before uninstall, this module version was ACTIVE on this kernel.
+    Deleting /lib/modules/<k>/extra/sm750hdmidrm.ko.xz
+    Restoring archived original module /lib/modules/<k>/extra/sm750hdmidrm.ko.xz
+    Running depmod..... done.
+    Found pre-existing /lib/modules/<k>/extra/sm750hdmidrm.ko.xz, archiving for uninstallation
+    Installing /lib/modules/<k>/extra/sm750hdmidrm.ko.xz
+    Running depmod..... done.
+    Executing post-transaction command... done.
+
+The pre-existing warning is unchanged:
+
+    warning: skipping 6.18.13-200.fc43.x86_64: matching kernel headers are absent
+
+No `removing dangling DKMS kernel link:` line appeared, and that is the correct
+outcome rather than a gap: the loop of section 4 acts only on a link that does
+not resolve, and the three `kernel-*` links held `0.6.2` (section 6), so there
+was nothing to remove.
+
+After `sudo modprobe -r sm750hdmidrm` and `sudo modprobe sm750hdmidrm`:
+
+    $ cat /sys/module/sm750hdmidrm/version
+    0.6.2
+    $ sudo -n dkms status
+    nvidia/580.196.07, 7.3.4-100.fc43.x86_64, x86_64: installed
+    sm750hdmifb/0.6.2, 7.2.15-100.fc43.x86_64, x86_64: installed (Original modules exist)
+    sm750hdmifb/0.6.2, 7.3.3-100.fc43.x86_64, x86_64: installed (Original modules exist)
+    sm750hdmifb/0.6.2, 7.3.4-100.fc43.x86_64, x86_64: installed (Original modules exist)
+
+The branch this run exercised is the one that aborted in 0.6.2-1 and 0.6.2-2:
+`do_install()` found a link that was a symlink, read the version out of it
+(`/usr/sbin/dkms:1783-1784`), and ran the uninstall of "the version currently
+active for this kernel" (`:1866-1868`) before installing the new one - here
+against a healthy `0.6.2` registration, so the uninstall succeeded ("Before
+uninstall, this module version was ACTIVE on this kernel.") and the install
+completed for all three kernels. What this run does not show is that branch
+surviving an unresolvable target; that needs the removal path of section 4 to
+run first, and section 7 lists it as unobserved.

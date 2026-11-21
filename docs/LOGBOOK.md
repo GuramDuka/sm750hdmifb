@@ -2824,3 +2824,38 @@ and make crc-check all exit 0; four kernel builds exit 0.
   `docs/evidence/packaging/01`, `03` and `05` carry the host's Russian-locale
   rpmbuild lines (11/40/1 non-ASCII lines) exactly as the committed versions
   did; rewriting them would mean re-running rpmbuild under a C locale.
+
+### 2026-11-21T15:20Z | orchestrator | T43: the 0.6.2-3 install, observed on the host
+
+- The owner installed `sm750hdmifb-0.6.2-3` over `0.6.2-2` on the host; the
+  transcript is now recorded as evidence section 8 of
+  `docs/evidence/runtime/28-dangling-kernel-link.txt` instead of the earlier
+  "not yet observed" placeholder.
+- What the transcript shows, for each of 7.2.15-100, 7.3.3-100 and
+  7.3.4-100: `Module sm750hdmifb/0.6.2 already built for kernel <k>, skip`,
+  then `Before uninstall, this module version was ACTIVE on this kernel.`,
+  `Deleting /lib/modules/<k>/extra/sm750hdmidrm.ko.xz`, `Restoring archived
+  original module`, `Installing`, `depmod`, and a clean post-transaction.
+- Significance: this is the successful half of the `do_install()` branch at
+  `/usr/sbin/dkms:1783-1784` and `:1866-1868` - the same branch that aborted in
+  0.6.2-1 (dangling `/var/lib/dkms/sm750hdmifb/0.6.1/source`) and in 0.6.2-2
+  (dangling `kernel-*` link). It passed here because the registration was
+  healthy after the owner's manual repair.
+- The scriptlet printed no `removing dangling DKMS kernel link:` line, which is
+  correct: all three `kernel-*` links resolve to `0.6.2`, and the new purge at
+  `packaging/sm750hdmifb.spec:245-251` acts only on links that do not resolve.
+- After `modprobe -r` and `modprobe`: `/sys/module/sm750hdmidrm/version` is
+  `0.6.2` and `dkms status` reports `installed (Original modules exist)` for all
+  three kernels.
+- Docs updated by T43: A40 status now `fixed; host-verified for 0.6.2-3`
+  (`docs/DEFECTS.md:75`, narrative `:705-752`), one paragraph on the exercised
+  branch in `docs/PACKAGING-RPM.md:216-221` plus the section 4 and section 5
+  notes at `:96-99` and `:350-354`, and the two "not yet observed" statements in
+  `docs/RELEASE-NOTES.md:53-57` and `:67-76` corrected against the evidence
+  already in the file.
+- Still not exercised by this run, and left as such in the evidence: no real
+  dangling link was removed by the purge loop, because none dangled at install
+  time; that behaviour is covered only by `dangling_link_scenario` in
+  `tests/check-rpm-dkms.sh:644-691`.
+- Gates: ASCII 0 on all four touched files; `./build-package.sh` and
+  `./tests/audit-release.sh` exit 0 after the logbook edit.

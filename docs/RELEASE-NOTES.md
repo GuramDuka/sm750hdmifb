@@ -50,8 +50,11 @@ failed removal deletes a registration tree that has no readable
 packaging defects ride along: the inert `CLEAN=` directive is gone from
 `dkms.conf`, so `dkms add` no longer prints `Deprecated feature: CLEAN` (A38),
 and `tools/sm750-console.sh` prints its zero-frame hint only when the scanout
-CRC really is `0xe20eea22` (A39). Not yet observed on the host: the 0.6.2-2
-install needs root, and the runbook is `docs/ROOT-ACTIONS.md` section 3.6.
+CRC really is `0xe20eea22` (A39). The 0.6.2-2 install has since been observed on
+this host: `rpm -q sm750hdmifb` reported `0.6.2-2.fc43` before the -3 upgrade
+(`docs/evidence/runtime/28-dangling-kernel-link.txt` section 6), and section 3
+of that file records the 0.6.2-2 transaction failing to install the module. The
+runbook is `docs/ROOT-ACTIONS.md` section 3.6.
 
 **Packaging: 0.6.2-3** (same source, RPM `Release` 3). 0.6.2-2 fixed the order
 but not the whole leftover: the host also carried a dangling DKMS
@@ -61,8 +64,14 @@ pointing at the erased `0.6.1/<kernel>/x86_64`), and `do_install()` in dkms
 so `dkms install` still died trying to uninstall `0.6.1` and no kernel received
 the module (A40). A second purge loop, after the version purge and before the
 build loop, now removes a link that does not resolve and leaves a link that
-does. Not yet observed on the host: the install needs root, and the runbook is
-`docs/ROOT-ACTIONS.md` section 3.7.
+does. The upgrade from `0.6.2-2` to `0.6.2-3` has since run on this host
+(`sudo dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-3.fc43.noarch.rpm`,
+by its owner): `%posttrans` completed for all three installed kernels, the
+active-version branch of `dkms do_install()` ran against a healthy `0.6.2`
+registration and succeeded, `dkms status` reports `0.6.2` `installed` for each
+kernel, `/sys/module/sm750hdmidrm/version` prints `0.6.2`, and no
+`removing dangling DKMS kernel link:` line appeared because no link dangled.
+The transcript is section 8 of `docs/evidence/runtime/28-dangling-kernel-link.txt`.
 
 ## 0.6.1 - Display-control transition, blank-console diagnostic
 
