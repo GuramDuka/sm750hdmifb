@@ -1,15 +1,19 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Defect dispositions
 
-One row per defect inventoried in [AUDIT.md](AUDIT.md), plus eleven found later:
+One row per defect inventoried in [AUDIT.md](AUDIT.md), plus fourteen found
+later:
 `A25`, in the kernel log of the running 0.5.9 build, `A26`, in the IGT
 `kms_addfb_basic` run, `A27`, isolated by a targeted reproduction of the
 same 0.5.9 kernel log episode, `A28`, by the static-analysis gate added in
 T19, `A29`, by the release gate itself, `A30`, by the acceptance review of
 that same static gate, `A32`, by the root restore-path run of T20 and the
 RCA that followed, `A33`, by the coverage review of the stale-DKMS purge
-in T36, `A34`, by the black-panel diagnosis of A31 in T37, and `A35`, by
-running the release audit of T37. They are
+in T36, `A34`, by the black-panel diagnosis of A31 in T37, `A35`, by
+running the release audit of T37, and `A37`, `A38` and `A39`, by a real
+package upgrade of 0.6.2-1 on the target host in T41 (the module was not
+installed; the transcript is `docs/evidence/runtime/27-posttrans-install-failure.txt`).
+They are
 recorded here because this
 table is the current defect state, not a copy of the audit. [AUDIT.md](AUDIT.md)
 still describes the pre-fix tree and is not rewritten. Statuses:
@@ -61,6 +65,9 @@ after (working tree) form of every fixed item. All logs were produced unprivileg
 | A34 | S4 | A module load on a foreground VT in `KD_GRAPHICS` leaves the panel scanning the fbdev client's all-zero buffer (A31), so a host with no console producer shows a dead-black panel between load and the first client frame, and indefinitely when no client ever attaches. The symptom is indistinguishable from a broken display path without a register dump | fixed; opt-out available | bounded fallback, `test_pattern` (default `auto`, `off`/`auto`/`always`, mode 0644, `src/sm750_drm.c:243`, `:289-290`), `test_pattern_period_ms` (default `5000`, `src/sm750_drm.c:244`, `:290`, `:292-293`) and `test_pattern_anim_ms` (default `40`, `0` stops the disc, clamped 10-1000, `src/sm750_drm.c:245`, `:291`, `:296-297`). `sm750_test_pattern_pixel()` (`src/sm750_drm.c:3574-3615`) computes any background pixel from x, y and the palette phase: seven EBU bars plus a black right bar over the top two thirds, an 8-step grayscale band, a 16x12 grid, a centred crosshair and circle, a 1 px inset border and a 3 px sweep. `sm750_test_pattern_rect()` (`src/sm750_drm.c:3641-3686`) writes any rectangle through one probe-time line buffer, padded to `scanout_pitch` and copied with `memcpy_toio()` (`:3668`, `:3671`, `:3676`); the full card and an animation tick both go through it. The disc is `sm750_test_pattern_disc_pixel()` (`:3617-3639`), moved by `sm750_test_pattern_disc_move()` (`:3770-3818`) with reflection off the inner border and a colour change per bounce, so a 25 fps tick writes only two bounding boxes (`sm750_test_pattern_disc_tick()`, `:3821-3850`). Encoding: `u16` RGB565 or `u32` 0x00RRGGBB (`sm750_test_pattern_put()`, `:3554-3572`). Guards, all in `sm750_test_pattern_ctx_init()`: `softscale_active` (`:3700`), missing pitch or buffers (`:3696`), below 320x200 (`:3702`), pitch outside the line buffer (`:3704`), and the frame not fitting `vram_size - scanout_offset` (`:3706`). The paint runs in the `sm750_pipe_enable()` success block after the blank diagnostic and before `drm_crtc_vblank_on()` (`:4077-4104`), from the single `blank` sample shared with A31; the buffers are `devm_kmalloc_array` at probe (`:4774-4788`). The one `delayed_work` (`sm750_test_pattern_work()`, `:3901-3959`) moves the disc every `test_pattern_anim_ms` and rotates the palette once per `test_pattern_period_ms`, and is cancelled in `sm750_pipe_disable()` (`:4226`), in `sm750_pipe_update()` before any upload (`:4184`), on the enable fail path (`:4112`) and in `sm750_pci_remove()` (`:4970`); the commit that painted the card skips its own upload through `test_pattern_fresh` (`:4174`). Both snapshots are invalidated after every paint (`:3682-3683`). Seen on the panel 2026-11-20: colour bars, with the palette jump every 5 s; the animated disc is not yet observed | `docs/evidence/runtime/23-test-card-fallback.txt`, `docs/evidence/runtime/25-test-card-animation.txt` |
 | A35 | S2 | The 0.6.1 tree could not pass its own release gate: `tools/sm750-restore-cycle.sh:36` embedded an absolute home path as `REPO=${HOME}/sm750hdmifb`, and `tests/audit-release.sh:98` rejects a literal local path in anything that ships (the harness is under `tools/`, which `packaging/source-excludes.sh` does not exclude). `./build-package.sh` exit 0 but `./tests/audit-release.sh` exit 1 with `Local path, machine identifier, or credential pattern remains.`, reproduced in a clean `git worktree` of HEAD 1f74688 with no working-tree changes, so the defect predates T37 | fixed | `tools/sm750-restore-cycle.sh:36-41` now resolves the checkout the way the sibling helper already does: `OWNER=coder`, `owner_home=$(getent passwd "$OWNER" | cut -d: -f6 || true)`, `REPO=${SM750_REPO:-${owner_home:-}/sm750hdmifb}` (the idiom documented at `tools/sm750-crc-cycle.sh:21-26`). No gate was weakened; the audit check is unchanged. Behaviour is unchanged for the intended root user and `SM750_REPO` still overrides | `docs/evidence/runtime/23-test-card-fallback.txt` (section 9) |
 | A36 | S2 | The test card corrupted the scanout CRC stream: `tests/check-scanout-crc.sh` failed with `FAIL: CRC is not stable for a static frame: 3 distinct values in 12 frames` because the `test_pattern_fresh` flag introduced in T37 was consumed one commit too late. With the driver's default commit tail, `drm_atomic_helper_commit_tail()` runs `commit_planes()` before `commit_modeset_enables()` (`drm_atomic_helper.c:1984-2003`; `src/sm750_drm.c` sets only `.atomic_commit`), so `sm750_pipe_enable()` set the flag after the enabling commit's own `sm750_pipe_update()` had already run. The flag therefore skipped the *client's* first present - the opposite of what the comment claimed - and its `goto event` also skipped the `sm750_test_pattern_cancel()` below it, so the 5 s palette rotation kept rewriting the 262144-byte window that `sm750_scanout_crc32()` reads in 256-byte chunks, and one entry straddling a repaint returned a torn value | fixed; CRC conflict closed | `src/sm750_drm.c:3972-3990` (`sm750_test_pattern_should_paint()` now takes the device, returns false first when `READ_ONCE(sdev->crc_enabled)`, and requires `!READ_ONCE(sdev->drm.master) && blank`); `sm750_crc_enable()` cancels the card before `sm750_crc_arm()` (`sm750_drm.c` CRC ownership block, forward declaration above `sm750_crc_enable()`); the work tick re-checks `!READ_ONCE(sdev->crc_enabled)` under `mode_lock`; the `test_pattern_fresh` field and every use removed; `sm750_pipe_update()` keeps the cancel as its first test-card action. `tests/check-test-pattern.sh` gained `check_crc_ownership()` plus five planted controls (18 total) | `docs/evidence/runtime/24-test-card-crc-conflict-rca.txt`, `docs/evidence/runtime/26-test-card-crc-fix.txt` |
+| A37 | S2 | The 0.6.2-1 package installed but installed no module. The transaction printed `Error! Could not locate dkms.conf file.` / `File: /var/lib/dkms/sm750hdmifb/0.6.1/source/dkms.conf does not exist.` / `warning: dkms install failed for 7.3.4-100.fc43.x86_64; run it manually` for every installed kernel, then `warning: no supported installed kernel has usable headers; the module was not built` (false: the headers were present), and `cat /sys/module/sm750hdmidrm/version` still printed `0.6.1`, so the freshly built module never reached `/lib/modules`. Mechanism: `%posttrans` ran the build+install loop before the stale-registration purge, and `dkms install -m sm750hdmifb -v 0.6.2 -k <kernel> --force` first uninstalls the older registered version for that kernel; the 0.6.1 registration was broken because rpm had erased the 0.6.1 package's files, so `/var/lib/dkms/sm750hdmifb/0.6.1/source` dangled, dkms exited non-zero and installed nothing, and the purge that would have cleared the entry ran afterwards - after the step it exists to protect. The load-bearing property is the order: a purge after the install cannot unblock the install | fixed | purge moved ahead of the build loop with the ordering rationale inline (`packaging/sm750hdmifb.spec:146-227` purge, `:230` build loop); the failed-removal branch escalates once and deletes a demonstrably broken registration tree after `warning: removing broken DKMS registration tree: <path>` (`packaging/sm750hdmifb.spec:221-226`), which is what dkms itself instructs (`If this module version is no longer needed, you can remove the stale directory.`); `$stale_version` is skipped before it can reach a path if it is empty, contains `/`, is `.` or `..`, or carries a byte outside `[0-9A-Za-z._-]` (`:198`, `:207-212`); `dkms_root=${SM750_RPM_DKMS_ROOT:-/var/lib/dkms}` lets the test point the tree at a sandbox (`:139-144`); the zero-build warning no longer claims headers are the reason (`:257`). Guards: `tests/check-rpm-dkms.sh:639-651` (`purge_before_build()`, line numbers taken from the extracted scriptlet), `:532-580` (`broken_scenario()`), `:582-616` (`unsafe_scenario()`), plus the planted controls at `:680-715` | `docs/evidence/runtime/27-posttrans-install-failure.txt`, `docs/evidence/packaging/06-posttrans-missing-headers.log` |
+| A38 | S3 | Every `dkms add` printed `Deprecated feature: CLEAN (/var/lib/dkms/sm750hdmifb/0.6.2/source/dkms.conf)`, and `docs/PACKAGING-RPM.md` told the reader it was expected and harmless. The directive had no effect at all: dkms 3.4.4 contains one occurrence of `CLEAN` in the whole script (`/usr/sbin/dkms:582-585`) and it exists only to emit that warning, so the configured clean command was never run | fixed | `CLEAN="make KDIR=${kernel_source_dir} clean"` deleted from `dkms.conf` (the file now ends at `MAKE[0]`, `dkms.conf:9`); `docs/PACKAGING-RPM.md` section 8 replaces the "expected, harmless" paragraph with the reason the warning is gone and the rule that no shipped directive may produce one. Guard: `tests/check-rpm-dkms.sh:618-626` (`no_deprecated_directive()`, applied to the working tree and to the payload extracted from the built RPM) plus the `plant_clean_directive` control at `:697-699`, `:709` | `docs/evidence/packaging/06-posttrans-missing-headers.log` |
+| A39 | S3 | `tools/sm750-console.sh show` printed `(crc32 0xe20eea22 is 262144 zero bytes: nothing has painted the window)` unconditionally, including on a frame that was not zero: observed with the test card on screen as `scanout nonzero: 200323`, `scanout crc32: 0x3972ef44` followed by that zero-frame hint, which points an operator at the wrong cause. The line was a fact about one CRC value, not about the frame that had just been read | fixed | the helper captures the field once and prints the hint only when the read CRC is exactly `0xe20eea22`; otherwise it prints `(crc32 0xe20eea22 is 262144 zero bytes; this frame is not it)` (`tools/sm750-console.sh:102-107`). Every other output field is byte-identical, the script is still POSIX sh. Guard: `tests/check-rpm-dkms.sh:628-637` (`hint_is_conditional()`) plus the `plant_unconditional_hint` control at `:700-704`, `:711` | `docs/evidence/runtime/27-posttrans-install-failure.txt` (section 2) |
 
 ## Deferred and accepted items in detail
 
@@ -579,6 +586,116 @@ have to guess which commit it belongs to, and the ownership test needs no such
 guess. `tests/check-scanout-crc.sh` passes unmodified, which is the acceptance
 criterion for this fix. Evidence:
 `docs/evidence/runtime/26-test-card-crc-fix.txt`.
+
+### A37 - a broken stale registration blocked its own removal (fixed)
+
+The owner installed the 0.6.2-1 RPM on the target host and the module was not
+installed. For each installed kernel the transaction printed, verbatim:
+
+```
+>>> Module sm750hdmifb/0.6.1 for kernel 7.3.4-100.fc43.x86_64 (x86_64):
+>>>
+>>> Error! Could not locate dkms.conf file.
+>>> File: /var/lib/dkms/sm750hdmifb/0.6.1/source/dkms.conf does not exist.
+>>>
+>>> Error! Failed to uninstall sm750hdmifb/0.6.1 for kernel 7.3.4-100.fc43.x86_64 (x86_64).
+>>> warning: dkms install failed for 7.3.4-100.fc43.x86_64; run it manually
+```
+
+and closed with
+
+```
+>>> warning: no supported installed kernel has usable headers; the module was not built
+>>> removing stale DKMS registration: sm750hdmifb/0.6.1
+>>> Error! sm750hdmifb/0.6.1 is broken!
+```
+
+`cat /sys/module/sm750hdmidrm/version` then printed `0.6.1`, so the module
+DKMS had just built and signed for 0.6.2 never reached `/lib/modules`.
+
+Mechanism, and the reason the order is load-bearing: `dkms install` of a new
+version is not a plain copy. It first uninstalls the older registered version
+for that kernel. The 0.6.1 registration was broken - rpm had erased the 0.6.1
+package's files, so `/var/lib/dkms/sm750hdmifb/0.6.1/source` dangled - and dkms
+refused to touch it, exited non-zero, and installed nothing. The
+`%posttrans` of 0.6.2-1 ran that install loop *before* the stale purge, so the
+purge met the same broken entry afterwards and gave up with
+`Manual intervention is required!`. The purge was correct and useless: it ran
+after the step it exists to protect. The warning it printed also misattributed
+the cause; the headers were present for all three kernels.
+
+The fix moves the whole purge ahead of the build loop and gives a failed
+removal one escalation: when the version directory exists and
+`<tree>/source/dkms.conf` is not a readable file, the tree is deleted with
+`rm -rf --` after `warning: removing broken DKMS registration tree: <path>`,
+which is exactly what dkms asks for in its own message (`If this module
+version is no longer needed, you can remove the stale directory.`). A tree
+whose `dkms.conf` is readable is never deleted; `dkms remove` owns that case.
+The tree path is built from `$dkms_root`, overridable through
+`SM750_RPM_DKMS_ROOT` so the defective branch can be tested without touching
+`/var/lib/dkms`; rpm never sets the variable.
+
+Because the path now derives from a value parsed out of `dkms status`, the
+version is validated before it reaches a path: empty, containing `/`, equal to
+`.` or `..`, or carrying any byte outside `[0-9A-Za-z._-]` is skipped. The
+existing properties are unchanged - only `%{dkms_name}` exactly, never
+`%{dkms_version}`, each version at most once, a failed removal is a warning
+and never a non-zero exit, and the scriptlet still ends in `exit 0`.
+
+Gates: `purge_before_build()` reads the line numbers of the purge marker and
+of the first `for kernel_dir in` out of the extracted scriptlet and fails
+unless the purge comes first; `broken_scenario()` builds a sandbox dkms root
+with a 0.6.1 tree that has no `source/dkms.conf`, a second module's canary and
+a failing `dkms remove` shim, and asserts the tree is gone, the canary intact,
+`%{dkms_version}` and the other module untouched, that `dkms install` for the
+running kernel is still attempted afterwards, that the transcript contains no
+`dkms install failed`, and that the scriptlet exits 0; `unsafe_scenario()`
+feeds `sm750hdmifb/../etc`, `sm750hdmifb/..`, `sm750hdmifb/.` and a token with
+a byte outside the class, and asserts no such version reaches `dkms remove`
+and nothing outside the version tree is removed. Three planted controls
+(`plant_purge_after_build`, `plant_broken_tree_escalation`,
+`plant_unsafe_version`) prove each assertion can fail. Evidence:
+`docs/evidence/runtime/27-posttrans-install-failure.txt`.
+
+### A38 - a deprecated `dkms.conf` directive that did nothing (fixed)
+
+`dkms add` printed `Deprecated feature: CLEAN
+(/var/lib/dkms/sm750hdmifb/0.6.2/source/dkms.conf)`, and the troubleshooting
+section of `docs/PACKAGING-RPM.md` told the reader to expect it and do
+nothing. The directive was inert: in dkms 3.4.4 `/usr/sbin/dkms:582-585` is
+the only occurrence of `CLEAN` in the file and it exists to print that
+warning, so the clean command a reader would assume ran never ran.
+
+`CLEAN="make KDIR=${kernel_source_dir} clean"` is deleted from `dkms.conf`,
+which now ends at `MAKE[0]` (`dkms.conf:9`); the documentation paragraph is
+replaced with the mechanism and with the rule that no shipped directive may
+produce a deprecation warning. Guard: `no_deprecated_directive()` rejects
+`^[[:space:]]*CLEAN[[:space:]]*=` in the working-tree `dkms.conf` and in the
+`dkms.conf` extracted from the built RPM, and the `plant_clean_directive`
+control re-adds the line to prove the check bites.
+
+### A39 - the console helper's zero-frame hint fired on a non-zero frame (fixed)
+
+`tools/sm750-console.sh show` ended with
+`(crc32 0xe20eea22 is 262144 zero bytes: nothing has painted the window)`
+whatever it had just read. Observed on this host with the test card on screen:
+
+```
+scanout nonzero: 200323
+scanout crc32: 0x3972ef44
+(crc32 0xe20eea22 is 262144 zero bytes: nothing has painted the window)
+```
+
+200323 nonzero bytes and a different CRC, followed by a hint that says the
+opposite. The hint is a statement about one CRC value, so it is now gated on
+that value: the helper captures the field once, prints the hint only for
+`0xe20eea22`, and otherwise prints
+`(crc32 0xe20eea22 is 262144 zero bytes; this frame is not it)`
+(`tools/sm750-console.sh:102-107`). No other output line changed and the
+script is still POSIX sh. Guard: `hint_is_conditional()` requires the CRC test
+immediately before the hint and the alternative wording within three lines,
+and `plant_unconditional_hint` inserts an unconditional copy to prove the
+check bites.
 
 ## Evidence handling
 

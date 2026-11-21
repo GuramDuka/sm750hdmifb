@@ -7,10 +7,15 @@
 # order are as designed, %files matches the ship/no-ship decision list, the
 # dkms sandbox compiles a real .ko (dkms install itself is root-only), the
 # missing-headers branch warns without a non-zero exit, and the %posttrans
-# stale-registration purge removes every other registered version of this
-# module name while leaving the installed version and other module names
-# alone - including when one removal fails (dkms exit 4): the purge then
-# warns, keeps exit 0 and continues with the remaining versions.
+# stale-registration purge runs before the build loop, removes every other
+# registered version of this module name while leaving the installed version
+# and other module names alone, and deletes a registration tree dkms cannot
+# unregister because its dkms.conf is gone (A37) - including when one removal
+# fails (dkms exit 4): the purge then warns, keeps exit 0 and continues with
+# the remaining versions. A version that is not a plain release token never
+# reaches a path. Also asserts that dkms.conf carries no directive dkms 3.4.4
+# reports as deprecated (A38), and that the console helper prints its
+# zero-frame hint only for the zero-frame crc32 (A39).
 # Root-only install assertions are skipped with a printed
 # reason (docs/evidence/EVIDENCE-GAPS.md, GAP-B7).
 #
@@ -183,14 +188,23 @@ install_line=$(printf '%s\n' "$posttrans" |
 # 0.6.0 left other versions of this module name registered against the same
 # /extra destination path, so the purge must exist, must be scoped to this
 # module name, must never remove the version being installed, and must run
-# after the build loop.
+# BEFORE the build loop: "dkms install" first uninstalls the older registered
+# version for the same kernel, so on a host where that registration is broken
+# (source/ symlink dangling) the install aborts with "Error! Could not locate
+# dkms.conf file." and never installs the new version (defect A37). A purge
+# placed after the loop runs when the damage is already done.
 purge_marker='removing stale DKMS registration'
 printf '%s\n' "$posttrans" | grep -F "$purge_marker" >/dev/null ||
 	fail "%posttrans has no stale-registration purge"
 purge_line=$(printf '%s\n' "$posttrans" |
 	grep -nF "$purge_marker" | head -n 1 | cut -d: -f1)
-[ "$purge_line" -gt "$build_line" ] ||
-	fail "the stale-registration purge runs before dkms build"
+build_loop_line=$(printf '%s\n' "$posttrans" |
+	grep -nE '^[[:space:]]*for kernel_dir in ' | head -n 1 | cut -d: -f1)
+[ -n "$build_loop_line" ] || fail "%posttrans has no build loop"
+[ "$purge_line" -lt "$build_loop_line" ] ||
+	fail "the purge starts after the build loop (purge line $purge_line, loop line $build_loop_line): a broken stale registration makes dkms install abort first"
+[ "$purge_line" -lt "$build_line" ] ||
+	fail "the purge starts after dkms build (purge line $purge_line, build line $build_line)"
 for body in "$postin" "$preun"; do
 	printf '%s\n' "$body" | grep -F "$purge_marker" >/dev/null &&
 		fail "a scriptlet other than %posttrans purges stale registrations"
@@ -393,13 +407,17 @@ done
 # fail; empty means every removal succeeds.
 shim_status=
 shim_fail_remove=
+# Arguments: 1 modules root, 2 dkms root, 3 scriptlet. The dkms root is always
+# a sandbox path: the broken-tree escalation deletes directories and must never
+# reach the host /var/lib/dkms.
 run_posttrans() {
 	SHIM_LOG=$sandbox/calls.log \
 		SHIM_STATUS=$shim_status \
 		SHIM_FAIL_REMOVE=$shim_fail_remove \
 		SM750_RPM_MODULES_ROOT=$1 \
+		SM750_RPM_DKMS_ROOT=${2:-$sandbox/dkmsroot} \
 		PATH="$sandbox/bin:$PATH" \
-		sh "$sandbox/posttrans.sh"
+		sh "${3:-$sandbox/posttrans.sh}"
 }
 
 : >"$sandbox/calls.log"
@@ -408,8 +426,8 @@ none_output=$(run_posttrans "$sandbox/modules-none" 2>&1) || none_exit=$?
 [ "$none_exit" -eq 0 ] ||
 	fail "%posttrans exited $none_exit without headers; it must exit 0"
 printf '%s\n' "$none_output" |
-	grep -F 'no supported installed kernel has usable headers' >/dev/null ||
-	fail "%posttrans did not warn when no kernel has headers"
+	grep -F 'no kernel received the module' >/dev/null ||
+	fail "%posttrans did not warn when no kernel received the module"
 printf '%s\n' "$none_output" |
 	grep -F 'skipping 6.18.13-200.fc43.x86_64' >/dev/null ||
 	fail "%posttrans did not warn about the header-less 6.18 kernel"
@@ -422,9 +440,11 @@ printf '%s\n' "$none_output" | grep -F '5.15.0-generic' >/dev/null &&
 mixed_exit=0
 mixed_output=$(run_posttrans "$sandbox/modules-mixed" 2>&1) || mixed_exit=$?
 [ "$mixed_exit" -eq 0 ] || fail "%posttrans exited $mixed_exit on the mixed root"
-printf '%s\n' "$mixed_output" | grep -F 'no supported installed kernel' >/dev/null &&
+printf '%s\n' "$mixed_output" | grep -F 'no kernel received the module' >/dev/null &&
 	fail "%posttrans warned despite one usable kernel"
-expected_calls=$'dkms build -m sm750hdmifb -v 0.6.2 -k 7.3.4-100.fc43.x86_64\ndkms install -m sm750hdmifb -v 0.6.2 -k 7.3.4-100.fc43.x86_64 --force\ndepmod -a 7.3.4-100.fc43.x86_64\ndkms status'
+# The purge is first on purpose (A37): it sees the canned listing (empty here)
+# before the build loop runs.
+expected_calls=$'dkms status\ndkms build -m sm750hdmifb -v 0.6.2 -k 7.3.4-100.fc43.x86_64\ndkms install -m sm750hdmifb -v 0.6.2 -k 7.3.4-100.fc43.x86_64 --force\ndepmod -a 7.3.4-100.fc43.x86_64'
 [ "$(cat "$sandbox/calls.log")" = "$expected_calls" ] ||
 	fail "unexpected dkms/depmod call sequence: $(tr '\n' '|' <"$sandbox/calls.log")"
 mixed_calls=$(cat "$sandbox/calls.log")
@@ -503,6 +523,197 @@ expected_failpurge=$'dkms status\ndkms remove -m sm750hdmifb -v 0.5.9 --all\ndkm
 [ "$(cat "$sandbox/calls.log")" = "$expected_failpurge" ] ||
 	fail "the failing-removal run built or installed: $(tr '\n' '|' <"$sandbox/calls.log")"
 failpurge_calls=$(cat "$sandbox/calls.log")
+# --- A37: a broken registration tree must not block the install -------------
+# Host state after the 0.6.2-1 upgrade: /var/lib/dkms/sm750hdmifb/0.6.1 is
+# still registered for the running kernel, its source/ symlink dangles because
+# rpm erased the 0.6.1 package files, so "dkms install 0.6.2" aborts while
+# uninstalling 0.6.1 and /lib/modules keeps the 0.6.1 module. The purge must
+# delete the tree, and the install must still be attempted.
+broken_scenario() { # posttrans script, scenario root; 0 when every property held
+	local script=$1 root=$2 rc=0 out remove_line install_line
+	rm -rf -- "$root"
+	mkdir -p "$root/modules/7.3.4-100.fc43.x86_64/build" \
+		"$root/dkmsroot/sm750hdmifb/0.6.1" \
+		"$root/dkmsroot/othermodule/1.0"
+	: >"$root/modules/7.3.4-100.fc43.x86_64/build/Makefile"
+	: >"$root/dkmsroot/othermodule/1.0/canary"
+	cat >"$root/status.txt" <<'EOF'
+sm750hdmifb/0.6.1, 7.3.4-100.fc43.x86_64, x86_64: installed
+sm750hdmifb/0.6.1: added
+othermodule/1.0, 7.3.4-100.fc43.x86_64, x86_64: installed
+EOF
+	out=$(SHIM_LOG=$root/calls.log SHIM_STATUS=$root/status.txt \
+		SHIM_FAIL_REMOVE=0.6.1 \
+		SM750_RPM_MODULES_ROOT=$root/modules \
+		SM750_RPM_DKMS_ROOT=$root/dkmsroot \
+		PATH="$sandbox/bin:$PATH" sh "$script" 2>&1) || rc=$?
+	printf '%s\n' "$out" >"$root/transcript.txt"
+	[ "$rc" -eq 0 ] || { echo "exit $rc"; return 1; }
+	printf '%s\n' "$out" |
+		grep -F "warning: removing broken DKMS registration tree: $root/dkmsroot/sm750hdmifb/0.6.1" >/dev/null ||
+		{ echo "no broken-tree warning"; return 1; }
+	[ ! -e "$root/dkmsroot/sm750hdmifb/0.6.1" ] ||
+		{ echo "the broken tree survived"; return 1; }
+	[ -e "$root/dkmsroot/othermodule/1.0/canary" ] ||
+		{ echo "the purge deleted another module's tree"; return 1; }
+	printf '%s\n' "$out" | grep -F 'dkms install failed' >/dev/null &&
+		{ echo "dkms install failed"; return 1; }
+	grep -F 'dkms install -m sm750hdmifb -v 0.6.2 -k 7.3.4-100.fc43.x86_64 --force' \
+		"$root/calls.log" >/dev/null ||
+		{ echo "dkms install was not attempted"; return 1; }
+	remove_line=$(grep -nF 'dkms remove -m sm750hdmifb -v 0.6.1 --all' \
+		"$root/calls.log" | cut -d: -f1)
+	install_line=$(grep -nF 'dkms install -m sm750hdmifb -v 0.6.2' \
+		"$root/calls.log" | cut -d: -f1)
+	[ -n "$remove_line" ] && [ -n "$install_line" ] &&
+		[ "$remove_line" -lt "$install_line" ] ||
+		{ echo "the install did not follow the purge"; return 1; }
+	return 0
+}
+broken_scenario "$sandbox/posttrans.sh" "$sandbox/broken" ||
+	fail "the broken 0.6.1 registration was not cleared before the install: $(cat "$sandbox/broken/transcript.txt" 2>/dev/null)"
+broken_transcript=$(cat "$sandbox/broken/transcript.txt")
+broken_calls=$(cat "$sandbox/broken/calls.log")
+
+# --- A37: a status field that is not a release token must not reach a path --
+# "dkms status" is a text listing. A version field of ".." would resolve
+# <dkms_root>/sm750hdmifb/.. to the dkms root itself, and the broken-tree
+# escalation would then delete the whole root.
+unsafe_scenario() { # posttrans script, scenario root
+	local script=$1 root=$2 rc=0 out
+	rm -rf -- "$root"
+	mkdir -p "$root/modules" "$root/dkmsroot/sm750hdmifb/0.6.0"
+	: >"$root/dkmsroot/canary"
+	: >"$root/dkmsroot/sm750hdmifb/0.6.0/canary"
+	cat >"$root/status.txt" <<'EOF'
+sm750hdmifb/../etc, 6.17.0-1.fc43.x86_64, x86_64: installed
+sm750hdmifb/.., 6.17.0-1.fc43.x86_64, x86_64: installed
+sm750hdmifb/., 6.17.0-1.fc43.x86_64, x86_64: installed
+sm750hdmifb/0.6.1~x, 6.17.0-1.fc43.x86_64, x86_64: installed
+EOF
+	out=$(SHIM_LOG=$root/calls.log SHIM_STATUS=$root/status.txt \
+		SHIM_FAIL_REMOVE=.. \
+		SM750_RPM_MODULES_ROOT=$root/modules \
+		SM750_RPM_DKMS_ROOT=$root/dkmsroot \
+		PATH="$sandbox/bin:$PATH" sh "$script" 2>&1) || rc=$?
+	printf '%s\n' "$out" >"$root/transcript.txt"
+	[ "$rc" -eq 0 ] || { echo "exit $rc"; return 1; }
+	[ -e "$root/dkmsroot/canary" ] ||
+		{ echo "a path outside the version tree was removed"; return 1; }
+	[ -e "$root/dkmsroot/sm750hdmifb/0.6.0/canary" ] ||
+		{ echo "the dkms root was wiped"; return 1; }
+	grep -E 'dkms remove .* -v (\.\.|\.|\.\./etc|0\.6\.1~x) ' "$root/calls.log" >/dev/null &&
+		{ echo "an unsafe version reached dkms remove"; return 1; }
+	return 0
+}
+unsafe_scenario "$sandbox/posttrans.sh" "$sandbox/unsafe" ||
+	fail "a crafted dkms status version reached a path: $(cat "$sandbox/unsafe/transcript.txt" 2>/dev/null)"
+unsafe_transcript=$(cat "$sandbox/unsafe/transcript.txt")
+unsafe_calls=$(cat "$sandbox/unsafe/calls.log")
+
+# --- A38/A39: dead dkms directive, unconditional console hint --------------
+# dkms 3.4.4 reads CLEAN only to print "Deprecated feature: CLEAN"
+# (/usr/sbin/dkms:582-585 is the sole occurrence in the whole script); the
+# directive is never executed, so its return must fail this gate.
+no_deprecated_directive() { # dkms.conf
+	grep -Eq '^[[:space:]]*CLEAN[[:space:]]*=' "$1" && return 1
+	return 0
+}
+no_deprecated_directive "$project_dir/dkms.conf" ||
+	fail "dkms.conf carries CLEAN again; dkms 3.4.4 only warns that it is deprecated"
+
+# tools/sm750-console.sh printed "(crc32 0xe20eea22 is 262144 zero bytes:
+# nothing has painted the window)" for every frame, including the observed test
+# card (crc32 0x3972ef44). The hint must sit inside the zero-frame branch.
+hint_is_conditional() { # helper
+	local guard hint other
+	guard=$(grep -nF 'if [ "$crc" = "0xe20eea22" ]; then' "$1" |
+		head -n 1 | cut -d: -f1)
+	hint=$(grep -nF 'nothing has painted the window' "$1" |
+		head -n 1 | cut -d: -f1)
+	other=$(grep -nF 'this frame is not it' "$1" | head -n 1 | cut -d: -f1)
+	[ -n "$guard" ] && [ -n "$hint" ] && [ -n "$other" ] &&
+		[ "$hint" -eq $((guard + 1)) ] &&
+		[ "$other" -gt "$hint" ] && [ "$other" -le $((hint + 3)) ]
+}
+purge_before_build() { # posttrans script
+	local purge loop
+	purge=$(grep -nF "$purge_marker" "$1" | head -n 1 | cut -d: -f1)
+	loop=$(grep -nE '^[[:space:]]*for kernel_dir in ' "$1" |
+		head -n 1 | cut -d: -f1)
+	[ -n "$purge" ] && [ -n "$loop" ] && [ "$purge" -lt "$loop" ]
+}
+helper=$project_dir/tools/sm750-console.sh
+hint_is_conditional "$helper" ||
+	fail "the console helper prints the zero-frame hint outside the zero-frame branch"
+purge_before_build "$sandbox/posttrans.sh" ||
+	fail "the extracted %posttrans runs the build loop before the purge"
+
+# Planted defects: the check above each plant must reject it.
+plant_dir=$sandbox/plant
+mkdir -p "$plant_dir"
+controls=0
+control_lines=
+plant() { # name, source file, mutation function, detector function
+	local name=$1 planted=$plant_dir/plant_$1
+	cp "$2" "$planted"
+	"$3" "$planted"
+	if "$4" "$planted"; then
+		fail "planted control $name was not rejected"
+	fi
+	controls=$((controls + 1))
+	control_lines="$control_lines plant_$name"
+	printf 'plant_%s: rejected\n' "$name"
+}
+plant_functional() { # name, scriptlet, mutation function, scenario function
+	local name=$1 planted=$plant_dir/plant_$1.sh
+	local out=$plant_dir/plant_$1.log
+	cp "$2" "$planted"
+	"$3" "$planted"
+	if "$4" "$planted" "$plant_dir/plant_$1" >"$out" 2>&1; then
+		fail "planted control $name was not rejected"
+	fi
+	controls=$((controls + 1))
+	control_lines="$control_lines plant_$name"
+	printf 'plant_%s: rejected (%s)\n' "$name" "$(head -n 1 "$out")"
+}
+plant_purge_after_build() {
+	awk '/^seen_versions=/ && !done {
+		print "for kernel_dir in \"$modules_root\"/*; do :; done"
+		done = 1
+	} { print }' "$1" >"$1.planted" && mv "$1.planted" "$1"
+}
+plant_no_tree_escalation() {
+	awk '/^\tif \[ -d "\$stale_tree" \] &&/ { skip = 1 }
+		skip && /^\tfi$/ { skip = 0; next }
+		!skip' "$1" >"$1.planted"
+	mv "$1.planted" "$1"
+}
+plant_unsafe_version() {
+	grep -vF -e '*/*|.|..) continue ;;' \
+		-e '*[!0-9A-Za-z._-]*) continue ;;' "$1" >"$1.planted"
+	mv "$1.planted" "$1"
+}
+plant_clean_directive() {
+	printf 'CLEAN="make KDIR=${kernel_source_dir} clean"\n' >>"$1"
+}
+plant_unconditional_hint() {
+	awk '/if \[ "\$crc" = "0xe20eea22" \]; then/ && !done {
+		print "\t\tsay \"(crc32 0xe20eea22 is 262144 zero bytes: nothing has painted the window)\""
+		done = 1
+	} { print }' "$1" >"$1.planted" && mv "$1.planted" "$1"
+}
+plant purge_after_build "$sandbox/posttrans.sh" \
+	plant_purge_after_build purge_before_build
+plant clean_directive "$project_dir/dkms.conf" \
+	plant_clean_directive no_deprecated_directive
+plant unconditional_hint "$helper" \
+	plant_unconditional_hint hint_is_conditional
+plant_functional broken_tree_escalation "$sandbox/posttrans.sh" \
+	plant_no_tree_escalation broken_scenario
+plant_functional unsafe_version "$sandbox/posttrans.sh" \
+	plant_unsafe_version unsafe_scenario
+
 {
 	log_header "sh posttrans.sh with SM750_RPM_MODULES_ROOT (rootless)"
 	printf '%s\n' '--- no supported kernel with headers ---'
@@ -529,10 +740,31 @@ failpurge_calls=$(cat "$sandbox/calls.log")
 	printf 'exit: %s\n' "$failpurge_exit"
 	printf '%s\n' '--- recorded calls (failed-removal run) ---'
 	printf '%s\n' "$failpurge_calls"
+	printf '%s\n' '--- purge before the build loop (A37), line numbers from posttrans.sh ---'
+	printf 'purge line: %s, build loop line: %s\n' "$purge_line" "$build_loop_line"
+	printf '%s\n' '--- broken 0.6.1 registration (A37), dkms root in the sandbox ---'
+	printf '%s\n' 'state: /var/lib/dkms/sm750hdmifb/0.6.1 registered for the running'
+	printf '%s\n' 'kernel with no source/dkms.conf, so dkms install 0.6.2 aborts while'
+	printf '%s\n' 'uninstalling 0.6.1 (SHIM_FAIL_REMOVE=0.6.1). The purge must delete'
+	printf '%s\n' 'the tree and the install must still be attempted.'
+	printf '%s\n' "$broken_transcript"
+	printf '%s\n' '--- recorded calls (broken-tree run) ---'
+	printf '%s\n' "$broken_calls"
+	printf '%s\n' '--- status fields that are not release tokens (A37) ---'
+	cat "$sandbox/unsafe/status.txt"
+	printf '%s\n' "$unsafe_transcript"
+	printf '%s\n' '--- recorded calls (unsafe-version run) ---'
+	printf '%s\n' "$unsafe_calls"
+	printf '%s\n' '--- planted defects (each must be rejected) ---'
+	printf 'rejected:%s\ntotal: %s\n' "$control_lines" "$controls"
 } >"$evidence/06-posttrans-missing-headers.log" 2>&1
-note "missing headers: warning on stderr, exit 0; build/install/depmod sequence verified"
+note "missing headers: warning on stderr, exit 0; purge, build, install, depmod sequence verified"
 note "stale purge: sm750hdmifb/0.5.9 and 0.6.0 removed, 0.6.2 and other module names untouched"
 note "failed removal: dkms exit 4 downgraded to the spec warning, exit 0, loop continued"
+note "broken 0.6.1 tree: deleted before the build loop, install still attempted, exit 0"
+note "unsafe status field: skipped before any path is formed, dkms root intact"
+note "dkms.conf has no CLEAN directive; console zero-frame hint is conditional"
+note "planted controls: $controls rejected"
 
 # --- dkms sandbox: add + build ---------------------------------------------
 # The source comes from the built RPM payload, so this also proves the packaged
@@ -541,6 +773,8 @@ mkdir -p "$work/payload" "$dkms_root/src" "$dkms_root/install" "$dkms_root/build
 rpm2cpio "$rpm_file" | (cd "$work/payload" && cpio -idm --quiet)
 payload_src=$work/payload/usr/src/$name-$version
 [ -f "$payload_src/dkms.conf" ] || fail "payload has no dkms.conf"
+no_deprecated_directive "$payload_src/dkms.conf" ||
+	fail "the packaged dkms.conf carries the dead CLEAN directive"
 cp -a "$payload_src" "$dkms_root/src/$name-$version"
 dkms_base=(dkms --dkmstree "$dkms_root" --sourcetree "$dkms_root/src"
 	--installtree "$dkms_root/install" -m "$name" -v "$version")
@@ -645,5 +879,5 @@ skip "closing commands recorded in docs/evidence/EVIDENCE-GAPS.md GAP-B7"
 
 [ ! -e "$HOME/rpmbuild" ] ||
 	fail "test wrote $HOME/rpmbuild; explicit _topdir was not honoured"
-printf 'RPM/DKMS checks passed: %s %s, sandbox built, root-only steps skipped\n' \
-	"$name" "$version"
+printf 'RPM/DKMS checks passed: %s %s, sandbox built, %s planted controls rejected, root-only steps skipped\n' \
+	"$name" "$version" "$controls"

@@ -1,0 +1,157 @@
+# T41: the 0.6.2 RPM installed but installed no module, because a broken 0.6.1
+# registration made "dkms install" abort before the purge that would have
+# cleared it. Recorded 2026-11-21 by the implementer (uid 1005), from the host
+# owner's terminal. The install itself ran as root and is NOT reproducible from
+# this account; the transcript is quoted, not re-run.
+#
+# status: diagnosis complete, fix in the working tree (0.6.2-2), install of
+#         0.6.2-2 NOT YET OBSERVED (needs root).
+
+======== 1. verbatim host transcript of the failed 0.6.2-1 install ========
+
+Quoted from the host owner's terminal. The build block repeats once per
+installed kernel (7.2.15-100.fc43.x86_64, 7.3.3-100.fc43.x86_64,
+7.3.4-100.fc43.x86_64); the text below is one repetition followed by the
+transaction summary, verbatim, including the ">>>" prompt prefixes.
+
+    >>> Building module(s).... done.
+    >>> Signing module /var/lib/dkms/sm750hdmifb/0.6.2/build/src/sm750hdmidrm.ko
+    >>> Deprecated feature: CLEAN (/var/lib/dkms/sm750hdmifb/0.6.2/source/dkms.conf)
+    >>> Module sm750hdmifb/0.6.1 for kernel 7.3.4-100.fc43.x86_64 (x86_64):
+    >>>
+    >>> Error! Could not locate dkms.conf file.
+    >>> File: /var/lib/dkms/sm750hdmifb/0.6.1/source/dkms.conf does not exist.
+    >>>
+    >>> Error! Failed to uninstall sm750hdmifb/0.6.1 for kernel 7.3.4-100.fc43.x86_64 (x86_64).
+    >>> warning: dkms install failed for 7.3.4-100.fc43.x86_64; run it manually
+
+End of the transaction:
+
+    >>> warning: no supported installed kernel has usable headers; the module was not built
+    >>> removing stale DKMS registration: sm750hdmifb/0.6.1
+    >>> Error! sm750hdmifb/0.6.1 is broken!
+    >>> Missing the source directory or the symbolic link pointing to it:
+    >>> /var/lib/dkms/sm750hdmifb/0.6.1/source
+    >>> Manual intervention is required!
+    >>> If this module version is no longer needed, you can remove the stale directory.
+    >>> warning: dkms remove sm750hdmifb/0.6.1 failed; remove it by hand
+
+State afterwards:
+
+    $ cat /sys/module/sm750hdmidrm/version
+    0.6.1
+
+`dkms install` of the freshly built 0.6.2 module never reached /lib/modules,
+so the loaded module kept the 0.6.1 label and every fix shipped after 0.6.1
+was absent from the running driver.
+
+======== 2. diagnosis ========
+
+The three warnings in the transcript name three separate defects; A37 is the
+one that lost the module.
+
+A37 (S2), ordering. `%posttrans` as shipped in 0.6.2-1 ran the build+install
+loop first and the stale-registration purge last. `dkms install -m sm750hdmifb
+-v 0.6.2 -k <kernel> --force` does not simply place a module: it first
+uninstalls the older registered version for that kernel. The 0.6.1
+registration was broken - rpm had erased the 0.6.1 package's files, so
+/var/lib/dkms/sm750hdmifb/0.6.1/source dangled - and dkms refused:
+
+    Error! Could not locate dkms.conf file.
+    File: /var/lib/dkms/sm750hdmifb/0.6.1/source/dkms.conf does not exist.
+
+That exits non-zero, the scriptlet reported `warning: dkms install failed for
+7.3.4-100.fc43.x86_64; run it manually` and moved on to the next kernel, with
+the same result. Only then did the purge run, met the same broken entry, and
+gave up with `Manual intervention is required!`. The purge was correct and
+useless: it ran after the step it needed to protect.
+
+The second half of the fix is that a defective registration tree must be
+removable. dkms itself instructs it in the transcript:
+`If this module version is no longer needed, you can remove the stale
+directory.`
+
+A38 (S3), `CLEAN`. `Deprecated feature: CLEAN
+(/var/lib/dkms/sm750hdmifb/0.6.2/source/dkms.conf)` is the only effect of the
+`CLEAN=` directive. In dkms 3.4.4 the whole script contains one occurrence of
+`CLEAN` (/usr/sbin/dkms:582-585) and it is the deprecation emitter; the value
+is never executed. Deleting the line removes the warning and changes nothing
+else.
+
+A39 (S3), console hint. Unrelated to packaging, found in the same session on
+the same host through tools/sm750-console.sh: with a test card on screen the
+helper printed
+
+    scanout nonzero: 200323
+    scanout crc32: 0x3972ef44
+    (crc32 0xe20eea22 is 262144 zero bytes: nothing has painted the window)
+
+The last line is a zero-frame hint and the frame was not zero: 200323 nonzero
+bytes and a different CRC. It was printed unconditionally.
+
+======== 3. what changed (0.6.2-2) ========
+
+packaging/sm750hdmifb.spec
+  - the stale-registration purge block now precedes the build loop; the
+    rationale comment states why the order is load-bearing (spec:146-185,
+    purge body spec:186-227, build loop spec:230)
+  - a failed `dkms remove` escalates once: a version directory that exists
+    with no readable source/dkms.conf is deleted with `rm -rf --` after
+    `warning: removing broken DKMS registration tree: <path>`
+    (spec:221-226)
+  - `$stale_version` is skipped before it can reach a path when it is empty,
+    contains "/", is "." or "..", or carries a byte outside [0-9A-Za-z._-]
+    (spec:198, spec:207-212)
+  - `dkms_root=${SM750_RPM_DKMS_ROOT:-/var/lib/dkms}` next to
+    `modules_root`, with the note that rpm never sets either (spec:139-144)
+  - the zero-build warning no longer blames headers:
+    `warning: no kernel received the module; check the warnings above and run:
+    dkms install -m sm750hdmifb -v 0.6.2 -k <kernel>` (spec:257)
+  - Release 2%{?dist} (spec:22), new %changelog entry for 0.6.2-2 (spec:331)
+
+dkms.conf
+  - `CLEAN="make KDIR=${kernel_source_dir} clean"` deleted; the file now ends
+    at MAKE[0] (dkms.conf:9)
+
+tools/sm750-console.sh
+  - the zero-frame hint is printed only when the read CRC is exactly
+    0xe20eea22 (tools/sm750-console.sh:104-107); otherwise
+    `(crc32 0xe20eea22 is 262144 zero bytes; this frame is not it)`
+
+======== 4. gate transcript ========
+
+tests/check-rpm-dkms.sh, unprivileged, 2026-11-21:
+
+    OK: broken 0.6.1 tree: deleted before the build loop, install still attempted, exit 0
+    OK: unsafe status field: skipped before any path is formed, dkms root intact
+    OK: dkms.conf has no CLEAN directive; console zero-frame hint is conditional
+    OK: planted controls: 5 rejected
+    RPM/DKMS checks passed: sm750hdmifb 0.6.2, sandbox built, 5 planted controls rejected, root-only steps skipped
+
+The five planted controls, each a defect this run must reject:
+
+    plant_purge_after_build      a decoy build loop placed before the purge
+    plant_clean_directive        CLEAN re-added to dkms.conf
+    plant_unconditional_hint     the console hint printed before the CRC test
+    plant_broken_tree_escalation the escalation block deleted
+    plant_unsafe_version         the two case guards on $stale_version deleted
+
+The contract that the failure above violated, in one line: a purge that runs
+after the step it protects cannot protect it. The test now takes the line
+number of the purge marker and of the first `for kernel_dir in` from the
+extracted scriptlet and fails unless the purge comes first.
+
+======== 5. NOT YET OBSERVED ========
+
+The 0.6.2-2 install has not run. It needs root (writing /usr/src, /etc,
+/var/lib/dkms) and this account holds uid 1005 with a fixed sudoers
+allowlist that names the 0.6.2-1 RPM path only. Unverified until the host
+owner runs docs/ROOT-ACTIONS.md section 3.6:
+
+  - that the purge removes the broken 0.6.1 tree before dkms install runs
+  - that `dkms install -m sm750hdmifb -v 0.6.2 -k $(uname -r)` then succeeds
+  - that /sys/module/sm750hdmidrm/version reports 0.6.2
+  - that no `Deprecated feature: CLEAN` line appears in the transcript
+
+The rootless evidence covers the scriptlet logic only: the purge order, the
+escalation, the sanitiser and the call sequence, all against shims.

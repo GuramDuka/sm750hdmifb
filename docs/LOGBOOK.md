@@ -2688,3 +2688,68 @@ and make crc-check all exit 0; four kernel builds exit 0.
 - Process: the owner's new rule "after every logbook or history change, push"
   is now part of the contributor contract at AGENTS.md:13-17, and this entry is
   pushed in the same session.
+
+### 2026-11-21T11:20Z | orchestrator | T41: an upgrade that installed the package but not the module
+
+- The owner installed `sm750hdmifb-0.6.2-1` on the host. `dnf` reported success,
+  yet `cat /sys/module/sm750hdmidrm/version` printed `0.6.1`: the DKMS-built
+  module never reached `/lib/modules`. The transcript shows, for each of the
+  three kernels, `Building module(s).... done.` and `Signing module
+  /var/lib/dkms/sm750hdmifb/0.6.2/build/src/sm750hdmidrm.ko`, then
+  `Module sm750hdmifb/0.6.1 for kernel <kernel> (x86_64):`, `Error! Could not
+  locate dkms.conf file.`, `File: /var/lib/dkms/sm750hdmifb/0.6.1/source/dkms.conf
+  does not exist.`, `Error! Failed to uninstall sm750hdmifb/0.6.1 ...` and
+  `warning: dkms install failed for <kernel>; run it manually`.
+- Defect A37 (S2), cause: `%posttrans` built and installed first and purged
+  stale registrations last. The host still carried a broken `sm750hdmifb/0.6.1`
+  registration - rpm had erased `/usr/src/sm750hdmifb-0.6.1`, so
+  `/var/lib/dkms/sm750hdmifb/0.6.1/source` dangled - and `dkms install -v 0.6.2
+  --force` uninstalls the older version registered for that kernel before
+  installing, so it died on the missing `dkms.conf` and abandoned the install.
+  Fix: the purge block now runs before the build loop
+  (`packaging/sm750hdmifb.spec:186-227`, loop at `:230`), a failed `dkms remove`
+  escalates once and deletes a tree that exists without a readable
+  `source/dkms.conf` after `warning: removing broken DKMS registration tree:
+  <path>` (`:218-226`), `stale_version` is skipped before it can reach a path
+  when empty, containing a slash, `.` or `..`, or carrying a byte outside
+  `[0-9A-Za-z._-]` (`:198`, `:207-212`), and `dkms_root=${SM750_RPM_DKMS_ROOT:-
+  /var/lib/dkms}` sits beside `modules_root` so tests can sandbox it.
+- Defect A38 (S3): `CLEAN` in `dkms.conf` produced `Deprecated feature: CLEAN`.
+  dkms 3.4.4 reads it only to emit that warning - `/usr/sbin/dkms:582-585` is
+  the only occurrence of `CLEAN` in the script and it is never executed - so the
+  directive was deleted; `dkms.conf` is nine lines and ends at `MAKE[0]`.
+- Defect A39 (S3): `sm750-console show` printed the zero-frame hint
+  unconditionally, including next to `scanout nonzero: 200323` and
+  `scanout crc32: 0x3972ef44`. It now prints that sentence only for
+  `0xe20eea22` (`tools/sm750-console.sh:102-107`) and otherwise
+  `(crc32 0xe20eea22 is 262144 zero bytes; this frame is not it)`.
+- Release `2%{?dist}` with a `0.6.2-2` changelog entry; the `0.6.2-1` entry is
+  untouched, because it records what that build contained.
+- `tests/check-rpm-dkms.sh` gained `purge_before_build()` (line numbers taken
+  from the extracted scriptlet, not eyeballed), `broken_scenario()`,
+  `unsafe_scenario()`, `no_deprecated_directive()` (applied to the worktree and
+  to the payload extracted from the built RPM) and `hint_is_conditional()`,
+  plus five planted controls `plant_purge_after_build`, `plant_clean_directive`,
+  `plant_unconditional_hint`, `plant_broken_tree_escalation` and
+  `plant_unsafe_version`; the run reports "5 planted controls rejected".
+- Evidence: `docs/evidence/runtime/27-posttrans-install-failure.txt` holds the
+  verbatim host transcript, the diagnosis, the fix list with spec line numbers
+  and a NOT YET OBSERVED section, because the 0.6.2-2 install needs root.
+- RPM `/mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-2.fc43.noarch.rpm`,
+  117762 bytes, sha256
+  `1e87efd52454412ae2584bb9648109b045440fcf0f947119ca971f2fe1363dc2`, 40 payload
+  entries; its own `%posttrans` places `seen_versions` before the build loop and
+  its payload `dkms.conf` contains no `CLEAN`.
+- Gates, all exit 0: `make CC=/usr/bin/gcc`, the rootless-libdrm `make check`
+  (17 commands), `./tests/check-test-pattern.sh`, `./tests/check-drm-policy.sh`,
+  `./tests/check-release-version.sh` ("passed: 0.6.2"),
+  `./tests/check-drm-packaging.sh`, `./tests/check-static.sh`,
+  `./tests/check-scratch-policy.sh`, `./tests/check-rpm-dkms.sh`, `bash -n`,
+  `git diff --check`, ASCII on every touched file, `./build-package.sh` and
+  `./tests/audit-release.sh`.
+- Environment defect, not a repository one: `/mega/tmp` is `fuse.mergerfs`
+  whose first branch is 100% inode-full, so new directories and compiler temp
+  files there fail with `No space left on device` even though the other branches
+  have free inodes. The gates ran with `TMPDIR` on a branch that does not
+  traverse mergerfs (`/mega/tmp/sm750/t6` is a symlink to real storage). Freeing
+  inodes on that branch is an owner action.

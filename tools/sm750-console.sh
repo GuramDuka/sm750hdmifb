@@ -99,8 +99,13 @@ show_status() {
 		}
 		say "scanout offset:   $(dump_field offset)"
 		say "scanout nonzero:  $(dump_field nonzero)"
-		say "scanout crc32:    $(dump_field crc32)"
-		say "(crc32 0xe20eea22 is 262144 zero bytes: nothing has painted the window)"
+		crc=$(dump_field crc32)
+		say "scanout crc32:    $crc"
+		if [ "$crc" = "0xe20eea22" ]; then
+			say "(crc32 0xe20eea22 is 262144 zero bytes: nothing has painted the window)"
+		else
+			say "(crc32 0xe20eea22 is 262144 zero bytes; this frame is not it)"
+		fi
 	else
 		say "scanout:          unavailable ($card/sm750_scanout is not readable)"
 	fi

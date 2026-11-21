@@ -19,7 +19,7 @@
 
 Name:           sm750hdmifb
 Version:        0.6.2
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        DKMS source for the SM750G10 SiI9024A HDMI DRM-KMS driver
 License:        GPL-2.0-only
 URL:            https://github.com/KodeMunkie/sm750hdmifb
@@ -136,10 +136,96 @@ exit 0
 #   - packaging/drm-postinst:86-89 exits 1 when no supported kernel has usable
 #     headers; here that case prints warnings and exits 0 (see the final block).
 #
-# modules_root is overridable so tests/check-rpm-dkms.sh can exercise the
-# missing-headers branch without writing to /lib/modules. rpm never sets the
-# variable, so the installed default is always /lib/modules.
+# modules_root and dkms_root are overridable so tests/check-rpm-dkms.sh can
+# exercise every branch without writing to /lib/modules or /var/lib/dkms. rpm
+# never sets either variable, so the installed defaults are always
+# /lib/modules and /var/lib/dkms.
 modules_root=${SM750_RPM_MODULES_ROOT:-/lib/modules}
+dkms_root=${SM750_RPM_DKMS_ROOT:-/var/lib/dkms}
+
+# Stale-registration purge, before the build loop on purpose. Releases before
+# 0.6.0 registered other versions of %{dkms_name} and left them registered.
+# Both dkms.conf files declare DEST_MODULE_LOCATION="/updates/dkms", which
+# override_dest_module_location() in /usr/sbin/dkms rewrites to /extra on
+# Fedora, so every registered version of this module name shares the one
+# destination path /lib/modules/<kernel>/extra/%{module_name}.ko.xz.
+# "dkms autoinstall" (what dkms.service runs on boot) installs only the newest
+# registered version and skips kernels where the module already looks
+# installed, so a stale version that stays registered takes the destination
+# path back on the next kernel update. Rationale and host evidence:
+# docs/PACKAGING-RPM.md section 4.
+#
+# The ordering is load-bearing. "dkms install" of the new version first
+# uninstalls the older registered version for the same kernel, and when that
+# registration is broken - its /var/lib/dkms/<name>/<version>/source symlink
+# dangles because rpm erased the older package's files - dkms exits with
+# "Error! Could not locate dkms.conf file." and installs nothing, so the
+# destination path keeps the old module. Purging first leaves install with no
+# stale registration to uninstall. Observed on this host with 0.6.1 left
+# broken while 0.6.2 installed; transcript:
+# docs/evidence/runtime/27-posttrans-install-failure.txt.
+#
+# Bounded by construction: only a status line whose module name is exactly
+# %{dkms_name} is considered ("<name>/" is matched, so a module named
+# "%{dkms_name}-something" is never touched), %{dkms_version} itself is never
+# removed, each distinct version is removed at most once, and a version that is
+# not a plain release token (empty, ".", "..", containing "/" or any byte
+# outside [0-9A-Za-z._-]) is skipped before it can reach a path. A failed
+# removal is a warning, never a non-zero exit: an exiting scriptlet aborts the
+# transaction.
+#
+# A failed removal escalates once: when the registration tree is demonstrably
+# broken - the version directory exists and its source/dkms.conf is not a
+# readable file - the tree itself is removed, which is what dkms instructs
+# ("If this module version is no longer needed, you can remove the stale
+# directory"). A tree whose dkms.conf is readable is never deleted here; dkms
+# remove owns that case.
+#
+# Deliberately left alone: /usr/src/sm750hdmifb-0.5.9 predates packaging and no
+# RPM owns it, so %files cannot remove it. It is a documented manual step.
+seen_versions=' '
+dkms status 2>/dev/null | while IFS= read -r status_line; do
+	# "<name>/<version>, <kernel>, <arch>: <state>" or "<name>/<version>: <state>".
+	# Parsed with cut, not with parameter expansion: rpm collapses a doubled
+	# percent sign in a scriptlet, so a shell expansion written with the
+	# longest-suffix form would reach the host as the shortest-suffix form and
+	# silently mis-parse the version.
+	stale_entry=$(printf '%s\n' "$status_line" | cut -d, -f1)
+	stale_name=$(printf '%s\n' "$stale_entry" | cut -d/ -f1)
+	stale_version=$(printf '%s\n' "$stale_entry" | cut -d/ -f2 | cut -d: -f1)
+	# Not this package's module name: leave it alone.
+	[ "$stale_name" = "%{dkms_name}" ] || continue
+	[ -n "$stale_version" ] || continue
+	# This is the version being installed: never remove it.
+	if [ "$stale_version" = "%{dkms_version}" ]; then
+		continue
+	fi
+	# "name/version" without a registered source tree parses as "name/";
+	# anything with a path separator is not a version, and neither is "." or
+	# ".." (each would resolve the tree path elsewhere) nor a token carrying a
+	# byte outside the release-string class.
+	case "$stale_version" in
+		*/*|.|..) continue ;;
+	esac
+	case "$stale_version" in
+		*[!0-9A-Za-z._-]*) continue ;;
+	esac
+	case "$seen_versions" in
+		*" $stale_version "*) continue ;;
+	esac
+	seen_versions="$seen_versions$stale_version "
+	echo "removing stale DKMS registration: %{dkms_name}/$stale_version" >&2
+	if dkms remove -m %{dkms_name} -v "$stale_version" --all; then
+		continue
+	fi
+	echo "warning: dkms remove %{dkms_name}/$stale_version failed; remove it by hand" >&2
+	stale_tree=$dkms_root/%{dkms_name}/$stale_version
+	if [ -d "$stale_tree" ] && [ ! -r "$stale_tree/source/dkms.conf" ]; then
+		echo "warning: removing broken DKMS registration tree: $stale_tree" >&2
+		rm -rf -- "$stale_tree"
+	fi
+done
+
 built_count=0
 for kernel_dir in "$modules_root"/*; do
 	[ -d "$kernel_dir" ] || continue
@@ -168,65 +254,8 @@ for kernel_dir in "$modules_root"/*; do
 	built_count=$((built_count + 1))
 done
 if [ "$built_count" -eq 0 ]; then
-	echo "warning: no supported installed kernel has usable headers; the module was not built" >&2
-	echo "warning: install kernel-devel for a supported kernel, then run: dkms install -m %{dkms_name} -v %{dkms_version} -k <kernel>" >&2
+	echo "warning: no kernel received the module; check the warnings above and run: dkms install -m %{dkms_name} -v %{dkms_version} -k <kernel>" >&2
 fi
-# Stale-registration purge. Releases before 0.6.0 registered other versions of
-# %{dkms_name} and left them registered. Both dkms.conf files declare
-# DEST_MODULE_LOCATION="/updates/dkms", which override_dest_module_location()
-# in /usr/sbin/dkms rewrites to /extra on Fedora, so every registered version
-# of this module name shares the one destination path
-# /lib/modules/<kernel>/extra/%{module_name}.ko.xz. "dkms autoinstall" (what
-# dkms.service runs on boot) installs only the newest registered version and
-# skips kernels where the module already looks installed, so a stale version
-# that stays registered takes the destination path back on the next kernel
-# update. Rationale and host evidence: docs/PACKAGING-RPM.md section 4.
-#
-# Bounded by construction: only a status line whose module name is exactly
-# %{dkms_name} is considered ("<name>/" is matched, so a module named
-# "%{dkms_name}-something" is never touched), %{dkms_version} itself is never
-# removed, and each distinct version is removed at most once. A failed removal
-# is a warning, never a non-zero exit: an exiting scriptlet aborts the
-# transaction.
-#
-# This runs after the build loop on purpose: %{dkms_version} must own the
-# shared destination path before any other version is unregistered. A stale
-# version whose kernel symlinks still point at itself is uninstalled by
-# "dkms remove --all", which is intended - the pre-0.6.0 driver must not be the
-# object that loads.
-#
-# Deliberately left alone: /usr/src/sm750hdmifb-0.5.9 predates packaging and no
-# RPM owns it, so %files cannot remove it. It is a documented manual step.
-seen_versions=' '
-dkms status 2>/dev/null | while IFS= read -r status_line; do
-	# "<name>/<version>, <kernel>, <arch>: <state>" or "<name>/<version>: <state>".
-	# Parsed with cut, not with parameter expansion: rpm collapses a doubled
-	# percent sign in a scriptlet, so a shell expansion written with the
-	# longest-suffix form would reach the host as the shortest-suffix form and
-	# silently mis-parse the version.
-	stale_entry=$(printf '%s\n' "$status_line" | cut -d, -f1)
-	stale_name=$(printf '%s\n' "$stale_entry" | cut -d/ -f1)
-	stale_version=$(printf '%s\n' "$stale_entry" | cut -d/ -f2 | cut -d: -f1)
-	# Not this package's module name: leave it alone.
-	[ "$stale_name" = "%{dkms_name}" ] || continue
-	[ -n "$stale_version" ] || continue
-	# This is the version being installed: never remove it.
-	if [ "$stale_version" = "%{dkms_version}" ]; then
-		continue
-	fi
-	# "name/version" without a registered source tree parses as "name/";
-	# anything with a path separator is not a version.
-	case "$stale_version" in
-		*/*) continue ;;
-	esac
-	case "$seen_versions" in
-		*" $stale_version "*) continue ;;
-	esac
-	seen_versions="$seen_versions$stale_version "
-	echo "removing stale DKMS registration: %{dkms_name}/$stale_version" >&2
-	dkms remove -m %{dkms_name} -v "$stale_version" --all || \
-		echo "warning: dkms remove %{dkms_name}/$stale_version failed; remove it by hand" >&2
-done
 exit 0
 
 # No %postun scriptlet is defined on purpose. dkms remove must run while
@@ -299,6 +328,16 @@ exit 0
 %doc README.md LICENSE docs/RELEASE-NOTES.md docs/TESTING.md packaging/copyright
 
 %changelog
+* Sat Nov 21 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.2-2
+- The stale-registration purge in %posttrans now runs before the DKMS build
+  loop: a registration left broken by an earlier package (version directory
+  present, source/dkms.conf gone) makes "dkms install" abort while uninstalling
+  the older version, so 0.6.2 was never installed and /lib/modules kept the
+  0.6.1 module; a removal that fails now also deletes a demonstrably broken
+  registration tree, which is what dkms itself instructs. The CLEAN directive is
+  dropped from dkms.conf: dkms 3.4.4 only prints "Deprecated feature: CLEAN"
+  for it and never runs it. The console helper prints the zero-frame hint only
+  when the read crc32 is the zero-frame value.
 * Sat Nov 21 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.2-1
 - Release 0.6.2: a test-card fallback paints an EBU colour bar pattern, a
   grayscale staircase, a grid, a crosshair and a border into the scanout window

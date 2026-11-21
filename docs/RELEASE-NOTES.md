@@ -38,6 +38,21 @@
   developer home directory; it resolves the repository through `SM750_REPO` and
   `getent passwd`, so the release audit passes on a clean tree (defect A35).
 
+**Packaging: 0.6.2-2** (same source, RPM `Release` 2). A 0.6.2-1 upgrade over a
+host that still had a broken 0.6.1 DKMS registration installed the package but
+not the module: `%posttrans` ran its build loop first, `dkms install` tried to
+uninstall the older registered version, hit the dangling
+`/var/lib/dkms/sm750hdmifb/0.6.1/source` with `Error! Could not locate dkms.conf
+file.`, and installed nothing; `/sys/module/sm750hdmidrm/version` kept printing
+`0.6.1`. The stale-registration purge now runs before the build loop, and a
+failed removal deletes a registration tree that has no readable
+`source/dkms.conf`, which is what dkms itself asks for (A37). Two smaller
+packaging defects ride along: the inert `CLEAN=` directive is gone from
+`dkms.conf`, so `dkms add` no longer prints `Deprecated feature: CLEAN` (A38),
+and `tools/sm750-console.sh` prints its zero-frame hint only when the scanout
+CRC really is `0xe20eea22` (A39). Not yet observed on the host: the 0.6.2-2
+install needs root, and the runbook is `docs/ROOT-ACTIONS.md` section 3.6.
+
 ## 0.6.1 - Display-control transition, blank-console diagnostic
 
 - **A modeset no longer fails on this panel.** The display-control transition

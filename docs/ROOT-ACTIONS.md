@@ -104,11 +104,14 @@ deliberately NOT granted - a grant to `cat` on that path would be a grant to
 read every future allowlist, and `visudo` on the live file is not needed once
 the staged file is verified. Verification is by `sudo -n -l` content only.
 
-### The 27 NOPASSWD entries
+### The 29 NOPASSWD entries
 
-`sudo -n -l` lists 27 entries, measured 2026-11-21: 23 for this work plus four
+`sudo -n -l` lists 29 entries, measured 2026-11-21: 25 for this work plus four
 that predate it (`/usr/bin/dmidecode`, `/usr/bin/nice`,
-`/usr/local/cuda/bin/ncu`, `/usr/local/cuda/bin/nvprof`). The 23, at 0.6.2:
+`/usr/local/cuda/bin/ncu`, `/usr/local/cuda/bin/nvprof`). The host owner added
+two of the 25 today: the console helper (`/usr/local/sbin/sm750-console`, row 9
+in the table above) and the `dnf install` path for the 0.6.2-1 RPM. The 25, at
+0.6.2-2:
 
 ```text
 /usr/local/sbin/sm750-crc
@@ -119,6 +122,7 @@ that predate it (`/usr/bin/dmidecode`, `/usr/bin/nice`,
 /usr/bin/journalctl -k -b -q --no-pager
 /usr/local/sbin/sm750-lspci
 /usr/local/sbin/sm750-vbios-dump
+/usr/local/sbin/sm750-console
 /usr/bin/dkms status
 /usr/bin/dkms build -m sm750hdmifb -v 0.6.0
 /usr/bin/dkms install -m sm750hdmifb -v 0.6.0
@@ -133,6 +137,7 @@ that predate it (`/usr/bin/dmidecode`, `/usr/bin/nice`,
 /usr/bin/modprobe sm750hdmidrm
 /usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
 /usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.1-1.fc43.noarch.rpm
+/usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-1.fc43.noarch.rpm
 /usr/bin/dnf remove -y sm750hdmifb
 ```
 
@@ -590,34 +595,92 @@ does not change.
 
 ### 3.5 Installing the 0.6.2 package
 
-The allowlist names three `dnf install` paths, one per released package
-(0.6.0, 0.6.1). The 0.6.2 build needs one more line; everything else the
-install does (`dkms build`, `dkms install` for 0.6.2, `depmod`) runs inside the
-scriptlets and needs no separate grant.
+The allowlist names four `dnf install` paths, one per released package
+(0.6.0, 0.6.1, 0.6.2-1), plus `/usr/local/sbin/sm750-console`. The 0.6.2-2
+build needs **one more line** - the 0.6.2-1 path is granted, the 0.6.2-2 path
+is not yet. Everything else the install does (`dkms build`, `dkms install` for
+0.6.2, `depmod`) runs inside the scriptlets and needs no separate grant.
 
 Install (host owner, root), in this order, so the resident module is unloaded
 only after the new tree is on disk:
 
 ```sh
-sudo dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-1.fc43.noarch.rpm
+sudo dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-2.fc43.noarch.rpm
 sudo dkms status -m sm750hdmifb
 modprobe -r sm750hdmidrm || true
 sudo modprobe sm750hdmidrm
 cat /sys/module/sm750hdmidrm/version
 ```
 
+A host that still carries the broken 0.6.1 registration from the failed 0.6.2-1
+install needs one preparation step first; see section 3.6.
+
 The one line to add to the allowlist in section 1. It contains no colon, so it
 passes the colon audit:
 
 ```text
-coder ALL=(root) NOPASSWD: /usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-1.fc43.noarch.rpm
+coder ALL=(root) NOPASSWD: /usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-2.fc43.noarch.rpm
 ```
 
-Until that line exists, the 0.6.2 package cannot be installed by this account,
-and `/sys/module/sm750hdmidrm/version` keeps reporting the 0.6.1 label of the
-RPM built from the same tree on 2026-11-20. The source is identical, so the
+Until that line exists, the 0.6.2-2 package cannot be installed by this
+account, and `/sys/module/sm750hdmidrm/version` keeps reporting the 0.6.1 label
+left by the failed 0.6.2-1 install (`docs/evidence/runtime/27-posttrans-install-failure.txt`). The source is identical, so the
 hardware evidence in `docs/evidence/runtime/26-test-card-crc-fix.txt` still
 applies; only the version string differs.
+
+### 3.6 Recovering from a broken 0.6.1 DKMS registration
+
+The state this section starts from, observed on 2026-11-21
+(`docs/evidence/runtime/27-posttrans-install-failure.txt`): the 0.6.2-1 package
+is installed, but `dkms install` aborted on a 0.6.1 registration whose
+`/var/lib/dkms/sm750hdmifb/0.6.1/source` dangles, so no module was installed and
+`cat /sys/module/sm750hdmidrm/version` still prints `0.6.1`.
+
+0.6.2-2 removes such a tree itself, but only when it runs, and the transaction
+that would run it cannot get past `dkms install` on this host: the broken entry
+is already registered and rpm does not re-run `%posttrans` for an installed
+package. So the tree is removed once, by hand.
+
+1. Confirm the entry is broken (any user):
+
+```sh
+dkms status -m sm750hdmifb
+ls -l /var/lib/dkms/sm750hdmifb/0.6.1/source
+```
+
+2. Remove the stale registration tree (root; `rm` is not on the allowlist, so
+   this asks for a password):
+
+```sh
+sudo rm -rf /var/lib/dkms/sm750hdmifb/0.6.1
+```
+
+3. Install the 0.6.2-2 package. Its `%posttrans` purges first, deletes a broken
+   tree if one is still there, and only then builds and installs:
+
+```sh
+sudo dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-2.fc43.noarch.rpm
+```
+
+4. Reload the module and verify the version, which must read `0.6.2`:
+
+```sh
+sudo modprobe -r sm750hdmidrm || true
+sudo modprobe sm750hdmidrm
+cat /sys/module/sm750hdmidrm/version
+modinfo sm750hdmidrm | grep ^version
+sudo dkms status -m sm750hdmifb
+```
+
+5. Two negative checks, both must print nothing: a `Deprecated feature: CLEAN`
+   line (A38 removed the directive) and a second version of `sm750hdmifb`
+   (the purge leaves only `0.6.2` installed).
+
+The last successful rootless run and the reason each step is needed are in
+`docs/evidence/runtime/27-posttrans-install-failure.txt`. Nothing in step 3 or 4
+has been run on this host yet; the account holding this repository is
+unprivileged, and the 0.6.2-2 `dnf install` path is not in the allowlist
+(section 1).
 
 ## 4. udev ACL rule
 

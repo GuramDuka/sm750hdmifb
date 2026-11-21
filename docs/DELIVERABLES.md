@@ -58,10 +58,12 @@ archived hashes are the datasheet `fac31257...531889` and the product brief
 grep -cE '^.[[:space:]]A[0-9]' docs/AUDIT.md docs/DEFECTS.md
 ```
 
-Expected: `docs/AUDIT.md:24` and `docs/DEFECTS.md:29` - the command counts one
-header row per defect id, A01-A24 in the audit and A01-A29 in the defect list.
+Expected: `docs/AUDIT.md:24` and `docs/DEFECTS.md:38` - the command counts one
+table row per defect id, A01-A24 in the audit and A01-A30 plus A32-A39 in the
+defect list (`A31` is documented in prose only, so it has no table row).
 `docs/AUDIT.md` keeps the 24 defects it audited (S1 = 2, S2 = 8, S3 = 11,
-S4 = 3); `docs/DEFECTS.md` adds the five later dispositions `A25`-`A29`. Every
+S4 = 3); `docs/DEFECTS.md` adds the fourteen later dispositions `A25`-`A30` and
+`A32`-`A39`. Every
 row in `docs/DEFECTS.md` carries a status of `fixed`, `accepted` or `deferred`
 with a change reference; `A01` (no RPM spec) and `A02` (untracked files in the
 source tarball) are `fixed`.
@@ -459,6 +461,7 @@ list.
 | `docs/evidence/scanout/05-crc-debugfs-build.txt` | four-kernel build record of the T28 hosting attempt; the hosting itself was removed in T30, kept as history |
 | `docs/evidence/scanout/06-crc-debugfs-runtime.txt` | SKIP record for the T28 hosted files as uid 1005; superseded by `09-crc-single-owner.txt` |
 | `docs/evidence/runtime/25-test-card-animation.txt` | T38: the animated test card - the disc geometry and the per-tick cost at 1024x768 and 1920x1080, the two timing parameters with their clamps, how a tick avoids a full-frame write, the gate transcript with thirteen rejected negative controls, and an explicit `NOT YET OBSERVED ON THE PANEL` section |
+| `docs/evidence/runtime/27-posttrans-install-failure.txt` | T41: the 0.6.2-1 install that installed no module - the verbatim host transcript with `Error! Could not locate dkms.conf file.` and `Error! sm750hdmifb/0.6.1 is broken!`, `cat /sys/module/sm750hdmidrm/version` still printing `0.6.1`, the diagnosis of A37 (the purge ran after the step it protects) with A38 and A39 alongside, the fix list with spec line numbers, the five-control gate transcript, and an explicit `NOT YET OBSERVED` section for the 0.6.2-2 install |
 | `docs/evidence/runtime/26-test-card-crc-fix.txt` | T40: the CRC-ownership fix - why the T37 one-shot skip swallowed the client's first frame, R1 (an armed scanout CRC source cancels the card, refuses a paint and stops a racing tick) and R2 (the paint condition becomes `!master && blank`), the files touched, the eighteen-control gate transcript with the five new controls and the defect each catches, the verification exit codes, and an explicit `NOT YET OBSERVED ON THE PANEL` section with the arm/disarm runbook |
 | `docs/evidence/runtime/23-test-card-fallback.txt` | T37: the test-card fallback - trigger condition, the guard set with the geometry math, the pixel encoding for both bpp, the parameter values and clamping, the gate transcript with nine rejected negative controls, the fixed A31 single-sample restructure, and an explicit `NOT YET OBSERVED ON THE PANEL` section |
 | `docs/evidence/runtime/22-restore-fix-hardware-proof.txt` | T34: the on-card run of the T32 restore-path fix - module srcversion and vermagic, the six CRC-cycle PASS lines, the single T31 blank-console line, 30/30 restore cycles, 20/20 mode changes, 95 enable events across two geometries, the zero-fault census with the exact grep, the S10 console-scanout result under `KD_TEXT`, and the limitations (one card, one panel, harness form unexercised) |
