@@ -10,6 +10,11 @@ Repository: Linux DRM/KMS driver for the Silicon Motion SM750 (module
   session as the action: UTC timestamp, actor, action, files touched, evidence
   path, outcome. Never rewrite, reorder or delete an entry; a correction is a
   new entry that names the entry it corrects.
+- A logbook or history change is not finished until it is published: after
+  every edit to `docs/LOGBOOK.md` or to the plan of record, commit it and run
+  `git push origin main` in the same session. `origin` carries both push URLs
+  (polaris and GitHub); `upstream` push is disabled. Verify with
+  `git ls-remote origin refs/heads/main` matching `git rev-parse HEAD`.
 - `docs/plan/20261117-sm750-driver-prod/plan.yaml` is the plan of record: task
   scope, acceptance criteria, decisions and assumptions. Do not edit a past
   decision; record the change in the logbook and the plan.

@@ -1,0 +1,733 @@
+================================================================================
+24 - RCA: T37 test card versus the scanout CRC source (three CRCs in twelve
+     frames, and the client's black frame that never reached the scanout)
+================================================================================
+
+Captured: 2026-11-20T19:41Z
+Actor:   root-cause subagent (read-only on the tree)
+Subject: sm750hdmidrm 0.6.1, HEAD f691282 "drm/sm750: test card fallback and
+         console helper (T37)"
+Scope:   This file is the only artefact written. No source file, test, script,
+         version or packaging file was modified; no root action was requested or
+         performed; scratch lives in /mega/tmp/sm750/ only (AGENTS.md:26).
+Status:  Root cause identified and proven from source plus recorded evidence.
+         Two sub-claims that need live dmesg are marked OPEN and have the exact
+         root-gated command that would close them.
+
+--------------------------------------------------------------------------------
+1. THE FAILURE, VERBATIM
+--------------------------------------------------------------------------------
+
+Command (as reported):
+
+    sudo -n /usr/local/sbin/sm750-crc-cycle
+
+Output (as reported):
+
+    PASS: crc/control lists scanout as the active source
+    FAIL: CRC is not stable for a static frame: 3 distinct values in 12 frames
+    RESULT: scanout CRC check failed with exit 1
+
+Readback printed by the same run after the check:
+
+    # sm750hdmidrm scanout readback, 1920x1080 pitch 3840
+    offset 0
+    length 262144
+    nonzero 200459
+    crc32 0x45c3bf90
+    ff ff ff ff ...                                  (first bytes: white)
+
+dmesg, in order (timestamps as reported):
+
+    22:13:22 Initialized sm750hdmidrm 0.6.1 ... on minor 0
+    22:13:22 registered SM750 HDMI DRM device with 16 MiB VRAM (RGB565
+             bbdither, primary controller)
+    22:13:33 full-frame backbuffer staging enabled (4147200 bytes per buffer)
+    22:13:33 console framebuffer is blank: the panel now scans a frame nobody
+             has painted (is the foreground VT in KD_TEXT?)
+    22:13:33 painted a test card: no client has produced a frame
+             (test_pattern=auto)
+    22:13:39 full-frame backbuffer staging enabled (4147200 bytes per buffer)
+    22:13:39 painted a test card: no client has produced a frame
+             (test_pattern=auto)
+
+The same script passed before T37 with "12 static frames stable at 0xe20eea22"
+(docs/evidence/scanout/09-crc-single-owner.txt:130-145 and
+docs/evidence/runtime/22-restore-fix-hardware-proof.txt:52-62).
+
+Two facts in the failure text carry most of the diagnosis and are used below:
+
+  * `nonzero 200459` with `first bytes ff ff ff ff` is test-card content. The
+    EBU bars fill the top two thirds (rows 0..719) and the white grid, crosshair
+    and border rows are pure white; the black bars and gray steps are the only
+    zero bytes. An all-black client frame would read `nonzero 0` and
+    `crc32 0xe20eea22` (zlib CRC-32 of 262144 zero bytes, established in
+    docs/evidence/runtime/19-console-blank-diagnosis.txt:63-69).
+  * `offset 0` means the scanout window at the moment of the readback was the
+    front buffer at VRAM offset 0, not the staged back buffer at 4147200.
+
+--------------------------------------------------------------------------------
+2. FACTS ESTABLISHED (each with its citation)
+--------------------------------------------------------------------------------
+
+DRIVER, src/sm750_drm.c
+
+F1  Module parameters: `crc_window_bytes` = 262144 (:235), `test_pattern` =
+    "auto" (:236), `test_pattern_period_ms` = 5000 (:237); exposed writable at
+    :281-286 (`module_param(test_pattern, charp, 0644)`).
+
+F2  State: `scanout_offset` :374, `test_pattern_active` :408,
+    `test_pattern_fresh` :409, `test_pattern_phase` :352,
+    `test_pattern_line` :350, `delayed_work test_pattern_work` :351,
+    `softscale_active` (referenced by the paint early-out).
+
+F3  `sm750_test_pattern_should_paint(bool blank)` :3665-3671 returns
+    "always" -> true, "auto" -> `blank`, anything else -> `blank`. The `bool`
+    comes from `sm750_shadow_frame_is_blank()`.
+
+F4  `sm750_shadow_frame_is_blank()` :3441-3468 samples the shadow plane's XRGB
+    buffer every 16 pixels in x and y and returns true only when every sampled
+    u32 is zero. A legitimately all-black client frame is therefore classified
+    as "nobody has painted" - see 7.3.
+
+F5  `sm750_pipe_enable()` :3675. In the shadow branch it sets
+    `sdev->scanout_offset = 0;` (:3695) and programs the mode with offset 0.
+    After a successful program it reports the staging line (:3760-3764), then
+    :3767-3769 computes `blank`, then :3770-3774 reports the console-blank line
+    once per module load (`static bool blank_frame_reported;` :3687), then
+    :3781 `if (sm750_test_pattern_should_paint(blank)) {` enters the paint
+    block: :3789 `test_pattern_active = true`, :3792 `test_pattern_fresh =
+    true` (with the comment "The enabling commit also runs
+    sm750_pipe_update(); see the guard there."), :3794 the drm_info line
+    observed twice in dmesg, :3798 `schedule_delayed_work(...,
+    msecs_to_jiffies(period))`. Then `drm_crtc_vblank_on()` :3801 and
+    `sm750_crc_resume(sdev)` :3804. The failure path :3811 calls
+    `sm750_test_pattern_cancel(sdev)`.
+
+F6  `sm750_paint_test_pattern()` :3514 writes the card *in place into the live
+    scanout window*: one `memcpy_toio(sdev->vram + sdev->scanout_offset +
+    (u64)y * pitch, line, pitch)` per row (:3598-3599), 1080 sequential
+    3840-byte MMIO writes for 1920x1080. Every row in the CRC window (rows
+    0..67 for 262144 bytes) carries the moving sweep bar, the phase-rotated
+    gray steps and the phase-rotated bar order, so a phase change rewrites the
+    entire 262144-byte window. It ends by invalidating
+    `shadow_source_snapshot_valid` and `rgb565_scanout_snapshot_valid`.
+    Early-outs: :3519 `!line || !pitch`, :3522 `softscale_active`,
+    :3524-3532 geometry and pitch bounds, :3536 frame-fits-VRAM.
+
+F7  `sm750_test_pattern_work()` :3634-3663 takes `mode_lock`, and only
+    `if (sdev->test_pattern_active && sdev->scanout_pitch)` advances
+    `test_pattern_phase` and repaints, then re-schedules while painted. Its
+    comment accepts "one torn frame every few seconds" as cheaper than a new
+    lock order.
+
+F8  `sm750_test_pattern_cancel()` :3627-3632 clears `active`, clears `fresh`,
+    `cancel_delayed_work_sync`. `sm750_test_pattern_period()` :3606-3625
+    clamps 500..600000 ms and 0 disables.
+
+F9  `sm750_pipe_update()` :3856. First `if (sdev->test_pattern_fresh) {
+    sdev->test_pattern_fresh = false; goto event; }` (:3873-3876). Only then
+    `if (sdev->test_pattern_active) sm750_test_pattern_cancel(sdev);`
+    (:3882-3883). The shadow upload path queues the damage to a workqueue
+    (`sm750_async_queue_damage` :2647-2694) and returns without uploading; the
+    upload and the scanout flip happen later in
+    `sm750_async_shadow_work()` :2606-2645 ->
+    `sm750_present_staged_frame()` :2425-2489, which pokes
+    `SM750_DRM_FB_ADDRESS = backbuffer_offset` and swaps
+    `scanout_offset <-> backbuffer_offset`.
+
+F10 `sm750_pipe_disable()` :3919 cancels the card at :3925 and suspends CRC.
+
+F11 CRC read path: `sm750_crc_region()` :3104-3130 recomputes
+    `*offset = sdev->scanout_offset;` from the live field on **every** call
+    (no cache), window = `max(round_down(crc_window_bytes,4),4096)` then
+    `round_down(min(window, visible),4)` with
+    `visible = min_t(u64, scanout_frame_size, vram_size - scanout_offset)`.
+    `sm750_scanout_crc32()` :3147-3169 walks the window in 256-byte
+    `memcpy_fromio` chunks, folds `crc32_le`, and counts nonzero bytes. The
+    debugfs readback (`sm750_scanout`, :4128-4146) calls the same two
+    functions, so reader and readback agree by construction.
+
+F12 `sm750_crc_work_fn()` :3311-3345 emits exactly one entry per vblank while
+    `crc_enabled`, then re-arms at `drm_crtc_vblank_count(crtc) + 1`.
+    `sm750_crc_enable()` :3251-3278 sets `sdev->crc_enabled = true;` at :3270
+    and arms at :3272; it has no interaction with the test card.
+    `sm750_crc_suspend()` :3209 keeps `crc_enabled`; `sm750_crc_resume()`
+    :3288-3305 re-arms after an enable.
+
+F13 vblank period: :3399-3402
+    `vblank_line_ns = NSEC_PER_SEC * htotal / (clock * 1000)`,
+    `vblank_frame_ns = vblank_line_ns * vtotal`. For 1920x1080 at 60 Hz this
+    is 16.6 ms per frame, so 12 CRC entries span about 200 ms of wall clock.
+
+F14 probe installs an in-kernel fbdev client: `drm_kms_helper_poll_init()`
+    :4628 then `drm_client_setup(&sdev->drm,
+    drm_format_info(DRM_FORMAT_XRGB8888))` :4629. `pci_remove` :4669 cancels
+    the card. There is no `.lastclose` and no `.master_set`/`.master_drop`
+    anywhere in src/.
+
+DRM CORE (fetched from raw.githubusercontent.com/torvalds/linux/master,
+scratch copy /mega/tmp/sm750/atomic_helper.c)
+
+F15 `drm_atomic_helper_commit_tail()` order is
+    `drm_atomic_helper_commit_modeset_disables()` ->
+    `drm_atomic_helper_commit_planes(dev, state, 0)` ->
+    `drm_atomic_helper_commit_modeset_enables()` -> fake_vblank -> hw_done ->
+    wait_for_vblanks -> cleanup_planes (atomic_helper.c:1984-2003). The driver
+    installs no `atomic_commit_tail` of its own: src/sm750_drm.c:4015-4024 sets
+    only `.atomic_commit = drm_atomic_helper_commit`, so the default tail
+    applies. Consequently, inside one enabling commit, the plane hook
+    `sm750_pipe_update()` runs **before** the CRTC hook `sm750_pipe_enable()`.
+    (drm_simple_kms_helper.c binds `.enable` from `.atomic_enable` and
+    `.update` from `.atomic_update`.)
+
+HARNESS
+
+F16 tests/check-scanout-crc.sh: `draw()` :137 starts the client, waits for the
+    mode-set line, and leaves it running for its hold time; :189 `draw black`
+    then `sleep 1`; :191 arms the source with
+    `printf 'scanout' > "$crc/control"`; :205-207 discards a 4-entry warm-up
+    sample; :209-215 validates the 12-entry sample (`:215` is the exact failure
+    string); `sample()` :163-165 reads `head -n (n+1) | tail -n +2`;
+    `summarize()` :173 reports count, unique count and the `$NF` field, which
+    is the CRC on this kernel's `"%u %08x"` line format. :232-242 repeat the
+    same for white. The client is not restarted between black and white, so no
+    client attach/detach happens inside a measurement.
+
+F17 tests/scanout-pattern.c: one dumb buffer, one `drmModeSetCrtc`, keep the
+    mode that is already on screen, then sleep `hold-seconds` (45 in the
+    check). It never removes the framebuffer and never issues a second commit,
+    so a measurement window contains **no** commit from the harness.
+
+F18 /usr/local/sbin/sm750-crc-cycle `insmod`s the .ko with no parameters
+    (`insmod "$KO"`), resolves the card node, waits up to 20 s for a
+    non-zero `pitch` in `dri/N/sm750_scanout` - i.e. for the driver's own
+    enable - and only then runs the check. The check's client therefore starts
+    *after* the CRTC is already enabled and the card already painted.
+
+RECORDED EVIDENCE
+
+F19 Pre-T37, same script, PASS: "dump and CRC path agree for a black frame
+    (offset 0, length 262144, crc 0xe20eea22)"
+    (docs/evidence/runtime/22-restore-fix-hardware-proof.txt:52-62). A second
+    pre-T37 pass had the black frame at offset 4147200
+    (docs/evidence/scanout/09-crc-single-owner.txt:137-139). Both are plain
+    update commits: the check's `drmModeSetCrtc` never re-ran `pipe_enable`.
+    Without the card, the first enable already scanned the blank fbdev buffer
+    and the CRC stayed at the black constant for the whole sample.
+
+F20 The in-kernel fbdev client issues a restore commit of its own when a
+    userspace client exits: "each invocation opens /dev/dri/card0, sets a
+    mode, draws one full-screen frame and exits, so the fbdev client's restore
+    commit runs on the exit. That exit is the A32 trigger."
+    (docs/evidence/runtime/22-restore-fix-hardware-proof.txt:48-50).
+
+F21 Repeated enables at load with no userspace master are pre-existing, not
+    T37: staging lines at [1497.462800], [1500.140798] (preceded by
+    "SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04;
+    enabling for compatibility" at [1500.137150]), [1502.949764],
+    [1506.830906] in docs/evidence/runtime/13-module-reload.txt:42-57 (0.6.0).
+
+F22 docs/plan/20261117-sm750-driver-prod/plan.yaml:64 (settled): card0
+    0000:01:00.0 has no userspace master; the enabled CRTC is programmed by
+    the driver's own in-kernel fbdev client installed at :4629.
+
+F23 T37's own evidence says the interaction was never observed:
+    docs/evidence/runtime/23-test-card-fallback.txt sections 8-9 list "a client
+    commit repaints over the card without a visible torn frame" as unverified.
+    This failure is that gap being hit in production.
+
+--------------------------------------------------------------------------------
+3. MECHANISM: HOW TWELVE FRAMES BECAME THREE CRC VALUES
+--------------------------------------------------------------------------------
+
+One chain, five links.
+
+L1  The driver enables the CRTC for its in-kernel fbdev client's all-zero
+    fbcon buffer (F14, F22). The frame is blank (F4), `test_pattern=auto`
+    therefore paints (F3), and `sm750_pipe_enable()` writes the card at
+    `scanout_offset` 0 (F5, F6), sets `test_pattern_active` and
+    `test_pattern_fresh`, logs the paint line, and schedules a 5000 ms rotation
+    (F5). This is the 22:13:33 "painted a test card" line.
+
+L2  The check's client then issues one `drmModeSetCrtc` on the already-active
+    CRTC (F17, F18). That is an update commit: no `pipe_disable`, no
+    `pipe_enable`, so neither the card nor the rotation is touched by the modeset
+    hooks.
+
+L3  That update commit reaches `sm750_pipe_update()`, which hits the
+    `test_pattern_fresh` guard (F9) and returns via `goto event` **without
+    uploading anything**. The guard was set by L1 and consumed here, one commit
+    after it was set (see section 7). Because the skip precedes
+    `sm750_test_pattern_cancel()` (:3882), the rotation is also **not**
+    cancelled, and `test_pattern_active` stays true for the rest of the module
+    load.
+
+L4  The scanout window therefore keeps carrying card content while the CRC
+    source is armed (F16 :191). It is rewritten by up to three independent
+    writers, all in place at the live `scanout_offset`:
+      * the rotation work every `test_pattern_period_ms` (5000 ms) - F7, F6;
+      * every later fbdev re-enable, which re-runs the whole paint block
+        (`should_paint(blank)` is still true because the plane buffer is still
+        all-zero: F3, F4, F5) - this is the 22:13:39 paint, section 6;
+      * `sm750_crc_resume()` after such an enable re-arms the stream, so
+        sampling can also continue across a modeset.
+    Each paint is a 1080-row sequential MMIO burst over exactly the bytes the
+    CRC reader is walking (F6, F11).
+
+L5  A CRC entry is not atomic. `sm750_scanout_crc32()` (F11) walks 262144
+    bytes in 256-byte `memcpy_fromio` chunks - 1024 reads per entry - while the
+    paint writes the same 262144 bytes top-to-bottom. If one entry's walk
+    overlaps a paint, its CRC is a mixture of old and new content: distinct
+    from the pre-paint value and from the post-paint value. The stream then
+    contains three distinct CRC values and exactly one of them (the torn one)
+    is unique:
+      V1 = card, phase n        (entries before the paint)
+      V2 = card, phase n, torn  (the entry that straddled the paint)
+      V3 = card, phase n+1      (entries after the paint)
+    `12 frames` at 16.6 ms is ~200 ms (F13) and the sample is taken from a
+    stream that has already been running across L1..L3, so the window in which
+    a repaint must fall is wide with respect to a paint that takes a few
+    milliseconds.
+
+Why exactly three and not two or many: the repaint is a single pass over the
+window, so at most one entry per repaint can be torn. The check fails on
+`uniq != 1`, so it reports 3 (V1, V2, V3) whenever one paint falls inside the
+sample and the sample covers content from both sides of it. Three is the
+minimum signature of "one in-place repaint overlapped one CRC read"; it is not
+evidence of three paint sources (see section 6 for the second, independent
+source that the same defect arms).
+
+Why the check's own assertions make this deterministic rather than random: the
+`draw black` + `sleep 1` at :189 plus the 4-entry warm-up at :205 place the
+12-entry sample roughly 1.0-1.3 s after the client's commit, and the paint and
+rotation schedule is unbounded in time, so the overlap appears on whichever run
+a repaint lands in that ~200 ms.
+
+The accompanying content evidence is decisive and independent of timing: the
+post-run readback is `offset 0`, `nonzero 200459`, `ff ff ff ff`. The client's
+black frame (a) never left the shadow buffer because of L3, and (b) its upload,
+had it run, would have gone to `backbuffer_offset` 4147200 and flipped the
+scanout there (F9). The window still held the card. That is the same defect
+seen in its steady-state form instead of its torn form.
+
+--------------------------------------------------------------------------------
+4. CANDIDATE CAUSES, ENUMERATED AND FALSIFIED OR CONFIRMED
+--------------------------------------------------------------------------------
+
+(a) THE 5 s ROTATION TICK REPAINTING MID-MEASUREMENT.
+    Verdict: CONFIRMED as one of the repaint sources, and FALSIFIED as a
+    standalone cause. The rotation cannot on its own produce three values in
+    twelve frames: 12 frames span ~200 ms (F13), not 5 s, and the check's
+    timings (F16: `sleep 1`, 4-entry warm-up, 20 s `timeout`) never stretch a
+    12-entry sample to 5 s. What it does instead is *arm* the defect: after the
+    rotation is scheduled at L1 and never cancelled at L3, every run carries a
+    repaint source whose phase the check cannot predict. Note the general case
+    is worse than 5 s: a mode change during sampling (F12 suspend/resume) can
+    pause and resume the stream and stretch the sample's wall-clock, which is
+    why the overlap is not a rare accident.
+
+(b) A STAGED FLIP MOVING `scanout_offset` TO 4147200 WHILE THE WINDOW IS READ
+    Verdict: FALSIFIED for this run; it is a real second-order hazard but not
+    the observed mechanism.
+    * No commit happens inside the measured window: the client commits once
+      before sampling and then sleeps 45 s (F17); the sample is a pure reader.
+    * In this run the very code that would flip was skipped: `pipe_update`
+      returned at the `test_pattern_fresh` guard before the shadow path (F9), so
+      no upload and no flip ran for the client's commit at all.
+    * The readback proves no flip won: `offset 0` (F11 recomputes offset from
+      the live field each call, so the readback reports the live value), while a
+      successful staged flip leaves `scanout_offset == 4147200` (F9). F19 shows
+      what a flip looks like when it works (offset 4147200).
+    * However the hazard is real in general: were the flip to run, the window
+      offset would change between two consecutive CRC entries, which also yields
+      three values (old window, one entry read across the address change, new
+      window). That is why the fix in section 8 must make the CRC consumer stop
+      the card rather than merely repaint less often: both (a) and (b) are
+      symptoms of "the window can be rewritten or moved while a consumer is
+      sampling it".
+    * The 4 MB `full-frame backbuffer staging` line is not itself a flip; it is
+      reported from `pipe_enable()` (F5) and only announces that the back buffer
+      is usable.
+
+(c) THE `test_pattern_fresh` SINGLE-SKIP GUARD COVERING THE ENABLING COMMIT BUT
+    NOT THE SUBSEQUENT COMMIT, SO CARD AND CLIENT FRAME ALTERNATE.
+    Verdict: CONFIRMED, and it is the direct cause of the *content* failure
+    (`nonzero 200459`, the client's black frame absent). Half of the parent's
+    hypothesis is wrong and the correction matters for the fix: the guard does
+    **not** cover the enabling commit. `drm_atomic_helper_commit_tail()` runs
+    planes before modeset enables (F15), so `pipe_update()` for the enabling
+    commit has already run - and returned early for the pre-paint state - before
+    `pipe_enable()` sets `test_pattern_fresh` at :3792. The flag is therefore
+    consumed by the *next* commit, which is the client's first real frame in
+    this run (L2/L3) and, in general, whatever commit comes next.
+    Consequence, proven by the readback: the client's frame is dropped, the card
+    stays on screen, and the rotation that `pipe_update` would have cancelled at
+    :3882 is never cancelled. "Alternate" is too generous - the client's frame
+    never appears at all.
+    Also confirmed: this is not a benign one-shot skip; the same
+    guard drops *any* first frame that follows an enable while a card is
+    painted, including a real client's.
+
+(d) `sm750_crc_region()` CACHING AN OFFSET THAT IS NOW STALE
+    Verdict: FALSIFIED. `sm750_crc_region()` :3104-3130 assigns
+    `*offset = sdev->scanout_offset;` on every call and caches nothing (F11).
+    The debugfs readback path calls the same function and the same
+    `sm750_scanout_crc32()` (:4128-4146), so a stale offset cannot make the two
+    disagree, and it cannot produce three distinct values from static content:
+    the offset is constant across the whole sample unless a flip happens, and
+    (b) rules a flip in. Consistent with this, the readback's
+    `length 262144` equals `crc_window_bytes` (F1), i.e. the region computed
+    fine, and its `crc32 0x45c3bf90` is a card image, not a wrong-address read
+    (a wrong address would not be a plausible card picture with white rows).
+
+(e) ANYTHING ELSE
+    e1  A stalled or double-armed vblank timer: FALSIFIED. `sm750_crc_work_fn`
+        re-arms at count+1 (F12) and 12 entries did arrive - the failure is
+        :215 (unique count), not :209/:214 (missing entries). A stall would
+        also leave the CRC list short and the check would have said so.
+    e2  The CRC list carrying entries older than the sample: the sample reads
+        the *tail* of the list (`head -n (n+1) | tail -n +2`, F16) and discards a
+        4-entry warm-up, so entries predating the arm are not in the counted 12.
+        Also FALSIFIED as the mechanism: the stream is monotonic and one entry
+        per vblank (F12).
+    e3  Colour-depth/format conversion making a static frame vary:
+        FALSIFIED. Pre-T37 the same path produced a stable 0xe20eea22 for a
+        static black frame (F19) and a stable 0x06cf606c for white; nothing in
+        the conversion path writes the window after a commit.
+    e4  A second, independent repaint writer: CONFIRMED, see section 6. The
+        driver's own fbdev client re-commits (and therefore repaints) seconds
+        after the first enable. This does not change the mechanism; it changes
+        the probability and explains why the defect reproduces on this host
+        rather than only in theory.
+    e5  The check reading the wrong field (`$NF` parsing the frame number):
+        FALSIFIED. The line format on this kernel is "%u %08x" and `$NF` is the
+        CRC; the same parse produced the correct constants in F19 and the
+        recorded 0xe20eea22. A frame number as "CRC" would have been stable too.
+
+--------------------------------------------------------------------------------
+5. ANSWER TO "WHY A SECOND ENABLE SIX SECONDS LATER"
+--------------------------------------------------------------------------------
+
+The dmesg pair at 22:13:39 is a genuine second `sm750_pipe_enable()`: the
+"full-frame backbuffer staging enabled" and "painted a test card" lines exist
+only inside that function's success path (F5 :3760-3764 and :3794). Candidates:
+
+  * The check's client did a modeset that re-enabled the CRTC. FALSIFIED.
+    The client's single `drmModeSetCrtc` runs after 22:13:39 (it is started by
+    the check, which runs after the cycle script's geometry wait, F18), it keeps
+    the mode already on screen (F17), and it is an update commit - proven by
+    F19: pre-T37 the same client never produced a staging line, and its frame
+    landed by in-place upload at offset 0 in one run and by flip in another.
+  * A lastclose restore of a userspace master. FALSIFIED as the actor here: no
+    userspace master existed before the check started (F22) and src/ has no
+    `.lastclose`/`.master_set` hook; the generic DRM lastclose path needs a
+    master that closed, and none had.
+  * The in-kernel fbdev client re-committing. CONFIRMED, by elimination and by
+    three independent observations:
+      1. It is the same driver-side actor that owns every enable at load with no
+         userspace master (F22), and repeated enables in a burst at load were
+         already recorded pre-T37 (F21: four staging lines at 1497.46, 1500.14,
+         1502.95, 1506.83 with no client present).
+      2. The fbdev client demonstrably issues a restore commit on its own after
+         a userspace client detaches (F20) - so it is an active committer, not a
+         one-shot at probe.
+      3. The ~2 s gaps in F21 are the SiI9024A link-wait inside its prepare path;
+         the 5-7 s gap here is the same retry behaviour at a slower point
+         (the 22:13:39 enable follows the 22:13:33 one by 5.1-6.9 s, and dmesg
+         shows no user-space actor between them).
+    The second paint re-ran because `sm750_shadow_frame_is_blank()` still
+    reported blank (F4): the plane's buffer is the same all-zero fbcon buffer a
+    new enable is handed, so `should_paint(blank)` is true again (F3), the
+    card is repainted with the *current* phase (`test_pattern_active` was never
+    cleared, F7), `test_pattern_fresh` is re-armed, and the rotation is
+    re-scheduled.
+  * Did T37 *introduce* the second enable? No. F21 shows the same multi-enable
+    signature in 0.6.0. What T37 changed is the consequence: before T37 a
+    re-enable only reset the scanout to a blank buffer that was already blank,
+    so a CRC consumer saw no visible change; after T37 each re-enable performs a
+    4 MB in-place repaint of the armed window, re-arms the fresh guard and
+    restarts the rotation. T37 turned a harmless re-commit into a destructive
+    one, and made it visible with a new drm_info line.
+
+OPEN (needs root): which fbdev-client path triggered the 22:13:39 commit
+(hotplug re-probe versus a restore after a failed probe retry). Closing it is a
+one-liner on the host:
+
+    sudo -n dmesg | grep -nE 'sm750|fb0|sii902|drm_client' | sed -n '/22:13:3/,/22:13:4/p'
+
+It does not affect the diagnosis or the fix: either path re-enters
+`sm750_pipe_enable()`, which is what the fix has to make safe.
+
+--------------------------------------------------------------------------------
+6. IS `test_pattern_fresh` CORRECT IN GENERAL?
+--------------------------------------------------------------------------------
+
+No. It is wrong in three separable ways, and it currently masks a wider ordering
+defect between the paint and the client's first upload.
+
+6.1 It is consumed one commit too late. Because planes are committed before
+    modeset enables (F15), `pipe_enable()` sets the flag *after* the enabling
+    commit's own plane update has run. Whatever commit comes next loses its
+    upload - here the client's first frame (L3, proven by the readback), in
+    general any commit: a client's first present, a damage update from the
+    fbdev client, or a cursor-driven update. The comment at :3791 ("The enabling
+    commit also runs sm750_pipe_update()") is factually inverted for the default
+    commit tail.
+
+6.2 It returns before the cancel. `goto event` at :3875 jumps over
+    `sm750_test_pattern_cancel()` at :3882, so the one hook that is supposed to
+    end the card ("a client produced a frame") is skipped exactly when it is
+    first needed. The card then survives until `pipe_disable()` (:3925) or
+    module removal (:4669), i.e. potentially for the whole session, repainting
+    every 5 s under whatever the panel shows.
+
+6.3 The trigger for painting is wrong. `should_paint(blank)` treats an all-zero
+    client frame as "no client" (F3, F4). `tests/scanout-pattern.c` black is a
+    legitimate frame; so is a black X screen, a blanked screensaver, a paused
+    video and a VT with a black background. The correct predicate for "nobody
+    is producing frames" is "no userspace DRM master exists"
+    (`READ_ONCE(sdev->drm.master)` - the driver already relies on the fbdev
+    client being the only master, F22), optionally refined by the fbdev client's
+    own blank state. `blank` conflates "empty" with "unowned".
+
+6.4 The ordering defect the guard hides: in an enabling commit the plane update
+    runs first, so a client frame can already be staged/flipped before
+    `pipe_enable()` sets `scanout_offset = 0` (:3695) and reprograms the mode
+    with offset 0. The frame is then either clobbered by the paint (when the
+    card is painted) or dropped behind a scanout that was reset to the front
+    buffer. Any fix that only removes the `fresh` flag without addressing
+    :3695 re-exposes that: the enabling commit's frame would be uploaded to the
+    back buffer, and the paint would still overwrite the front buffer that
+    `program_mode` just selected. That interaction is asserted but not proven
+    by this failure (the readback cannot distinguish "dropped by the guard" from
+    "uploaded then clobbered"), so it is filed as a second defect rather than as
+    the cause of this one.
+
+--------------------------------------------------------------------------------
+7. RECOMMENDED FIX
+--------------------------------------------------------------------------------
+
+Recommended single mechanism: (R1) - the driver cancels the test card and
+refuses to paint it again whenever a CRC source is armed. A CRC consumer is by
+definition a client that wants a stable frame; the driver must not write,
+rotate or re-arm a card into a window it is feeding to that consumer. This is
+the only option that fixes real clients, not just this harness (section 8), and
+it needs no change to any script or test.
+
+R1, exact call sites, all in src/sm750_drm.c:
+
+  R1.1 `sm750_crc_enable()` :3251-3278 - between `sdev->crc_enabled = true;`
+       (:3270) and `ret = sm750_crc_arm(sdev);` (:3272), call
+       `sm750_test_pattern_cancel(sdev);`. Arming must also stop, not merely
+       suppress, an already-running rotation, because
+       `test_pattern_cancel()` is the only thing that performs
+       `cancel_delayed_work_sync` (:3632). Keep the existing `crc_mutex`
+       critical section; the cancel does not take `mode_lock`, so no new lock
+       order is introduced.
+
+  R1.2 `sm750_test_pattern_should_paint()` :3665-3671 - first statement:
+       `if (READ_ONCE(sdev->crc_enabled)) return false;`. This covers both the
+       `auto` and the `always` modes; the parameter is the module option and
+       "always" must not override an armed CRC consumer. Document the reason in
+       the function's leading comment: a CRC source disables the card for its
+       lifetime.
+
+  R1.3 `sm750_pipe_enable()` paint block :3781-3798 - with R1.2 in place the
+       gate already returns false, so the block can stay as is; the belt-and-
+       braces alternative is `if (sm750_test_pattern_should_paint(blank)
+       && !READ_ONCE(sdev->crc_enabled))`. Do **not** add a second drm_info
+       suppression path: silence is the correct behaviour here.
+
+  R1.4 `sm750_test_pattern_work()` :3640-3655 - inside the existing
+       `mode_lock` section, change the condition to
+       `if (sdev->test_pattern_active && sdev->scanout_pitch &&
+       !READ_ONCE(sdev->crc_enabled))`. This closes the window where
+       `queue_delayed_work` had already fired and is waiting for `mode_lock`
+       while `sm750_crc_enable()` cancels; without it one last paint can still
+       land after the cancel returned (the `cancel_delayed_work_sync` only
+       covers work that has not started running).
+
+  R1.5 `sm750_crc_disable()` :3194-3199 - clear nothing about the card: the
+       card stays off until the next `pipe_enable()`, which is the only place
+       that knows the geometry and the blank state. Repainting on disable would
+       contradict R1.2's "off for the consumer's lifetime" and could paint over
+       a frame the consumer just left on screen. State this explicitly in the
+       commit message so a later reader does not "fix" it.
+
+  R1.6 `sm750_test_pattern_cancel()` :3627-3632 - no signature change needed;
+       with R1.2/R1.4 it is now called from three places that matter:
+       `pipe_disable()` :3925, `pci_remove()` :4669 and
+       `sm750_crc_enable()` :3271.
+
+  R1.7 `sm750_crc_suspend()` :3209 - it keeps `crc_enabled` (on purpose, the
+       stream must survive a modeset), so R1.2 keeps the card suppressed across
+       a modeset that happens while a consumer is armed. Verify with a test:
+       arm the source, force a modeset, assert no paint line appears.
+
+R1 verification that must be added (these are checkable without hardware for
+the code path and with hardware for the effect):
+
+  * tests/check-test-pattern.sh gains a planted negative control: remove R1.1
+    and R1.2 and assert the CRC-instability failure comes back. The suite
+    already has nine controls in that style
+    (docs/evidence/runtime/23-test-card-fallback.txt section 9).
+  * tests/check-scanout-crc.sh needs no change; it must pass unchanged, and the
+    dump must read `nonzero 0` / `crc32 0xe20eea22` for the black phase on a
+    load that painted a card before the client attached. That assertion already
+    exists at :219-228 - it is the assertion that caught this defect, and it must
+    not be weakened.
+
+Optional companion fix, same defect class, recommended but separable:
+
+  R2  Remove `test_pattern_fresh` entirely (:408-409 field, :3792 set,
+      :3873-3876 guard, :3630 clear) and replace the paint trigger with
+      "no userspace master": compute
+      `bool unowned = !READ_ONCE(sdev->drm.master);` at :3767 and pass it to
+      `should_paint()` alongside the blank state (e.g. `blank && unowned` for
+      `auto`). With R1 in place this is not needed to make CRC stable, but
+      without it the driver still drops a real client's first all-black frame
+      and paints a card over a legitimately black desktop (6.3).
+
+  R3  Separate defect, file it rather than fix it here: `pipe_enable()` resets
+      `scanout_offset = 0` (:3695) after the enabling commit's plane update has
+      already run (F15), so an enabling commit's frame can be clobbered or
+      dropped. Needs its own evidence (a client whose first frame is non-blank
+      arriving in the same commit as an enable) before a fix is chosen.
+
+--------------------------------------------------------------------------------
+8. ALTERNATIVES, RANKED, WITH TRADE-OFFS
+--------------------------------------------------------------------------------
+
+1. R1 (driver cancels and suppresses the card while a CRC source is armed).
+   Chosen.
+   + Fixes every CRC consumer, not just this harness: an IGT `kms_crc` style
+     test on this driver would hit the same defect - it arms `scanout`, then
+     presents a frame, the driver paints a card over it, the rotation rewrites
+     the window, and the test fails with exactly this message. It also fixes the
+     narrower real bug that a card survives a client's first commit (6.2).
+   + Keeps T37's purpose intact: the card still paints when no CRC consumer
+     exists, i.e. exactly the "console is blank, nobody paints" case it was
+     written for, which is the normal case on this host (F22).
+   + Small, local, no new locks, no script or test change, ASCII only.
+   - It couples the card to the CRC feature: enabling a debugfs/IGT source
+     blanks the panel's card. That is intended (a consumer owns the frame), but
+     it must be documented or an operator will read it as a regression.
+   - It does not by itself fix 6.3/R2 - a black *client* frame still gets
+     painted over when no CRC source is armed. Hence R2 as a companion.
+
+2. R2 alone (paint only when no userspace master exists, drop the fresh flag).
+   Not sufficient, would be a good companion.
+   + Removes the dropped-frame mechanism and the false "blank means nobody".
+   - A CRC consumer arms the source while still being a userspace master that
+     submits no new frames (exactly the check's `sleep`), so the card would
+     still be repainted every 5 s into the sampled window. Does not fix this
+     failure on its own.
+
+3. (iv) Move the paint out of `pipe_enable()` into a work item that cannot run
+   while a CRC source is armed.
+   Rejected as the fix; orthogonal.
+   + Would make the enable path cheaper and could serialise paint against
+     uploads.
+   - "Cannot run while a CRC source is armed" *is* R1.1/R1.2/R1.4; moving the
+     paint adds a delayed step whose timing is harder to reason about, does not
+     fix the dropped first frame, and does not fix the rotation (F7) which is
+     already a work item.
+
+4. (ii) `insmod src/sm750hdmidrm.ko test_pattern=off` in
+   /usr/local/sbin/sm750-crc-cycle.
+   Rejected.
+   + One line, zero driver risk, restores the pre-T37 result immediately.
+   - It only fixes the harness. The defect bites any client that arms CRC
+     (IGT, `igt_kms` CRC checks, a future self-test), so the check would keep
+     passing while the driver stays broken. It also silently disables a T37
+     feature in the only automated run that exercises it, so the card would
+     become untested in the very cycle that is supposed to cover it.
+   - It cannot be used as the "before" leg of a regression test: the check would
+     no longer exercise the interaction it just failed on.
+
+5. (iii) Have `tests/check-scanout-crc.sh` flip `test_pattern` to `off` through
+   sysfs before measuring and restore it afterwards.
+   Rejected, and worse than (ii).
+   + Leaves the cycle script untouched and keeps the card on screen before and
+     after the measurement.
+   - It encodes the driver's internal conflict into a test, so the test now
+     asserts "the card is off" instead of asserting "the driver does not break
+     CRC consumers". Any real client still fails.
+   - The restore-on-exit path adds a new teardown ordering problem (the card
+     would be re-enabled while the CRC source may still be armed, or while the
+     check's client is exiting and triggering the F20 restore commit), i.e. it
+     recreates the same race with an extra step.
+
+6. Stop the rotation but keep the paint. Rejected as insufficient: it fixes the
+   steady-state repaint (a) but not the paint performed by every later fbdev
+   re-enable (section 5, F21), which is an independent repaint source and is
+   exactly the one the dmesg pair at 22:13:33/22:13:39 shows on this host.
+
+6'. Suppress CRC entries while a paint is running. Rejected: it hides the tear
+   instead of preventing it, and it drops frames a consumer is entitled to
+   (`drm_crtc_add_crc_entry` with a frame counter that must be contiguous).
+   The consumer asked for the scanout's content; the correct answer is "the
+   content is stable because nobody is painting it", not "the content is
+   sometimes unavailable".
+
+--------------------------------------------------------------------------------
+9. DOES THIS BITE A REAL CLIENT?
+--------------------------------------------------------------------------------
+
+Yes, and the fix must therefore live in the driver.
+
+An IGT `kms_crc` style test does exactly what tests/check-scanout-crc.sh does:
+enable the CRC source on the CRTC, present or leave one frame, read
+`crc/data` for N frames, assert a single distinct value, then compare against a
+reference. On this driver such a client hits all of:
+  * the card painted at enable time because the plane buffer it starts from is
+    blank (F3, F4) - a client that arms CRC before its first present, which is
+    the normal IGT order, gets the card, not its own frame;
+  * the `test_pattern_fresh` guard dropping that client's first present (L3);
+  * the rotation repainting the armed window every 5 s (F7);
+  * the fbdev client's own re-commits repainting it again seconds apart (F21,
+    section 5) - with no userspace action at all.
+
+Only a driver-side rule "an armed CRC source stops the card" covers these. A
+script flag or a sysfs flip in one test file changes nothing for any other
+client, and the next person to add a CRC test would rediscover this failure.
+
+--------------------------------------------------------------------------------
+10. RESIDUAL UNCERTAINTY
+--------------------------------------------------------------------------------
+
+OPEN-1 Which fbdev-client path issued the 22:13:39 commit (hotplug re-probe or
+       a restore after a probe retry). Does not change the mechanism or the fix;
+       the command that closes it is in section 5.
+
+OPEN-2 Whether the enabling commit's frame is *dropped* by the guard or
+       *uploaded and then clobbered* by :3695. Both are covered by R1 (no paint)
+       and R2 (no guard); the distinguishing experiment is a client whose first
+       frame is non-blank presented in the same commit as an enable, with the
+       card off. Filed as R3, needs its own evidence.
+
+NOT CLAIMED: that the torn read is the *only* way to get three values. A
+staged flip during the sample (b) would also give three; it did not happen in
+this run, but R1 prevents it as well because the card - and therefore the
+unwanted in-place repaint - is no longer present. The protection for (b)
+properly belongs to the CRC consumer's own "no pending commit" contract, which
+is out of scope here.
+
+--------------------------------------------------------------------------------
+11. WHAT WOULD HAVE CAUGHT THIS EARLIER
+--------------------------------------------------------------------------------
+
+T37's evidence already declared the interaction unverified
+(docs/evidence/runtime/23-test-card-fallback.txt sections 8-9: "a client commit
+repaints over the card without a visible torn frame"). The gap was not the code
+path but the missing pairing: `tests/check-test-pattern.sh` exercises the card
+alone and `tests/check-scanout-crc.sh` exercises CRC alone, and no test ran the
+two together on a load that painted a card. The cheapest permanent guard is the
+planted negative control named in section 7 plus one combined check: arm the
+source, assert the card is gone (no paint line since the arm, dump nonzero 0),
+then disable the source and assert the card returns on the next enable.
+
+================================================================================
+end of 24-test-card-crc-conflict-rca.txt
+================================================================================

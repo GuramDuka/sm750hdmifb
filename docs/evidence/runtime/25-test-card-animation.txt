@@ -1,0 +1,263 @@
+T38 - the animated test card (bouncing disc)
+============================================
+
+Recorded: 2026-11-20 (UTC), task T38, on top of the T37 commit f691282.
+Scope: what was built, the geometry and timing math, the per-tick cost, the
+safety properties that did not change, and the gate transcript.
+
+Everything below is source-level and build-level evidence. The panel was not
+watched during this task; section 10 says so plainly.
+
+1. Why
+------
+
+Owner report on the T37 card (translated): the colour bars are visible on the
+monitor, but the picture only changes once every five seconds - it jumps. The
+request was a smoothly animated element in the spirit of an Atari-era
+screensaver.
+
+T37 painted the whole card once per `test_pattern_period_ms` (default 5000 ms)
+because the only purpose of the repetition was burn-in protection. A 5 s step is
+also a poor liveness signal: a stalled work item and a healthy one look the same
+for seconds at a time.
+
+T38 adds a second, much faster timer that moves one element - a bouncing disc -
+at `test_pattern_anim_ms` (default 40 ms, 25 fps). The palette rotation keeps
+running on its own 5 s period, so burn-in protection is unchanged.
+
+2. The two timers
+-----------------
+
+  test_pattern_anim_ms      0644  uint  default 40    clamp 10..1000, 0 = no disc
+  test_pattern_period_ms    0644  uint  default 5000  clamp 500..600000, 0 = static
+
+Both are clamped rather than rejected: a 0644 module parameter must accept any
+write and still behave, so the value is clamped and a single drm_info_once names
+the clamp. Both clamps live in sm750_test_pattern_anim() and
+sm750_test_pattern_period().
+
+One delayed_work serves both. Its delay is the animation interval when the disc
+runs, otherwise the palette period. A 32-bit tick counter is incremented per
+tick and compared against the rotation deadline:
+
+  if (!anim || (period && (u64)sdev->test_pattern_ticks * anim >= period))
+
+so the rotation happens once per `test_pattern_period_ms` with integer
+arithmetic and no accumulated jiffies drift. On a rotation tick the counter is
+reset, the phase is advanced, the geometry is re-initialised with the new phase
+and the whole card is repainted. The disc is not reset by a rotation: its
+position lives in the device struct, not in the per-frame context.
+
+3. Geometry
+----------
+
+Disc radius: 3 percent of the frame height, clamped to 24..64 px.
+
+  1024x768   height * 3 / 100 = 23  -> clamped up to 24 px
+  1920x1080  height * 3 / 100 = 32  -> 32 px (inside the clamp)
+
+Movement per tick is scaled from the reference 1080p speed of 3 px horizontally
+and 2 px vertically:
+
+  dx = max_t(int, (int)height * 3 / 1080, 1)
+  dy = max_t(int, (int)height * 2 / 1080, 1)
+
+  1920x1080  dx = 3, dy = 2
+  1024x768   dx = 2, dy = 1
+
+Bounce bounds keep the disc inside the 1 px white border, which itself is inset
+2 px, so the disc never overlaps the border or leaves the card:
+
+  min_x = 3 + radius, max_x = width - 4 - radius
+  min_y = 3 + radius, max_y = height - 4 - radius
+
+On a bounce the centre is reflected symmetrically about the bound (so the
+reflection is not a one-tick stall) and the velocity sign is inverted. The
+colour index advances once per tick that produced any bounce, so a frozen
+colour is itself a liveness signal.
+
+4. Rendering model and per-tick cost
+------------------------------------
+
+The T37 painter was a single function that filled every pixel inline. T38 splits
+it so that any rectangle can be recomputed from first principles:
+
+  sm750_test_pattern_pixel(ctx, x, y)   pure function of x, y and the palette
+                                        phase: bar band, grayscale band, grid
+                                        line, sweep, crosshair, circle, border
+  sm750_test_pattern_disc_pixel(...)    overlays the disc on that value
+  sm750_test_pattern_rect(sdev, ctx, x0, y0, x1, y1)
+                                        writes that rectangle through the one
+                                        probe-time line buffer
+
+The full card is `rect(0, 0, width, height)`. An animation tick is two small
+rects:
+
+  erase the old bounding box with ctx->disc = false (the background is unchanged
+  within a tick, so recomputing it is exactly right), then move the disc and
+  draw the new bounding box with ctx->disc = true.
+
+Bounding box side = 2 * (radius + 1) + 1 px; the erase and draw boxes are the
+same size.
+
+  1024x768,   radius 24, reach 25, box 51x51  = 2601 px
+     RGB565 : 2601 * 2 =  5202 B per box, 10404 B per tick
+     32 bpp : 2601 * 4 = 10404 B per box, 20808 B per tick
+     full frame at this mode: 2048*768 = 1572864 B (RGB565),
+                              4096*768 = 3145728 B (32 bpp)
+
+  1920x1080,  radius 32, reach 33, box 67x67  = 4489 px
+     RGB565 : 4489 * 2 =  8978 B per box, 17956 B per tick (17.5 KiB)
+     32 bpp : 4489 * 4 = 17956 B per box, 35912 B per tick (35.1 KiB)
+     full frame at this mode: 3840*1080 = 4147200 B (RGB565),
+                              7680*1080 = 8294400 B (32 bpp)
+
+At 25 fps that is 508 KiB/s at 1024x768 and 877 KiB/s at 1080p in 32 bpp, against
+202 MiB/s for repainting the 1080p frame every tick. The tick writes about 1/236
+of a frame. Rows outside the box are never touched by a tick; the row padding to
+`scanout_pitch` is applied only by the full-card path, which is the only path
+that writes the tail of a row.
+
+5. Safety properties held over from T37
+---------------------------------------
+
+Unchanged in meaning, re-verified by the gate:
+
+- the card is painted only in the success block of sm750_pipe_enable(), after
+  sm750_program_mode() and the blank diagnostic and before
+  drm_crtc_vblank_on(), from the single `blank` sample shared with A31;
+- one message per paint, exact text:
+  "painted a test card: no client has produced a frame (test_pattern=%s)\n";
+- `test_pattern_fresh` still skips exactly one upload, the enabling commit's own
+  plane update;
+- sm750_test_pattern_cancel() runs in sm750_pipe_disable(), in
+  sm750_pipe_update() on a real client commit, on the enable fail path and in
+  sm750_pci_remove();
+- ticks are silent: no drm_info, no printk per frame at 25 fps;
+- the tick re-checks `test_pattern_active` and the scanout pitch under
+  `mode_lock` and paints nothing when either is gone;
+- the guards are unchanged, now in sm750_test_pattern_ctx_init(): softscale
+  active, missing line buffer or circle table or pitch, below 320x200, pitch
+  outside the single line buffer, frame not fitting
+  `vram_size - scanout_offset`;
+- both snapshot flags are invalidated after every paint and every tick, so a
+  later client commit re-uploads every span.
+
+6. Allocation
+-------------
+
+Two buffers, both devm_kmalloc_array at probe, neither allocated from a work
+item:
+
+  test_pattern_line   SM750_DRM_MAX_WIDTH * sizeof(u32) = 10240 B
+  test_pattern_half   SM750_DRM_MAX_HEIGHT/4 + 1 * sizeof(u32) = 1160 B
+
+The circle table used to be a 289-entry stack array inside the painter. A
+workqueue tick must not carry 1 KiB of stack, so it moved to the device.
+
+7. Gate
+-------
+
+tests/check-test-pattern.sh was extended from nine to thirteen negative controls
+and gained positive checks for the animation. All controls are planted on a
+scratch copy of src/sm750_drm.c and must be rejected. Transcript:
+
+  $ ./tests/check-test-pattern.sh
+  Test-pattern fallback checks passed: /home/coder/sm750hdmifb/src/sm750_drm.c
+  negative control default_off: rejected (exit 1): Test pattern: ...: test_pattern does not default to auto
+  negative control paint_before_program_mode: rejected (exit 1): Test pattern: the test card is painted before sm750_program_mode()
+  negative control no_softscale_guard: rejected (exit 1): Test pattern: the painter does not skip a softscaled window
+  negative control memcpy_without_pitch: rejected (exit 1): Test pattern: the writer does not copy a full pitch-padded row
+  negative control no_cancel_on_disable: rejected (exit 1): Test pattern: sm750_pipe_disable leaves the rotation running
+  negative control no_cancel_on_update: rejected (exit 1): Test pattern: a client commit does not stop the rotation
+  negative control phase_never_advances: rejected (exit 1): Test pattern: a tick does not advance the palette phase
+  negative control per_tick_logging: rejected (exit 1): Test pattern: a rotation tick logs with drm_info
+  negative control period_default_zero: rejected (exit 1): Test pattern: ...: test_pattern_period_ms does not default to 5000
+  negative control anim_default_zero: rejected (exit 1): Test pattern: ...: test_pattern_anim_ms does not default to 40
+  negative control velocity_never_inverted: rejected (exit 1): Test pattern: the disc never reflects off a vertical edge
+  negative control disc_frame_logging: rejected (exit 1): Test pattern: an animation tick logs with drm_info
+  negative control full_frame_tick: rejected (exit 1): Test pattern: an animation tick does not move the disc
+  Test-pattern fallback checks passed
+
+Exit status 0. The first three and the last control are the T38 additions
+(anim_default_zero, velocity_never_inverted, disc_frame_logging,
+full_frame_tick); the other nine are the T37 set, unchanged in intent and
+retargeted at the new function boundaries.
+
+8. Parameters as seen by an operator
+------------------------------------
+
+  echo 40  > /sys/module/sm750hdmidrm/parameters/test_pattern_anim_ms   # 25 fps
+  echo 80  > /sys/module/sm750hdmidrm/parameters/test_pattern_anim_ms   # 12.5 fps
+  echo 0   > /sys/module/sm750hdmidrm/parameters/test_pattern_anim_ms   # static disc
+  echo 5000 > /sys/module/sm750hdmidrm/parameters/test_pattern_period_ms
+
+Both are read at each reschedule, so a change takes effect on the next tick
+without a reload. Setting test_pattern=off and letting a client commit arrive
+both cancel the work item.
+
+9. Verification commands and results
+------------------------------------
+
+  make CC=/usr/bin/gcc                                      exit 0
+  make CC=/usr/bin/gcc KDIR=<6.17.1-300 headers>             exit 0
+  make check (rootless libdrm env)                           exit 0
+  ./tests/check-test-pattern.sh                              exit 0
+  ./tests/check-drm-policy.sh                                exit 0
+  ./tests/check-console-blank.sh                             exit 0
+  ./tests/check-crc-uapi.sh                                  exit 0
+  ./tests/check-restore-path.sh                              exit 0
+  ./tests/check-scratch-policy.sh                            exit 0
+  ./tests/check-release-version.sh                           exit 0
+  ./tests/check-drm-packaging.sh                             exit 0
+  ./tests/check-static.sh                                    exit 0
+  ./tests/check-rpm-dkms.sh                                  exit 0
+  ./build-package.sh                                         exit 0
+  ./tests/audit-release.sh                                   exit 0
+  bash -n tests/check-test-pattern.sh                        exit 0
+
+make check still runs 17 recipe commands: the new gate is reached through
+tests/check-drm-policy.sh, next to tests/check-console-blank.sh.
+
+10. NOT YET OBSERVED ON THE PANEL
+---------------------------------
+
+This session cannot watch the monitor, cannot change the VT, and cannot load the
+module. Nothing in this file was seen on the panel.
+
+What is established: the bars were seen on the panel during T37, and the owner
+reported that they change every five seconds. That observation predates the
+animation and does not cover it.
+
+What is not established, and would be settled by one operator run:
+
+- the disc is visible, filled, with a 2 px black edge, against the bars;
+- it moves smoothly at 25 fps and reflects off the inner border without
+  touching it;
+- its colour changes on each bounce;
+- the palette still rotates once per 5 s, and the disc keeps its position
+  across that repaint (no visible jump);
+- no per-tick logging appears in dmesg;
+- a client commit stops the animation and restores the client's pixels.
+
+Suggested operator check: load the module on the KD_GRAPHICS VT as in the T37
+runbook, then
+
+  dmesg | grep "painted a test card"      # exactly one line per enable
+  echo 0 > .../test_pattern_anim_ms       # the disc freezes in place
+  echo 40 > .../test_pattern_anim_ms      # it resumes
+
+A frozen disc with a changing palette means the animation delay is not being
+used; a frozen palette with a moving disc means the rotation deadline is wrong.
+
+11. Crossover with the CRC RCA
+------------------------------
+
+While this task ran, a separate investigation (docs/evidence/runtime/
+24-test-card-crc-conflict-rca.txt) was open on the test card making the CRC
+stream unstable. Per the task brief, nothing in the CRC path was touched:
+sm750_crc_enable(), the CRC region logic, tests/check-scanout-crc.sh and
+tools/sm750-crc-cycle.sh are unchanged by T38. The animation does, however,
+move pixels continuously, which a CRC over the scanout window will notice; that
+is a property of the RCA, not a regression introduced here, and it is the
+reason the card and the CRC stream cannot be used at the same time.

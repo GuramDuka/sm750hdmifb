@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SM750 DRM/KMS driver: production status</title>
+<style>
+  :root {
+    --bg: #0b0e12;
+    --panel: #151a21;
+    --panel2: #1c232c;
+    --line: #2b3543;
+    --accent: #58a6c9;
+    --warn: #d09a55;
+    --text: #e6eaf0;
+    --muted: #98a5b4;
+    --mono: ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace;
+  }
+  html {
+    font-size: 16px;
+    font-size: min(1.25vw, 2.2223vh);
+    background: var(--bg);
+  }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, "DejaVu Sans", Arial, sans-serif;
+  }
+  .deck {
+    position: relative;
+    width: 80rem;
+    height: 45rem;
+  }
+  section.slide {
+    position: absolute;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    box-sizing: border-box;
+    padding: 2.1rem 2.5rem 1.8rem;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 0.35rem;
+    overflow: hidden;
+  }
+  section.slide.active { display: flex; }
+
+  h2 {
+    margin: 0 0 0.85rem;
+    padding-left: 0.65rem;
+    border-left: 0.3rem solid var(--accent);
+    font-size: 1.72rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: #ffffff;
+  }
+  ul { margin: 0; padding-left: 1.1rem; }
+  li {
+    font-size: 1rem;
+    line-height: 1.4;
+    margin: 0.4rem 0;
+    color: var(--text);
+  }
+  li::marker { color: var(--accent); }
+  p { margin: 0.5rem 0 0; font-size: 0.92rem; color: var(--muted); }
+  code {
+    font-family: var(--mono);
+    font-size: 0.87em;
+    background: #0c1015;
+    border: 1px solid #253040;
+    border-radius: 0.18rem;
+    padding: 0.04em 0.26em;
+    color: #cfe2ef;
+  }
+  table {
+    width: 100%;
+    margin: 0.55rem 0 0;
+    border-collapse: collapse;
+    font-size: 0.84rem;
+    line-height: 1.35;
+  }
+  th, td {
+    border: 1px solid var(--line);
+    padding: 0.3rem 0.45rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: #1f2833; color: #cfe2ef; font-weight: 600; }
+  td { color: var(--text); }
+  pre {
+    margin: 0.55rem 0 0;
+    padding: 0.6rem 0.8rem;
+    background: #0c1015;
+    border: 1px solid #253040;
+    border-radius: 0.22rem;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: #cfe2ef;
+    overflow: auto;
+  }
+
+  .title {
+    margin: auto 0;
+  }
+  .title h1 {
+    margin: 0 0 0.6rem;
+    padding-left: 0.8rem;
+    border-left: 0.42rem solid var(--accent);
+    font-size: 2.6rem;
+    font-weight: 650;
+    line-height: 1.15;
+    color: #ffffff;
+  }
+  .title .sub { font-size: 1.15rem; color: var(--muted); margin: 0 0 1.6rem 0.85rem; }
+  .title ul { margin-left: 0.4rem; }
+  .title li { font-size: 1.02rem; }
+
+  .diagram { flex: 1 1 auto; min-height: 0; display: flex; }
+  .diagram svg { width: 100%; height: 100%; }
+
+  .progress {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 0.2rem;
+    width: 0;
+    background: var(--accent);
+    z-index: 20;
+    transition: width 120ms linear;
+  }
+  .controls {
+    position: fixed;
+    right: 1.1rem;
+    bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    z-index: 20;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .controls button {
+    font: inherit;
+    color: var(--text);
+    background: var(--panel2);
+    border: 1px solid var(--line);
+    border-radius: 0.22rem;
+    padding: 0.2rem 0.55rem;
+    cursor: pointer;
+    line-height: 1.2;
+  }
+  .controls button:hover { border-color: var(--accent); color: #ffffff; }
+  .controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .hint {
+    position: fixed;
+    left: 1.1rem;
+    bottom: 1rem;
+    z-index: 20;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: #6d7a89;
+  }
+
+  @media print {
+    @page { size: 297mm 167mm; margin: 0; }
+    html { font-size: 3.7mm; background: #ffffff; }
+    body { display: block; background: #ffffff; }
+    .deck { width: auto; height: auto; }
+    section.slide {
+      display: flex !important;
+      position: static;
+      width: 80rem;
+      height: 43.5rem;
+      margin: 0;
+      border: 0;
+      border-radius: 0;
+      break-after: page;
+      page-break-after: always;
+    }
+    section.slide:last-of-type { break-after: auto; page-break-after: auto; }
+    .progress, .controls, .hint { display: none !important; }
+    * {
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+  }
+</style>
+<noscript>
+  <style>
+    html { font-size: 16px; }
+    body { display: block; padding: 1.5rem 0; }
+    .deck { width: auto; height: auto; }
+    section.slide {
+      display: flex !important;
+      position: static;
+      width: 80rem;
+      height: auto;
+      min-height: 45rem;
+      margin: 0 auto 1.5rem;
+    }
+    .progress, .controls, .hint { display: none !important; }
+  </style>
+</noscript>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="hint" id="hint">keys: right/left, page down/up, space, home, end</div>
+
+<main class="deck" id="deck">
+
+  <section class="slide active" id="s1">
+    <div class="title">
+      <h1>SM750 DRM/KMS driver: production status</h1>
+      <p class="sub">Out-of-tree atomic KMS driver for one PCIe card, version 0.6.2</p>
+      <ul>
+        <li>Repository <code>sm750hdmifb</code>, module <code>sm750hdmidrm</code>, version 0.6.2 (<code>src/sm750_drm.c:78</code>)</li>
+        <li>Card <code>SE-DP750A-HDMI</code>, Silicon Motion <code>126f:0750</code> at PCI <code>0000:01:00.0</code>, one HDMI output</li>
+        <li>Kernel floor 6.17, encoded in <code>dkms.conf:8</code></li>
+        <li>Acceptance record: 6 PASS, 0 FAIL, 1 GAP, the gap being pixel-level proof at the panel</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="slide" id="s2">
+    <h2>The hardware problem</h2>
+    <ul>
+      <li>SM750G10-AC revision A1, 16 MiB integrated DDR, 64 MiB BAR0, 2 MiB BAR1 (<code>docs/HARDWARE.md:9-15</code>)</li>
+      <li>No HDMI PHY on the SM750: it emits 24-bit parallel RGB/DVO, and the board's SiI9024ACNU converts that to HDMI (<code>docs/HARDWARE.md:11</code>, <code>:18-19</code>)</li>
+      <li>In-tree Linux support for the chip is the staging fbdev driver <code>sm750fb</code>; the <code>src/ddk750*</code> register layer here descends from it (<code>docs/PROVENANCE.md:27</code>)</li>
+      <li>Capability table: 2D engine (128-bit BitBLT/ROP3), DMA, two cursor layers, scaling done in software (<code>docs/HARDWARE.md:47-58</code>)</li>
+      <li>Three board quirks kept non-fatal: DMA1 IRQ not routed, SiI9024A receiver sense absent, PCI cache-line mismatch (<code>docs/HARDWARE.md:21-32</code>)</li>
+    </ul>
+  </section>
+
+  <section class="slide" id="s3">
+    <h2>Architecture</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 1400 560" role="img" aria-label="Layers from userspace through DRM core, the sm750hdmidrm driver and the hardware to the HDMI panel, with test-card and CRC side paths">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#6f7f92"></path>
+          </marker>
+          <marker id="darrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#d09a55"></path>
+          </marker>
+        </defs>
+
+        <rect x="8" y="6" width="992" height="78" rx="6" fill="#1c232c" stroke="#3a4656"></rect>
+        <text x="26" y="30" font-family="monospace" font-size="19" fill="#58a6c9">userspace</text>
+        <text x="26" y="52" font-family="monospace" font-size="16" fill="#e6eaf0">libdrm / IGT / compositor</text>
+        <text x="26" y="74" font-family="monospace" font-size="16" fill="#e6eaf0">drmModeSetCrtc, drmModeAtomicCommit, drmModeSetCrcSource</text>
+
+        <line x1="504" y1="84" x2="504" y2="104" stroke="#6f7f92" stroke-width="2" marker-end="url(#arrow)"></line>
+
+        <rect x="8" y="106" width="992" height="78" rx="6" fill="#1c232c" stroke="#3a4656"></rect>
+        <text x="26" y="130" font-family="monospace" font-size="19" fill="#58a6c9">DRM core</text>
+        <text x="26" y="152" font-family="monospace" font-size="16" fill="#e6eaf0">atomic commit tail, vblank accounting</text>
+        <text x="26" y="174" font-family="monospace" font-size="16" fill="#e6eaf0">crc/control + crc/data debugfs, in-kernel fbdev client</text>
+
+        <line x1="504" y1="184" x2="504" y2="198" stroke="#6f7f92" stroke-width="2" marker-end="url(#arrow)"></line>
+
+        <rect x="8" y="200" width="992" height="212" rx="6" fill="#1a2430" stroke="#44708c"></rect>
+        <text x="26" y="226" font-family="monospace" font-size="19" fill="#58a6c9">sm750hdmidrm (out-of-tree, 0.6.2)</text>
+        <rect x="26" y="236" width="956" height="30" rx="3" fill="#202b37" stroke="#33506a"></rect>
+        <text x="38" y="256" font-family="monospace" font-size="17" fill="#e6eaf0">GEM + drm_vram_helper / TTM buffer objects</text>
+        <rect x="26" y="270" width="956" height="30" rx="3" fill="#202b37" stroke="#33506a"></rect>
+        <text x="38" y="290" font-family="monospace" font-size="17" fill="#e6eaf0">atomic simple pipe: check, update, enable, disable</text>
+        <rect x="26" y="304" width="956" height="30" rx="3" fill="#202b37" stroke="#33506a"></rect>
+        <text x="38" y="324" font-family="monospace" font-size="17" fill="#e6eaf0">shadow upload + full-frame backbuffer staging (DMA1 or CPU)</text>
+        <rect x="26" y="338" width="956" height="30" rx="3" fill="#202b37" stroke="#33506a"></rect>
+        <text x="38" y="358" font-family="monospace" font-size="17" fill="#e6eaf0">scanout CRC engine: one crc32 per vblank</text>
+        <rect x="26" y="372" width="956" height="30" rx="3" fill="#202b37" stroke="#33506a"></rect>
+        <text x="38" y="392" font-family="monospace" font-size="17" fill="#e6eaf0">ddk750_* register layer: display, mode, chip, power, i2c</text>
+
+        <line x1="504" y1="412" x2="504" y2="428" stroke="#6f7f92" stroke-width="2" marker-end="url(#arrow)"></line>
+
+        <rect x="8" y="430" width="992" height="68" rx="6" fill="#1c232c" stroke="#3a4656"></rect>
+        <text x="26" y="452" font-family="monospace" font-size="19" fill="#58a6c9">hardware</text>
+        <text x="26" y="472" font-family="monospace" font-size="16" fill="#e6eaf0">SM750 registers + 16 MiB VRAM</text>
+        <text x="26" y="490" font-family="monospace" font-size="16" fill="#e6eaf0">SiI9024A TMDS bridge, software I2C on GPIO12/13</text>
+
+        <line x1="504" y1="498" x2="504" y2="512" stroke="#6f7f92" stroke-width="2" marker-end="url(#arrow)"></line>
+
+        <rect x="8" y="514" width="992" height="34" rx="6" fill="#1c232c" stroke="#3a4656"></rect>
+        <text x="26" y="537" font-family="monospace" font-size="19" fill="#e6eaf0">HDMI panel</text>
+
+        <rect x="1030" y="200" width="362" height="96" rx="6" fill="#241f18" stroke="#d09a55" stroke-dasharray="6 4"></rect>
+        <text x="1046" y="224" font-family="monospace" font-size="17" fill="#d09a55">test-card fallback</text>
+        <text x="1046" y="248" font-family="monospace" font-size="14" fill="#e6eaf0">test_pattern=auto|always|off</text>
+        <text x="1046" y="266" font-family="monospace" font-size="14" fill="#e6eaf0">period test_pattern_period_ms</text>
+        <text x="1046" y="284" font-family="monospace" font-size="14" fill="#e6eaf0">paints the scanout buffer</text>
+        <line x1="1030" y1="248" x2="1004" y2="248" stroke="#d09a55" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#darrow)"></line>
+
+        <rect x="1030" y="330" width="362" height="96" rx="6" fill="#241f18" stroke="#d09a55" stroke-dasharray="6 4"></rect>
+        <text x="1046" y="354" font-family="monospace" font-size="17" fill="#d09a55">scanout CRC stream</text>
+        <text x="1046" y="378" font-family="monospace" font-size="14" fill="#e6eaf0">crc/control + crc/data, owned by core</text>
+        <text x="1046" y="396" font-family="monospace" font-size="14" fill="#e6eaf0">262144 bytes per entry, per vblank</text>
+        <text x="1046" y="414" font-family="monospace" font-size="14" fill="#e6eaf0">reads VRAM, not the emitted pixels</text>
+        <path d="M 1030 348 H 1014 V 150 H 1004" fill="none" stroke="#d09a55" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#darrow)"></path>
+      </svg>
+    </div>
+    <p>Arrows are the call and data path; the dashed boxes are the two code paths that paint or read the scanout buffer.</p>
+  </section>
+
+  <section class="slide" id="s4">
+    <h2>Modeset path</h2>
+    <p><code>sm750_program_mode()</code> (<code>src/sm750_drm.c:1356</code>) records the last stage it entered in <code>mode_stage</code>:</p>
+    <table>
+      <tr><th>Stage</th><th>Call</th><th>Line</th></tr>
+      <tr><td>SM750_MODE_STAGE_SII_BEGIN</td><td>sm750_sii902x_begin_mode()</td><td>:1399</td></tr>
+      <tr><td>SM750_MODE_STAGE_DISPLAY_CTRL</td><td>ddk750_set_display_control()</td><td>:1404</td></tr>
+      <tr><td>SM750_MODE_STAGE_TIMING</td><td>ddk750_set_mode_timing()</td><td>:1408</td></tr>
+      <tr><td>SM750_MODE_STAGE_LOGICAL_OUT</td><td>ddk750_set_logical_disp_out()</td><td>:1436</td></tr>
+      <tr><td>SM750_MODE_STAGE_SII_ENABLE</td><td>sm750_sii902x_enable()</td><td>:1440</td></tr>
+    </table>
+    <ul>
+      <li>Enum and names: <code>src/sm750_drm.c:293-299</code>, <code>:302-318</code></li>
+      <li>The field is cleared on success at <code>:1443</code>, so a failure always names the stage</li>
+      <li>Failure line: <code>failed to enable HDMI mode: -110 at stage &lt;name&gt; (commit finished, event consumed)</code> (<code>:3824-3825</code>)</li>
+    </ul>
+  </section>
+
+  <section class="slide" id="s5">
+    <h2>Framebuffer path: shadow upload and staging</h2>
+    <ul>
+      <li>Shadow upload copies reported damage into VRAM through <code>sm750_shadow_upload()</code> (<code>src/sm750_drm.c:1705</code>), one aligned span at a time via <code>sm750_shadow_upload_one()</code> (<code>:1655</code>)</li>
+      <li>With <code>backbuffer_staging=1</code> a full-frame update is rendered into the off-screen buffer; availability is decided at <code>:3725</code> from the parameter and a VRAM fit test</li>
+      <li>At 1920x1080 RGB565 one buffer is 4147200 bytes (1920 * 1080 * 2); the driver logs <code>full-frame backbuffer staging enabled (4147200 bytes per buffer)</code> (<code>:3762-3764</code>)</li>
+      <li>Async updates run on a dedicated ordered workqueue: <code>sm750_async_shadow_work()</code> (<code>src/sm750_drm.c:2606</code>), created at <code>:4540</code></li>
+      <li><code>sm750_present_staged_frame()</code> (<code>:2425</code>) pokes <code>FB_ADDRESS</code> and polls for the flip; on timeout it disables flips and mirrors updates instead (<code>:2447-2457</code>)</li>
+    </ul>
+  </section>
+
+  <section class="slide" id="s6">
+    <h2>vblank and the CRC engine</h2>
+    <ul>
+      <li>vblank is paced by the driver's own hrtimer, <code>sm750_vblank_timer_fn()</code> (<code>src/sm750_drm.c:468</code>, set up at <code>:4445</code>), not the generic DRM timer (<code>docs/VBLANK.md:1-12</code>)</li>
+      <li>One entry per vblank: <code>sm750_crc_work_fn()</code> (<code>:3311</code>) reads the window and calls <code>drm_crtc_add_crc_entry()</code> (<code>:3329</code>), then re-arms</li>
+      <li><code>sm750_scanout_crc32()</code> (<code>:3147</code>) is <code>crc32_le</code> over <code>crc_window_bytes</code>, default 262144 bytes (<code>:235</code>), from the visible scanout offset</li>
+      <li><code>crc/control</code> and <code>crc/data</code> are created and owned by DRM core; the driver supplies only <code>.get_crc_sources</code> (<code>:4009</code>) and <code>.set_crc_source</code> (<code>:4011</code>)</li>
+      <li>The value proves the VRAM buffer handed to the display engine, not the pixels the panel emits (<code>docs/TEST-STRATEGY.md:597-599</code>)</li>
+    </ul>
+  </section>
+
+  <section class="slide" id="s7">
+    <h2>Defects found and fixed</h2>
+    <table>
+      <tr><th>Id</th><th>Defect</th><th>Disposition</th></tr>
+      <tr><td>A27</td><td>Failed modeset became a WARNING, 10 s commit stalls and a refcount underflow</td><td>fixed: the fail path finishes the abandoned commit (<code>docs/DEFECTS.md:55</code>)</td></tr>
+      <tr><td>A31</td><td>Black panel misread as a display-path fault; fbcon paints only under KD_TEXT</td><td>diagnosed, one diagnostic per load (<code>docs/DEFECTS.md:435-467</code>)</td></tr>
+      <tr><td>A32</td><td>fbdev restore timed out on a whole-register transition compare</td><td>fixed: masked compare plus re-poke (<code>docs/DEFECTS.md:59</code>)</td></tr>
+      <tr><td>A34</td><td>Dead-black panel when no client paints the fbdev buffer</td><td>fixed: bounded test card (<code>docs/DEFECTS.md:61</code>)</td></tr>
+      <tr><td>A35</td><td>0.6.1 tree failed its own release gate on a literal path in a tools helper</td><td>fixed via SM750_REPO (<code>docs/DEFECTS.md:62</code>)</td></tr>
+    </table>
+    <ul>
+      <li>A32 on hardware: 30/30 restore cycles, 20/20 mode changes, nine-marker dmesg census <code>0</code> (<code>docs/evidence/runtime/22-restore-fix-hardware-proof.txt:80-88</code>, <code>:96-104</code>, <code>:129-140</code>)</li>
+    </ul>
+  </section>
+
+  <section class="slide" id="s8">
+    <h2>Test strategy</h2>
+    <ul>
+      <li><code>make check</code>: 17 recipe commands (<code>Makefile:32-48</code>), prerequisites at <code>Makefile:30-31</code>, preflight at <code>Makefile:17-28</code></li>
+      <li>Source-level gates carry planted negative controls: the console-blank gate and the restore-path gate each reject four planted defects (<code>docs/DEFECTS.md:481</code>, <code>:59</code>)</li>
+      <li>Root-only gates: <code>make console-check</code> (<code>tests/check-console-scanout.sh</code>) and <code>tools/sm750-restore-cycle.sh</code>, which refuses to run unprivileged</li>
+      <li>Static analysis is a separate target, <code>make static</code>: sparse, smatch, cppcheck, coccinelle, pahole against a recorded baseline (<code>docs/STATIC-ANALYSIS.md:4-9</code>)</li>
+    </ul>
+    <pre>make check KDIR=/lib/modules/$(uname -r)/build CC=/usr/bin/gcc
+make static</pre>
+  </section>
+
+  <section class="slide" id="s9">
+    <h2>Packaging and release</h2>
+    <ul>
+      <li>DKMS builds from one source tree; the kernel floor is encoded once, in <code>dkms.conf:8</code></li>
+      <li>The RPM is noarch and carries source only: version 0.6.2 at <code>packaging/sm750hdmifb.spec:21</code>, tracked-tree tarball at <code>:26</code></li>
+      <li><code>%posttrans</code> (<code>packaging/sm750hdmifb.spec:127</code>) purges every stale DKMS registration, then builds and installs the current version (<code>docs/PACKAGING-RPM.md:115-145</code>)</li>
+      <li>Installed and exercised for kernels 7.2.15-100, 7.3.3-100 and 7.3.4-100 (<code>docs/PACKAGING-RPM.md:363</code>)</li>
+      <li>The deb comes from <code>build-package.sh</code>; <code>tests/audit-release.sh</code> must exit 0 before a release</li>
+    </ul>
+    <table>
+      <tr><th>Artifact</th><th>Source</th></tr>
+      <tr><td>RPM</td><td>packaging/sm750hdmifb.spec</td></tr>
+      <tr><td>deb</td><td>build-package.sh</td></tr>
+      <tr><td>source tarball</td><td>Source0, packaging/sm750hdmifb.spec:26</td></tr>
+      <tr><td>release gate</td><td>tests/audit-release.sh</td></tr>
+    </table>
+  </section>
+
+  <section class="slide" id="s10">
+    <h2>Evidence discipline and open items</h2>
+    <ul>
+      <li>A claim is a result only if a file under <code>docs/evidence/</code> supports it; otherwise it is a gap (<code>AGENTS.md:14-17</code>)</li>
+      <li><code>docs/LOGBOOK.md</code> is append-only: one entry per action with time, actor, files and evidence (<code>AGENTS.md:8-13</code>)</li>
+      <li>Fixed: the test-card fallback corrupted the scanout CRC stream (3 distinct values in 12 static frames); a CRC source now cancels the card and owns the window (<code>docs/DEFECTS.md:63</code>, <code>docs/evidence/runtime/26-test-card-crc-fix.txt</code>)</li>
+      <li>Open: GAP-B8, which of the five <code>sm750_program_mode()</code> calls returns -110; trigger reproduced 1 of 206 attempts (<code>docs/evidence/EVIDENCE-GAPS.md:655</code>, <code>:747</code>)</li>
+      <li>VBIOS reconstruction leaves 61 of 18034 code bytes carried as <code>db</code> (<code>docs/VBIOS-REVERSE-ENGINEERING.md:907</code>)</li>
+      <li>Known limits: AC-3 stays a gap, no pixel-level proof at the panel (<code>docs/ACCEPTANCE-REPORT.md:41</code>)</li>
+    </ul>
+  </section>
+
+</main>
+
+<div class="controls">
+  <button type="button" id="prev" aria-label="Previous slide">&lt;</button>
+  <span id="counter">1 / 10</span>
+  <button type="button" id="next" aria-label="Next slide">&gt;</button>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var slides = Array.prototype.slice.call(document.querySelectorAll("section.slide"));
+  var total = slides.length;
+  if (!total) { return; }
+
+  var progress = document.getElementById("progress");
+  var counter = document.getElementById("counter");
+  var prevBtn = document.getElementById("prev");
+  var nextBtn = document.getElementById("next");
+  var index = 0;
+
+  function parseHash(hash) {
+    var m = /^#\/?([0-9]+)$/.exec(hash || "");
+    if (!m) { return 0; }
+    var n = parseInt(m[1], 10);
+    if (!isFinite(n) || n < 1 || n > total) { return 0; }
+    return n - 1;
+  }
+
+  function readHash() {
+    var h = "";
+    try {
+      if (window.top && window.top.location) { h = window.top.location.hash; }
+    } catch (e) { h = ""; }
+    if (!h) {
+      try { h = window.location.hash; } catch (e2) { h = ""; }
+    }
+    return h;
+  }
+
+  function writeHash(n) {
+    var target = "#/" + (n + 1);
+    try {
+      if (window.top && window.top.location && window.top.location.hash !== target) {
+        window.top.location.hash = target;
+        return;
+      }
+    } catch (e) { /* opaque or cross-origin wrapper: fall through */ }
+    try {
+      if (window.location.hash !== target) { window.location.hash = target; }
+    } catch (e2) { /* nothing else can be done */ }
+  }
+
+  function render() {
+    for (var i = 0; i < total; i++) {
+      var on = (i === index);
+      slides[i].classList.toggle("active", on);
+      slides[i].setAttribute("aria-hidden", on ? "false" : "true");
+    }
+    if (counter) { counter.textContent = (index + 1) + " / " + total; }
+    if (progress) { progress.style.width = ((index + 1) / total * 100) + "%"; }
+  }
+
+  function go(n, push) {
+    if (n < 0) { n = 0; }
+    if (n > total - 1) { n = total - 1; }
+    index = n;
+    render();
+    if (push) { writeHash(index); }
+  }
+
+  function goToHash() {
+    var n = parseHash(readHash());
+    go(n, false);
+  }
+
+  if (prevBtn) {
+    prevBtn.addEventListener("click", function () { go(index - 1, true); });
+  }
+  if (nextBtn) {
+    nextBtn.addEventListener("click", function () { go(index + 1, true); });
+  }
+
+  document.addEventListener("keydown", function (ev) {
+    if (ev.defaultPrevented || ev.altKey || ev.ctrlKey || ev.metaKey) { return; }
+    var handled = true;
+    switch (ev.key) {
+      case "ArrowRight":
+      case "PageDown":
+      case " ":
+      case "Spacebar":
+        go(index + 1, true);
+        break;
+      case "ArrowLeft":
+      case "PageUp":
+        go(index - 1, true);
+        break;
+      case "Home":
+        go(0, true);
+        break;
+      case "End":
+        go(total - 1, true);
+        break;
+      default:
+        handled = false;
+    }
+    if (handled) { ev.preventDefault(); }
+  });
+
+  window.addEventListener("hashchange", goToHash);
+  try {
+    if (window.top && window.top !== window && window.top.addEventListener) {
+      window.top.addEventListener("hashchange", goToHash);
+    }
+  } catch (e) { /* opaque wrapper: local hashchange still fires */ }
+
+  goToHash();
+  if (!parseHash(readHash())) { render(); }
+})();
+</script>
+</body>
+</html>

@@ -75,12 +75,12 @@ typedef struct drm_atomic_state sm750_atomic_commit;
 #define SM750_DRM_NAME "sm750hdmidrm"
 /* Keep in step with the package version in build-package.sh and dkms.conf;
  * tests/check-release-version.sh fails when the three disagree. */
-#define SM750_DRM_VERSION "0.6.1"
+#define SM750_DRM_VERSION "0.6.2"
 /* modetest reports these as the driver version, so they must track the release
  * number above; tests/check-release-version.sh fails when they drift. */
 #define DRIVER_MAJOR 0
 #define DRIVER_MINOR 6
-#define DRIVER_PATCHLEVEL 1
+#define DRIVER_PATCHLEVEL 2
 #define SM750_DRM_MAX_WIDTH 2560
 #define SM750_DRM_PHYSICAL_MAX_WIDTH 2048
 #define SM750_DRM_PLL PRIMARY_PLL
@@ -142,6 +142,13 @@ typedef struct drm_atomic_state sm750_atomic_commit;
 #define SM750_TEST_PERIOD_MIN_MS 500
 #define SM750_TEST_PERIOD_MAX_MS 600000
 #define SM750_TEST_LINE_BYTES (SM750_DRM_MAX_WIDTH * sizeof(u32))
+#define SM750_TEST_ANIM_MIN_MS 10
+#define SM750_TEST_ANIM_MAX_MS 1000
+#define SM750_TEST_DISC_PERCENT 3
+#define SM750_TEST_DISC_MIN_RADIUS 24
+#define SM750_TEST_DISC_MAX_RADIUS 64
+#define SM750_TEST_DISC_SPEED_X 3
+#define SM750_TEST_DISC_SPEED_Y 2
 #define SM750_DRM_MAX_ROW_RUNS 8
 #define SM750_DRM_DENSE_RUN_NUMERATOR 3
 #define SM750_DRM_DENSE_RUN_DENOMINATOR 4
@@ -235,6 +242,7 @@ static unsigned int shadow_dma_min_bytes = 4096;
 static unsigned int crc_window_bytes = 262144;
 static char *test_pattern = "auto";
 static unsigned int test_pattern_period_ms = 5000;
+static unsigned int test_pattern_anim_ms = 40;
 module_param(scanout_format, charp, 0444);
 module_param(dither_green_gain, uint, 0444);
 module_param(edid_only, bool, 0444);
@@ -280,10 +288,13 @@ MODULE_PARM_DESC(crc_window_bytes,
 	"Bytes of the visible scanout region read per CRC (default 262144, minimum 4096)");
 module_param(test_pattern, charp, 0644);
 module_param(test_pattern_period_ms, uint, 0644);
+module_param(test_pattern_anim_ms, uint, 0644);
 MODULE_PARM_DESC(test_pattern,
 	"Test card fallback when no client paints: off, auto (default), or always");
 MODULE_PARM_DESC(test_pattern_period_ms,
 	"Milliseconds between test-card palette rotations, 0 keeps it static (default 5000, clamped to 500-600000)");
+MODULE_PARM_DESC(test_pattern_anim_ms,
+	"Milliseconds between test-card animation ticks, 0 disables it (default 40, clamped to 10-1000)");
 
 /*
  * Stages of sm750_program_mode(), in call order. mode_stage holds the last
@@ -348,10 +359,17 @@ struct sm750_drm_device {
 	u32 *cursor_source;
 	u8 *cursor_image;
 	u32 *test_pattern_line;
+	u32 *test_pattern_half;
 	struct delayed_work test_pattern_work;
 	u32 test_pattern_phase;
 	u32 test_pattern_width;
 	u32 test_pattern_height;
+	u32 test_pattern_ticks;
+	int test_pattern_disc_x;
+	int test_pattern_disc_y;
+	int test_pattern_disc_dx;
+	int test_pattern_disc_dy;
+	u32 test_pattern_disc_colour;
 	void *dma_staging[SM750_DRM_DMA_STAGING_BUFFERS];
 	dma_addr_t dma_staging_address[SM750_DRM_DMA_STAGING_BUFFERS];
 	struct completion dma_completion;
@@ -406,7 +424,6 @@ struct sm750_drm_device {
 	bool shadow_source_snapshot_valid;
 	bool rgb565_scanout_snapshot_valid;
 	bool test_pattern_active;
-	bool test_pattern_fresh;
 	bool hardware_cursor;
 	bool cursor_image_valid;
 	bool shadow_dma_enabled;
@@ -3248,6 +3265,10 @@ static int sm750_crc_arm(struct sm750_drm_device *sdev)
  * produce an entry, which is indistinguishable from a broken tick. Shared by
  * the CRTC callback and the crc/control debugfs file.
  */
+/* Defined with the test-card block further down. A CRC source owns the
+ * scanout window and must stop a running card first (R1.1). */
+static void sm750_test_pattern_cancel(struct sm750_drm_device *sdev);
+
 static int sm750_crc_enable(struct sm750_drm_device *sdev)
 {
 	const char *missing = NULL;
@@ -3269,6 +3290,9 @@ static int sm750_crc_enable(struct sm750_drm_device *sdev)
 	}
 	sdev->crc_enabled = true;
 	sdev->crc_warned = false;
+	/* The CRC reader and the painter share the 262144-byte scanout window;
+	 * leaving a paint queued would make the window torn, not static. */
+	sm750_test_pattern_cancel(sdev);
 	ret = sm750_crc_arm(sdev);
 	if (ret)
 		sm750_crc_stop(sdev);
@@ -3471,11 +3495,47 @@ static bool sm750_shadow_frame_is_blank(struct sm750_drm_device *sdev,
  * Test-card fallback: when the pipe is about to scan a frame nobody has
  * painted, draw one instead of showing a black panel. The card is written
  * straight into the scanout window; a later client commit overwrites it
- * because sm750_pipe_update() stops the rotation and re-uploads the client
- * frame. The palette rotates because a static card is the burn-in pattern a
- * kiosk panel hits overnight, and the sweep bar makes a stalled work item
- * visible at a glance.
+ * because sm750_pipe_update() stops the animation and re-uploads the client
+ * frame. Two things move: a bouncing disc at test_pattern_anim_ms, and the
+ * whole palette at test_pattern_period_ms, because a static card is the
+ * burn-in pattern a kiosk panel hits overnight and a frozen disc is visible
+ * at a glance. The animation repaints only the disc's bounding box, so a tick
+ * costs kilobytes instead of a frame.
  */
+
+/* EBU/analog test-bar values: white, yellow, cyan, green, magenta, red, blue. */
+static const u32 sm750_test_pattern_bars[SM750_TEST_BAR_COUNT - 1] = {
+	SM750_TEST_WHITE, SM750_TEST_YELLOW, SM750_TEST_CYAN,
+	SM750_TEST_GREEN, SM750_TEST_MAGENTA, SM750_TEST_RED,
+	SM750_TEST_BLUE,
+};
+
+/*
+ * Everything the card needs to compute one pixel from first principles. The
+ * background is a pure function of x, y and the palette phase, so any
+ * rectangle can be recomputed without reading the screen: that is what lets
+ * an animation tick erase the disc's old bounding box and draw the new one
+ * instead of repainting the frame.
+ */
+struct sm750_test_pattern_ctx {
+	u32 width;
+	u32 height;
+	u32 phase;
+	u32 bar_bottom;
+	u32 bar_w;
+	u32 grid_x;
+	u32 grid_y;
+	u32 sweep_x;
+	u32 cx;
+	u32 cy;
+	u32 radius;
+	const u32 *half;
+	bool disc;
+	u32 disc_x;
+	u32 disc_y;
+	u32 disc_radius;
+	u32 disc_colour;
+};
 
 /* Midpoint (Bresenham) circle, stored as a per-row outline half-width. */
 static void sm750_test_pattern_circle(u32 radius, u32 *half)
@@ -3511,96 +3571,288 @@ static void sm750_test_pattern_put(struct sm750_drm_device *sdev, void *line,
 	}
 }
 
-static void sm750_paint_test_pattern(struct sm750_drm_device *sdev, u32 width,
-				     u32 height)
+/*
+ * One background pixel: bars over the top two thirds, grayscale staircase
+ * below them, then the grid, the sweep, the crosshair, the circle and the
+ * inset border, each of which overwrites what came before. No text and no
+ * font, so the card is identical in 16 and 32 bpp.
+ */
+static u32 sm750_test_pattern_pixel(const struct sm750_test_pattern_ctx *ctx,
+				    unsigned int x, unsigned int y)
 {
-	static const u32 bars[SM750_TEST_BAR_COUNT - 1] = {
-		SM750_TEST_WHITE, SM750_TEST_YELLOW, SM750_TEST_CYAN,
-		SM750_TEST_GREEN, SM750_TEST_MAGENTA, SM750_TEST_RED,
-		SM750_TEST_BLUE,
-	};
-	u32 phase = sdev->test_pattern_phase;
+	u32 dx = x > ctx->cx ? x - ctx->cx : ctx->cx - x;
+	u32 dy = y > ctx->cy ? y - ctx->cy : ctx->cy - y;
+	u32 rgb;
+
+	if (y < ctx->bar_bottom) {
+		u32 slot = x / ctx->bar_w;
+
+		if (slot >= SM750_TEST_BAR_COUNT - 1)
+			rgb = SM750_TEST_BLACK;
+		else
+			rgb = sm750_test_pattern_bars[(slot + ctx->phase) %
+					(SM750_TEST_BAR_COUNT - 1)];
+	} else {
+		u32 step = (x * SM750_TEST_GRAY_STEPS / ctx->width +
+			    ctx->phase) % SM750_TEST_GRAY_STEPS;
+		u32 v = step * 255 / (SM750_TEST_GRAY_STEPS - 1);
+
+		rgb = (v << 16) | (v << 8) | v;
+	}
+
+	if (y < ctx->bar_bottom && (x % ctx->grid_x == 0 || y % ctx->grid_y == 0))
+		rgb = SM750_TEST_WHITE;
+	if ((x + ctx->width - ctx->sweep_x) % ctx->width < SM750_TEST_SWEEP_WIDTH)
+		rgb = SM750_TEST_WHITE;
+	if (dy <= 1 && dx <= ctx->radius)
+		rgb = SM750_TEST_WHITE;
+	if (dx <= 1 && dy <= ctx->cy)
+		rgb = SM750_TEST_WHITE;
+	if (dy < ctx->radius && ctx->half[dy] &&
+	    (dx == ctx->half[dy] || dx + 1 == ctx->half[dy]))
+		rgb = SM750_TEST_WHITE;
+	if (y == 2 || y == ctx->height - 3 ||
+	    x == 2 || x == ctx->width - 3)
+		rgb = SM750_TEST_WHITE;
+
+	return rgb;
+}
+
+/* Draw the disc over a background pixel: solid fill with a 2 px black edge so
+ * it stays readable against the white bars and the white grid lines. */
+static u32 sm750_test_pattern_disc_pixel(const struct sm750_test_pattern_ctx *ctx,
+					 unsigned int x, unsigned int y, u32 rgb)
+{
+	u32 dx, dy, d2, inner;
+
+	if (!ctx->disc)
+		return rgb;
+	dx = x > ctx->disc_x ? x - ctx->disc_x : ctx->disc_x - x;
+	dy = y > ctx->disc_y ? y - ctx->disc_y : ctx->disc_y - y;
+	d2 = dx * dx + dy * dy;
+	if (d2 > ctx->disc_radius * ctx->disc_radius)
+		return rgb;
+	inner = ctx->disc_radius > 2 ? ctx->disc_radius - 2 : 0;
+	if (d2 > inner * inner)
+		return SM750_TEST_BLACK;
+
+	return ctx->disc_colour;
+}
+
+/*
+ * Recompute and write one rectangle of the card. A full-width rectangle is
+ * padded to the scanout pitch; a partial one writes only its own span, which
+ * is why an animation tick costs a bounding box and not a frame.
+ */
+static void sm750_test_pattern_rect(struct sm750_drm_device *sdev,
+				    const struct sm750_test_pattern_ctx *ctx,
+				    u32 x0, u32 y0, u32 x1, u32 y1)
+{
 	unsigned int pitch = sdev->scanout_pitch;
 	unsigned int cpp = sdev->rgb565 ? sizeof(u16) : sizeof(u32);
-	u32 half[SM750_DRM_MAX_HEIGHT / 4 + 1] = { 0 };
 	void *line = sdev->test_pattern_line;
-	u32 bar_bottom, bar_w, sweep_x, grid_x, grid_y, radius;
-	u32 cx, cy, x, y;
+	bool full;
+	u32 x, y;
 
 	if (!line || !pitch)
 		return;
-	/* The softscaler rewrites every line on upload; a card here would be
-	 * overwritten by the very path that produced the blank frame. */
-	if (sdev->softscale_active)
-		return;
-	if (width < SM750_TEST_MIN_WIDTH || height < SM750_TEST_MIN_HEIGHT)
-		return;
-	if (pitch < width * cpp || pitch > SM750_TEST_LINE_BYTES)
-		return;
-	if ((u64)pitch * height > sdev->vram_size - sdev->scanout_offset)
+	x0 = min(x0, ctx->width);
+	x1 = min(x1, ctx->width);
+	y0 = min(y0, ctx->height);
+	y1 = min(y1, ctx->height);
+	if (x1 <= x0 || y1 <= y0)
 		return;
 
-	bar_bottom = height * 2 / 3;
-	bar_w = max(width / SM750_TEST_BAR_COUNT, 1u);
-	grid_x = max(width / 16, 1u);
-	grid_y = max(bar_bottom / 12, 1u);
-	sweep_x = (u32)(((u64)phase * max(width / 64, 1u)) % width);
-	cx = width / 2;
-	cy = bar_bottom / 2;
-	radius = clamp_t(u32, min(width, bar_bottom) / 4,
-			 16u, SM750_DRM_MAX_HEIGHT / 4);
-	sm750_test_pattern_circle(radius, half);
-
-	for (y = 0; y < height; y++) {
-		u32 dy = y > cy ? y - cy : cy - y;
-		bool border_row = y == 2 || y == height - 3;
-
-		for (x = 0; x < width; x++) {
-			u32 dx = x > cx ? x - cx : cx - x;
-			u32 rgb;
-
-			if (y < bar_bottom) {
-				u32 slot = x / bar_w;
-
-				if (slot >= SM750_TEST_BAR_COUNT - 1)
-					rgb = SM750_TEST_BLACK;
-				else
-					rgb = bars[(slot + phase) %
-						   (SM750_TEST_BAR_COUNT - 1)];
-			} else {
-				u32 step = (x * SM750_TEST_GRAY_STEPS / width +
-					    phase) % SM750_TEST_GRAY_STEPS;
-				u32 v = step * 255 / (SM750_TEST_GRAY_STEPS - 1);
-				rgb = (v << 16) | (v << 8) | v;
-			}
-
-			if (y < bar_bottom && (x % grid_x == 0 || y % grid_y == 0))
-				rgb = SM750_TEST_WHITE;
-			if ((x + width - sweep_x) % width < SM750_TEST_SWEEP_WIDTH)
-				rgb = SM750_TEST_WHITE;
-			if (dy <= 1 && dx <= radius)
-				rgb = SM750_TEST_WHITE;
-			if (dx <= 1 && dy <= cy)
-				rgb = SM750_TEST_WHITE;
-			if (dy < radius && half[dy] &&
-			    (dx == half[dy] || dx + 1 == half[dy]))
-				rgb = SM750_TEST_WHITE;
-			if (border_row || x == 2 || x == width - 3)
-				rgb = SM750_TEST_WHITE;
-
-			sm750_test_pattern_put(sdev, line, x, rgb);
+	full = !x0 && x1 == ctx->width;
+	for (y = y0; y < y1; y++) {
+		for (x = x0; x < x1; x++)
+			sm750_test_pattern_put(sdev, line, x,
+				sm750_test_pattern_disc_pixel(ctx, x, y,
+					sm750_test_pattern_pixel(ctx, x, y)));
+		if (full) {
+			if (pitch > ctx->width * cpp)
+				memset((u8 *)line + ctx->width * cpp, 0,
+				       pitch - ctx->width * cpp);
+			memcpy_toio(sdev->vram + sdev->scanout_offset +
+				    (u64)y * pitch, line, pitch);
+		} else {
+			memcpy_toio(sdev->vram + sdev->scanout_offset +
+				    (u64)y * pitch + (u64)x0 * cpp,
+				    (u8 *)line + (u64)x0 * cpp,
+				    (u64)(x1 - x0) * cpp);
 		}
-		if (pitch > width * cpp)
-			memset((u8 *)line + width * cpp, 0,
-			       pitch - width * cpp);
-		memcpy_toio(sdev->vram + sdev->scanout_offset +
-			    (u64)y * pitch, line, pitch);
 	}
 
 	/* The card bypasses the snapshot bookkeeping, so both snapshots are
 	 * stale: a later client commit must re-upload every span. */
 	sdev->shadow_source_snapshot_valid = false;
 	sdev->rgb565_scanout_snapshot_valid = false;
+}
+
+/* Guards and geometry in one place: the full painter and the animation tick
+ * must refuse the same frames for the same reasons. */
+static bool sm750_test_pattern_ctx_init(struct sm750_drm_device *sdev,
+					u32 width, u32 height,
+					struct sm750_test_pattern_ctx *ctx)
+{
+	unsigned int pitch = sdev->scanout_pitch;
+	unsigned int cpp = sdev->rgb565 ? sizeof(u16) : sizeof(u32);
+
+	memset(ctx, 0, sizeof(*ctx));
+	if (!sdev->test_pattern_line || !sdev->test_pattern_half || !pitch)
+		return false;
+	/* The softscaler rewrites every line on upload; a card here would be
+	 * overwritten by the very path that produced the blank frame. */
+	if (sdev->softscale_active)
+		return false;
+	if (width < SM750_TEST_MIN_WIDTH || height < SM750_TEST_MIN_HEIGHT)
+		return false;
+	if (pitch < width * cpp || pitch > SM750_TEST_LINE_BYTES)
+		return false;
+	if ((u64)pitch * height > sdev->vram_size - sdev->scanout_offset)
+		return false;
+
+	ctx->width = width;
+	ctx->height = height;
+	ctx->phase = sdev->test_pattern_phase;
+	ctx->bar_bottom = height * 2 / 3;
+	ctx->bar_w = max(width / SM750_TEST_BAR_COUNT, 1u);
+	ctx->grid_x = max(width / 16, 1u);
+	ctx->grid_y = max(ctx->bar_bottom / 12, 1u);
+	ctx->sweep_x = (u32)(((u64)ctx->phase * max(width / 64, 1u)) % width);
+	ctx->cx = width / 2;
+	ctx->cy = ctx->bar_bottom / 2;
+	ctx->radius = clamp_t(u32, min(width, ctx->bar_bottom) / 4, 16u,
+			      SM750_DRM_MAX_HEIGHT / 4);
+	memset(sdev->test_pattern_half, 0,
+	       (ctx->radius + 1) * sizeof(*sdev->test_pattern_half));
+	sm750_test_pattern_circle(ctx->radius, sdev->test_pattern_half);
+	ctx->half = sdev->test_pattern_half;
+
+	ctx->disc_radius = clamp_t(u32,
+				height * SM750_TEST_DISC_PERCENT / 100,
+				SM750_TEST_DISC_MIN_RADIUS,
+				SM750_TEST_DISC_MAX_RADIUS);
+	ctx->disc = true;
+	ctx->disc_x = sdev->test_pattern_disc_x;
+	ctx->disc_y = sdev->test_pattern_disc_y;
+	ctx->disc_colour = sm750_test_pattern_bars[sdev->test_pattern_disc_colour %
+					(SM750_TEST_BAR_COUNT - 1)];
+	return true;
+}
+
+static void sm750_paint_test_pattern(struct sm750_drm_device *sdev, u32 width,
+				     u32 height)
+{
+	struct sm750_test_pattern_ctx ctx;
+
+	if (!sm750_test_pattern_ctx_init(sdev, width, height, &ctx))
+		return;
+
+	sm750_test_pattern_rect(sdev, &ctx, 0, 0, width, height);
+}
+
+/* Start the disc in the middle of the card, moving diagonally. Called once
+ * per enable: a palette rotation must not move it. */
+static void sm750_test_pattern_disc_reset(struct sm750_drm_device *sdev,
+					  u32 width, u32 height)
+{
+	sdev->test_pattern_disc_x = width / 2;
+	sdev->test_pattern_disc_y = height / 2;
+	sdev->test_pattern_disc_dx = max_t(int,
+			(int)height * SM750_TEST_DISC_SPEED_X / 1080, 1);
+	sdev->test_pattern_disc_dy = max_t(int,
+			(int)height * SM750_TEST_DISC_SPEED_Y / 1080, 1);
+	sdev->test_pattern_disc_colour = 0;
+	sdev->test_pattern_ticks = 0;
+}
+
+/*
+ * Move the disc one tick and reflect it off the inner border. The centre is
+ * clamped to the box the disc can occupy without touching the 1 px border
+ * inset by 2 px, so neither a bounce nor a shrinking frame can push it off
+ * the card.
+ */
+static void sm750_test_pattern_disc_move(struct sm750_drm_device *sdev,
+					 const struct sm750_test_pattern_ctx *ctx)
+{
+	int reach = (int)ctx->disc_radius;
+	int min_x = 3 + reach;
+	int max_x = (int)ctx->width - 4 - reach;
+	int min_y = 3 + reach;
+	int max_y = (int)ctx->height - 4 - reach;
+	bool bounced = false;
+
+	if (max_x <= min_x || max_y <= min_y)
+		return;
+
+	sdev->test_pattern_disc_x += sdev->test_pattern_disc_dx;
+	if (sdev->test_pattern_disc_x < min_x) {
+		sdev->test_pattern_disc_x =
+			min_x + (min_x - sdev->test_pattern_disc_x);
+		sdev->test_pattern_disc_dx = -sdev->test_pattern_disc_dx;
+		bounced = true;
+	} else if (sdev->test_pattern_disc_x > max_x) {
+		sdev->test_pattern_disc_x =
+			max_x - (sdev->test_pattern_disc_x - max_x);
+		sdev->test_pattern_disc_dx = -sdev->test_pattern_disc_dx;
+		bounced = true;
+	}
+	sdev->test_pattern_disc_x = clamp_t(int, sdev->test_pattern_disc_x,
+					    min_x, max_x);
+
+	sdev->test_pattern_disc_y += sdev->test_pattern_disc_dy;
+	if (sdev->test_pattern_disc_y < min_y) {
+		sdev->test_pattern_disc_y =
+			min_y + (min_y - sdev->test_pattern_disc_y);
+		sdev->test_pattern_disc_dy = -sdev->test_pattern_disc_dy;
+		bounced = true;
+	} else if (sdev->test_pattern_disc_y > max_y) {
+		sdev->test_pattern_disc_y =
+			max_y - (sdev->test_pattern_disc_y - max_y);
+		sdev->test_pattern_disc_dy = -sdev->test_pattern_disc_dy;
+		bounced = true;
+	}
+	sdev->test_pattern_disc_y = clamp_t(int, sdev->test_pattern_disc_y,
+					    min_y, max_y);
+
+	/* A new colour per bounce, so a frozen colour means a frozen tick. */
+	if (bounced)
+		sdev->test_pattern_disc_colour++;
+}
+
+/* One animation frame: erase the old bounding box by recomputing its
+ * background, then move and draw the disc. The palette does not change here,
+ * so the erased pixels are exactly what the full painter would produce. */
+static void sm750_test_pattern_disc_tick(struct sm750_drm_device *sdev,
+					 struct sm750_test_pattern_ctx *ctx)
+{
+	struct sm750_test_pattern_ctx erase = *ctx;
+	u32 reach = ctx->disc_radius + 1;
+	u32 old_x = sdev->test_pattern_disc_x;
+	u32 old_y = sdev->test_pattern_disc_y;
+	u32 new_x, new_y;
+
+	erase.disc = false;
+	sm750_test_pattern_rect(sdev, &erase,
+				old_x > reach ? old_x - reach : 0,
+				old_y > reach ? old_y - reach : 0,
+				min(old_x + reach + 1, ctx->width),
+				min(old_y + reach + 1, ctx->height));
+
+	sm750_test_pattern_disc_move(sdev, ctx);
+	ctx->disc = true;
+	ctx->disc_x = sdev->test_pattern_disc_x;
+	ctx->disc_y = sdev->test_pattern_disc_y;
+	ctx->disc_colour = sm750_test_pattern_bars[sdev->test_pattern_disc_colour %
+					(SM750_TEST_BAR_COUNT - 1)];
+	new_x = ctx->disc_x;
+	new_y = ctx->disc_y;
+	sm750_test_pattern_rect(sdev, ctx,
+				new_x > reach ? new_x - reach : 0,
+				new_y > reach ? new_y - reach : 0,
+				min(new_x + reach + 1, ctx->width),
+				min(new_y + reach + 1, ctx->height));
 }
 
 static unsigned int sm750_test_pattern_period(struct sm750_drm_device *sdev)
@@ -3624,10 +3876,30 @@ static unsigned int sm750_test_pattern_period(struct sm750_drm_device *sdev)
 	return period;
 }
 
+static unsigned int sm750_test_pattern_anim(struct sm750_drm_device *sdev)
+{
+	unsigned int anim = READ_ONCE(test_pattern_anim_ms);
+
+	if (!anim)
+		return 0;
+	if (anim < SM750_TEST_ANIM_MIN_MS || anim > SM750_TEST_ANIM_MAX_MS) {
+		unsigned int clamped = clamp_t(unsigned int, anim,
+					SM750_TEST_ANIM_MIN_MS,
+					SM750_TEST_ANIM_MAX_MS);
+
+		drm_info_once(&sdev->drm,
+			      "test_pattern_anim_ms=%u is outside %u-%u ms, clamped to %u\n",
+			      anim, SM750_TEST_ANIM_MIN_MS,
+			      SM750_TEST_ANIM_MAX_MS, clamped);
+		anim = clamped;
+	}
+
+	return anim;
+}
+
 static void sm750_test_pattern_cancel(struct sm750_drm_device *sdev)
 {
 	sdev->test_pattern_active = false;
-	sdev->test_pattern_fresh = false;
 	cancel_delayed_work_sync(&sdev->test_pattern_work);
 }
 
@@ -3636,7 +3908,9 @@ static void sm750_test_pattern_work(struct work_struct *work)
 	struct sm750_drm_device *sdev =
 		container_of(to_delayed_work(work), struct sm750_drm_device,
 			     test_pattern_work);
+	unsigned int anim = sm750_test_pattern_anim(sdev);
 	unsigned int period = sm750_test_pattern_period(sdev);
+	unsigned int delay = anim ? anim : period;
 	bool painted = false;
 
 	mutex_lock(&sdev->mode_lock);
@@ -3649,27 +3923,68 @@ static void sm750_test_pattern_work(struct work_struct *work)
 	 * shadow upload bookkeeping; one torn frame every few seconds is a
 	 * cheaper trade than a new lock order on a diagnostic path.
 	 */
-	if (sdev->test_pattern_active && sdev->scanout_pitch) {
-		sdev->test_pattern_phase++;
-		sm750_paint_test_pattern(sdev, sdev->test_pattern_width,
-					 sdev->test_pattern_height);
-		painted = true;
+	if (sdev->test_pattern_active && sdev->scanout_pitch &&
+	    !READ_ONCE(sdev->crc_enabled)) {
+		struct sm750_test_pattern_ctx ctx;
+
+		if (sm750_test_pattern_ctx_init(sdev,
+						sdev->test_pattern_width,
+						sdev->test_pattern_height,
+						&ctx)) {
+			sdev->test_pattern_ticks++;
+			/*
+			 * The palette rotation keeps its own cadence, counted
+			 * in ticks so a clamped animation period cannot drift
+			 * it: integer arithmetic only, no jiffies.
+			 */
+			if (!anim ||
+			    (period && (u64)sdev->test_pattern_ticks * anim >=
+				       period)) {
+				sdev->test_pattern_ticks = 0;
+				sdev->test_pattern_phase++;
+				/* The card just changed, so rebuild the geometry
+				 * the erased rectangle would otherwise use. */
+				if (sm750_test_pattern_ctx_init(sdev,
+						sdev->test_pattern_width,
+						sdev->test_pattern_height,
+						&ctx))
+					sm750_test_pattern_rect(sdev, &ctx, 0, 0,
+								ctx.width,
+								ctx.height);
+			} else {
+				sm750_test_pattern_disc_tick(sdev, &ctx);
+			}
+			painted = true;
+		}
 	}
 	mutex_unlock(&sdev->mode_lock);
 
-	if (painted && period)
+	if (painted && delay)
 		schedule_delayed_work(&sdev->test_pattern_work,
-				      msecs_to_jiffies(period));
+				      msecs_to_jiffies(delay));
 }
 
-static bool sm750_test_pattern_should_paint(bool blank)
+/*
+ * A scanout CRC source disables the card for its whole lifetime: an armed
+ * consumer is asking for a frame that does not change, and "always" is a
+ * module option, not a reason to override that.
+ */
+static bool sm750_test_pattern_should_paint(struct sm750_drm_device *sdev,
+					    bool blank)
 {
+	if (READ_ONCE(sdev->crc_enabled))
+		return false;
 	if (!strcmp(test_pattern, "always"))
 		return true;
 	if (strcmp(test_pattern, "auto"))
 		return false;
-
-	return blank;
+	/*
+	 * An all-black frame from a userspace master is a legitimate picture
+	 * (a desktop, a screensaver, the CRC harness' own black buffer), not
+	 * an unpainted buffer. The in-kernel fbdev client never becomes a
+	 * master, so it still gets the card.
+	 */
+	return !READ_ONCE(sdev->drm.master) && blank;
 }
 
 static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
@@ -3778,22 +4093,24 @@ static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 		 * later client commit overwrites it (sm750_pipe_update()
 		 * cancels the rotation first).
 		 */
-		if (sm750_test_pattern_should_paint(blank)) {
+		if (sm750_test_pattern_should_paint(sdev, blank)) {
 			sdev->test_pattern_width =
 				crtc_state->adjusted_mode.hdisplay;
 			sdev->test_pattern_height =
 				crtc_state->adjusted_mode.vdisplay;
+			sm750_test_pattern_disc_reset(sdev,
+						      sdev->test_pattern_width,
+						      sdev->test_pattern_height);
 			sm750_paint_test_pattern(sdev,
 						 sdev->test_pattern_width,
 						 sdev->test_pattern_height);
 			sdev->test_pattern_active = true;
-			/* The enabling commit also runs sm750_pipe_update(); see
-			 * the guard there. */
-			sdev->test_pattern_fresh = true;
 			drm_info(&sdev->drm,
 				 "painted a test card: no client has produced a frame (test_pattern=%s)\n",
 				 test_pattern);
-			period = sm750_test_pattern_period(sdev);
+			period = sm750_test_pattern_anim(sdev);
+			if (!period)
+				period = sm750_test_pattern_period(sdev);
 			if (period)
 				schedule_delayed_work(&sdev->test_pattern_work,
 						      msecs_to_jiffies(period));
@@ -3865,19 +4182,13 @@ static void sm750_pipe_update(struct drm_simple_display_pipe *pipe,
 	u32 offset;
 
 	/*
-	 * The enabling commit that just painted the card also runs this hook.
-	 * Skip that one upload so the blank client frame cannot be written over
-	 * the fresh card; a later real commit cancels the rotation and uploads
-	 * normally.
-	 */
-	if (sdev->test_pattern_fresh) {
-		sdev->test_pattern_fresh = false;
-		goto event;
-	}
-	/*
 	 * A real client frame is arriving: stop the test-card rotation before
 	 * any upload so a tick can never overwrite live pixels. The flag is
 	 * cleared first, so a tick that already lost the race paints nothing.
+	 * There is deliberately no one-shot skip here: planes are committed
+	 * before modeset enables (drm_atomic_helper_commit_tail()), so a flag
+	 * set by pipe_enable() would swallow the CLIENT's first frame, not the
+	 * enabling commit's own upload.
 	 */
 	if (sdev->test_pattern_active)
 		sm750_test_pattern_cancel(sdev);
@@ -4474,6 +4785,13 @@ static int sm750_pci_probe(struct pci_dev *pdev,
 		SM750_DRM_MAX_WIDTH, sizeof(*sdev->test_pattern_line),
 		GFP_KERNEL);
 	if (!sdev->test_pattern_line)
+		return -ENOMEM;
+	/* The circle outline table lives here too: a 4 KiB stack array in a
+	 * workqueue tick is not worth the risk. */
+	sdev->test_pattern_half = devm_kmalloc_array(&pdev->dev,
+		SM750_DRM_MAX_HEIGHT / 4 + 1,
+		sizeof(*sdev->test_pattern_half), GFP_KERNEL);
+	if (!sdev->test_pattern_half)
 		return -ENOMEM;
 	if (sdev->shadow_scanout) {
 		sdev->dither_scale_map = devm_kzalloc(&pdev->dev,

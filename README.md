@@ -6,9 +6,10 @@ ultrawide desktop, with bandwidth-saving colour conversion and update
 optimisations for smoother performance.**
 
 Linux display driver for the single-HDMI `SE-DP750A-HDMI` PCIe card. Current
-release **0.6.0**: atomic KMS, dithered 16-bit scanout, hardware cursor, DMA and
-polling upload paths, DKMS packages for `.deb` and `.rpm`, and an acceptance
-verdict of 6 PASS / 0 FAIL / 1 GAP.
+release **0.6.2**: atomic KMS, dithered 16-bit scanout, hardware cursor, DMA and
+polling upload paths, a test-card fallback so a panel with no client is never
+dead-black, DKMS packages for `.deb` and `.rpm`, and an acceptance audit of
+6 PASS / 0 FAIL / 1 GAP run against the 0.6.0 tree and re-verified since.
 
 > **Scope and risk:** this out-of-tree driver supports one specific SM750
 > board. Optional non-EDID modes can exceed published GPU or monitor clock
@@ -30,14 +31,15 @@ transmitter, or different GPIO wiring and are not currently supported.
 
 ## Status
 
-Release 0.6.0. The driver is feature-complete for this board and meets the
+Release 0.6.2. The driver is feature-complete for this board and meets the
 project's production criteria except for one item that needs a person at the
 panel; see the [acceptance report](docs/ACCEPTANCE-REPORT.md).
 
 | Area | Verified state |
 |---|---|
-| Module | `sm750hdmidrm` 0.6.0, built by DKMS from one source tree |
-| Runtime | built and installed by DKMS for kernels 7.2.15-100, 7.3.3-100 and 7.3.4-100 (Fedora 43), loaded and exercised on 7.3.4-100 |
+| Module | `sm750hdmidrm` 0.6.2, built by DKMS from one source tree |
+| Runtime | DKMS built and installed 0.6.1 for kernels 7.2.15-100, 7.3.3-100 and 7.3.4-100 (Fedora 43) from this tree, exercised on 7.3.4-100; installing the 0.6.2 package needs one allowlist line (`docs/ROOT-ACTIONS.md` 3.5) |
+| Test card | seen on the panel; the disc animates and the scanout CRC gate stays green while it runs (`docs/evidence/runtime/26-test-card-crc-fix.txt`) |
 | Build matrix | 9 kernel and scanout-format combinations, 6.17.1 through the 7.4 daily headers |
 | Modeset | atomic commit verified with `modetest`, 1920x1080 at 60 Hz |
 | Vblank | 60.43 vblanks/s measured over 120 events |
@@ -82,7 +84,7 @@ git clone https://github.com/GuramDuka/sm750hdmifb.git
 cd sm750hdmifb
 make check
 ./build-package.sh
-sudo apt install ./dist/sm750hdmifb_0.6.0_all.deb
+sudo apt install ./dist/sm750hdmifb_0.6.2_all.deb
 sudo reboot
 ```
 
@@ -106,11 +108,11 @@ mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS}
 . ./packaging/source-excludes.sh
 mapfile -t skip < <(sm750_dev_only_pathspecs)
 git ls-files -z -- . "${skip[@]}" >"$work/tracked"
-tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.0-source.tar.gz" \
-    --transform='s|^|sm750hdmifb-0.6.0/|' --null -T "$work/tracked"
+tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.2-source.tar.gz" \
+    --transform='s|^|sm750hdmifb-0.6.2/|' --null -T "$work/tracked"
 
 rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb.spec
-sudo dnf install -y "$topdir"/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+sudo dnf install -y "$topdir"/RPMS/noarch/sm750hdmifb-0.6.2-1.fc43.noarch.rpm
 sudo reboot
 ```
 
@@ -144,13 +146,13 @@ module is `sm750hdmidrm.ko` so it cannot be confused with `sm750fb.ko`.
 
 ### Kernel compatibility
 
-**Built on 6.17 through 7.4, runtime-validated on 7.3.4.** Release 0.6.0 is
+**Built on 6.17 through 7.4, runtime-validated on 7.3.4.** Release 0.6.2 is
 installed by DKMS for the Fedora 43 kernels 7.2.15-100, 7.3.3-100 and
 7.3.4-100, and was loaded and exercised on 7.3.4-100, the reference host
 kernel. The other two are built and installed but have not been booted. Linux
 7.4 is still in development: only its headers have been compiled against, so it
 remains untested at runtime. See the
-[0.6.0 release notes](docs/RELEASE-NOTES.md) and the
+[0.6.2 release notes](docs/RELEASE-NOTES.md) and the
 [acceptance report](docs/ACCEPTANCE-REPORT.md).
 
 The driver is intended for **Linux 6.17 and newer**. DKMS deliberately refuses
@@ -521,26 +523,43 @@ all-zero frame (see the next section). Instead of leaving a dead-black panel,
 the driver can paint an analog-style test card into the window it is about to
 scan: seven EBU colour bars over the top two thirds, an 8-step grayscale
 staircase along the bottom, a 16x12 grid, a centred crosshair and circle, an
-inset white border and a moving white sweep. The card is pure geometry, so it
-renders the same in 16 and 32 bpp, and it is repainted on a timer with a rotated
-palette so a panel left on it does not burn in.
+inset white border, a moving white sweep and a bouncing disc. The card is pure
+geometry, so it renders the same in 16 and 32 bpp.
 
 `test_pattern` selects the behaviour:
 
 | Value | Meaning |
 | --- | --- |
 | `off` | never paint |
-| `auto` (default) | paint when the frame being enabled is entirely blank |
+| `auto` (default) | paint when the frame being enabled is entirely blank and no userspace DRM client owns the display |
 | `always` | paint on every enable, blank or not |
 
-`test_pattern_period_ms` (default `5000`) is the interval between palette
-rotations; `0` keeps the card static. Values outside 500-600000 ms are clamped
-once, with a `drm_info` line naming the clamp.
+Two timers keep it moving, so a frozen card is obvious at a glance and a panel
+left on it does not burn in:
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `test_pattern_anim_ms` | `40` | animation tick, 25 fps; `0` stops the disc |
+| `test_pattern_period_ms` | `5000` | full-card palette rotation; `0` keeps the palette |
+
+`test_pattern_anim_ms` values outside 10-1000 ms are clamped once, with a
+`drm_info` line naming the clamp, and the same holds for
+`test_pattern_period_ms` outside 500-600000 ms.
+
+The disc is the Atari-screensaver part: a filled circle with a 2 px black
+outline, radius 3 percent of the frame height clamped to 24-64 px, travelling
+diagonally at 3 px per tick horizontally and 2 px per tick vertically at 1080p
+and proportionally slower on a smaller panel. It reflects off the inner border,
+never crosses it, and takes the next EBU colour on every bounce. A tick
+recomputes only the two bounding boxes it touches, 35 KiB per tick at 1080p in
+32 bpp, not the 8 MiB frame. The palette rotation keeps its own 5 s cadence,
+counted in ticks, and the disc keeps its position across a rotation.
 
 ```sh
 # paint a card even when a client did paint (diagnostics, cable hunting)
 sudo sh -c 'echo always > /sys/module/sm750hdmidrm/parameters/test_pattern'
-# static card: no rotation, no burn-in protection
+# static card: no disc, no rotation, no burn-in protection
+sudo sh -c 'echo 0 > /sys/module/sm750hdmidrm/parameters/test_pattern_anim_ms'
 sudo sh -c 'echo 0 > /sys/module/sm750hdmidrm/parameters/test_pattern_period_ms'
 # back to the default: paint only a blank frame
 sudo sh -c 'echo auto > /sys/module/sm750hdmidrm/parameters/test_pattern'
@@ -549,11 +568,20 @@ sudo sh -c 'echo auto > /sys/module/sm750hdmidrm/parameters/test_pattern'
 The card is a fallback, not a display path. It is skipped when the window is
 softscaled (the scanout pitch is 2048 there, not the display width), when the
 frame does not fit the VRAM left after the scanout offset, and on modes below
-320x200. The first real client commit cancels the rotation before it uploads,
-and the commit that enables the pipe skips its own upload, so a live client is
-never overwritten. `test_pattern=auto` cannot tell "no producer" from "a
-producer that legitimately draws black"; set `off` if the panel must show
-exactly what the client wrote.
+320x200. A userspace DRM master is by definition producing frames, so `auto`
+leaves its output alone even when that output is black - a desktop, a
+screensaver, a paused video or a CRC harness buffer; only an unowned CRTC (the
+in-kernel fbdev client never becomes a master) gets the card. The first real
+client commit cancels the animation before it uploads. There is deliberately no
+one-shot upload skip: the RCA in
+`docs/evidence/runtime/24-test-card-crc-conflict-rca.txt` proved that such a
+flag dropped the client's first frame instead of the enabling commit's own
+upload, because planes are committed before modeset enables.
+
+An armed scanout CRC source owns the window. Arming it cancels a running card,
+`test_pattern` stays inert for the source's whole lifetime, and a tick that was
+already waiting on the mode lock re-checks the flag before it paints.
+`test_pattern=always` does not override an armed CRC source either.
 
 `tools/sm750-console.sh` (installed as `/usr/local/sbin/sm750-console`, root
 only) is the alternative when a static image is unacceptable: it moves the
@@ -660,6 +688,17 @@ limitations are in
 - [Project logbook](docs/LOGBOOK.md) - chronological record, newest entry last
 - [Host root actions](docs/ROOT-ACTIONS.md) - sudoers, helpers, udev rule, recovery
 - [CI recipe](docs/ci/build.yml) - inactive: GitHub Actions is disabled for this repository, the file is a copy-paste recipe
+
+### Presentation deck
+
+A ten-slide overview of the driver, its architecture and its open items, in two
+forms. The links are raw HTML on purpose: a forge renders HTML in a Markdown
+file by stripping it, so the deck is kept as a standalone page and only linked.
+
+- <a href="https://polaris.root.sx/code/duka/sm750hdmifb/raw/branch/main/docs/deck/index.html">Slides (rendered)</a> - the standalone page, served as `text/html` by this repository's primary remote
+- <a href="https://htmlpreview.github.io/?https://raw.githubusercontent.com/GuramDuka/sm750hdmifb/main/docs/deck/index.html">Slides (rendered, GitHub mirror)</a> - the same page through a viewer, because `raw.githubusercontent.com` serves `.html` as `text/plain`
+- [Slides (Markdown source)](docs/DECK.md) - Marp-flavoured Markdown, ten slides, for editing and for `marp --pdf`
+- [Deck source](docs/deck/index.html) - the page itself: hand-written reveal-style JavaScript, an inline SVG architecture diagram, hash routing (`#/3`), a print stylesheet and a no-script fallback that stacks all ten slides
 
 Five verification targets are opt-in and deliberately outside `make check`, so
 the default gate stays the same 17 commands on machines without the analysers:

@@ -24,7 +24,7 @@ project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 spec=$project_dir/packaging/sm750hdmifb.spec
 name=sm750hdmifb
 module=sm750hdmidrm
-version=0.6.1
+version=0.6.2
 kernel=$(uname -r)
 arch=$(uname -m)
 cc=/usr/bin/gcc
@@ -424,13 +424,13 @@ mixed_output=$(run_posttrans "$sandbox/modules-mixed" 2>&1) || mixed_exit=$?
 [ "$mixed_exit" -eq 0 ] || fail "%posttrans exited $mixed_exit on the mixed root"
 printf '%s\n' "$mixed_output" | grep -F 'no supported installed kernel' >/dev/null &&
 	fail "%posttrans warned despite one usable kernel"
-expected_calls=$'dkms build -m sm750hdmifb -v 0.6.1 -k 7.3.4-100.fc43.x86_64\ndkms install -m sm750hdmifb -v 0.6.1 -k 7.3.4-100.fc43.x86_64 --force\ndepmod -a 7.3.4-100.fc43.x86_64\ndkms status'
+expected_calls=$'dkms build -m sm750hdmifb -v 0.6.2 -k 7.3.4-100.fc43.x86_64\ndkms install -m sm750hdmifb -v 0.6.2 -k 7.3.4-100.fc43.x86_64 --force\ndepmod -a 7.3.4-100.fc43.x86_64\ndkms status'
 [ "$(cat "$sandbox/calls.log")" = "$expected_calls" ] ||
 	fail "unexpected dkms/depmod call sequence: $(tr '\n' '|' <"$sandbox/calls.log")"
 mixed_calls=$(cat "$sandbox/calls.log")
 
 # Stale-registration purge, rootless: the canned listing is the host state
-# before this task (two 0.5.9 kernels, 0.6.0 installed, 0.6.1 added by %post,
+# before this task (two 0.5.9 kernels, 0.6.0 installed, 0.6.2 added by %post,
 # plus rows that must not be touched). Dropping the purge from %posttrans
 # leaves calls.log at "dkms status" and fails the equality below.
 cat >"$sandbox/status-stale.txt" <<'EOF'
@@ -439,8 +439,8 @@ sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: built
 sm750hdmifb/0.6.0, 7.2.15-100.fc43.x86_64, x86_64: installed
 sm750hdmifb/0.6.0, 7.3.3-100.fc43.x86_64, x86_64: installed
 sm750hdmifb/0.6.0: added
-sm750hdmifb/0.6.1, 7.3.4-100.fc43.x86_64, x86_64: installed
-sm750hdmifb/0.6.1: added
+sm750hdmifb/0.6.2, 7.3.4-100.fc43.x86_64, x86_64: installed
+sm750hdmifb/0.6.2: added
 sm750hdmifb-ng/0.9.0, 7.3.4-100.fc43.x86_64, x86_64: built
 othermodule/1.0, 7.3.4-100.fc43.x86_64, x86_64: installed
 EOF
@@ -458,7 +458,7 @@ printf '%s\n' "$purge_output" |
 	grep -F 'removing stale DKMS registration: sm750hdmifb/0.6.0' >/dev/null ||
 	fail "the purge did not announce the removal of 0.6.0"
 printf '%s\n' "$purge_output" |
-	grep -F 'removing stale DKMS registration: sm750hdmifb/0.6.1' >/dev/null &&
+	grep -F 'removing stale DKMS registration: sm750hdmifb/0.6.2' >/dev/null &&
 	fail "the purge tried to remove the version being installed"
 expected_purge=$'dkms status\ndkms remove -m sm750hdmifb -v 0.5.9 --all\ndkms remove -m sm750hdmifb -v 0.6.0 --all'
 [ "$(cat "$sandbox/calls.log")" = "$expected_purge" ] ||
@@ -497,7 +497,7 @@ cont_line=$(grep -nF 'dkms remove -m sm750hdmifb -v 0.6.0 --all' \
 	fail "the loop aborted after the failed removal; 0.6.0 was never attempted"
 [ "$cont_line" -gt "$fail_line" ] ||
 	fail "the loop removed 0.6.0 before the failed 0.5.9 removal"
-grep -F 'dkms remove -m sm750hdmifb -v 0.6.1' "$sandbox/calls.log" >/dev/null &&
+grep -F 'dkms remove -m sm750hdmifb -v 0.6.2' "$sandbox/calls.log" >/dev/null &&
 	fail "the failing-removal run tried to remove the version being installed"
 expected_failpurge=$'dkms status\ndkms remove -m sm750hdmifb -v 0.5.9 --all\ndkms remove -m sm750hdmifb -v 0.6.0 --all'
 [ "$(cat "$sandbox/calls.log")" = "$expected_failpurge" ] ||
@@ -531,7 +531,7 @@ failpurge_calls=$(cat "$sandbox/calls.log")
 	printf '%s\n' "$failpurge_calls"
 } >"$evidence/06-posttrans-missing-headers.log" 2>&1
 note "missing headers: warning on stderr, exit 0; build/install/depmod sequence verified"
-note "stale purge: sm750hdmifb/0.5.9 and 0.6.0 removed, 0.6.1 and other module names untouched"
+note "stale purge: sm750hdmifb/0.5.9 and 0.6.0 removed, 0.6.2 and other module names untouched"
 note "failed removal: dkms exit 4 downgraded to the spec warning, exit 0, loop continued"
 
 # --- dkms sandbox: add + build ---------------------------------------------
@@ -637,7 +637,7 @@ note "built object: $built_ko ($(stat -c %s "$built_ko") bytes, host tree untouc
 skip "dnf install $(basename "$rpm_file"): needs root (writes /usr/src, /etc, /var/lib/dkms)"
 skip "dkms status showing 'installed' in the host tree: needs root, follows the skipped dnf install"
 skip "dkms install (even with --installtree): 'Error! You must be root to use this command.'"
-skip "dkms remove -m sm750hdmifb -v 0.5.9 --all in the host tree: not in the sudoers allowlist (only -v 0.6.1 is); the purge runs inside the RPM %posttrans instead, and the rootless run above proves the call sequence"
+skip "dkms remove -m sm750hdmifb -v 0.5.9 --all in the host tree: not in the sudoers allowlist (only -v 0.6.2 is); the purge runs inside the RPM %posttrans instead, and the rootless run above proves the call sequence"
 skip "modinfo of the installed module: needs root, follows the skipped dnf install"
 skip "dnf remove $name: needs root and the skipped dnf install"
 skip "dkms status after erase (registration gone): needs root, follows the skipped dnf remove"

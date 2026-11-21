@@ -1,4 +1,4 @@
-# utc: 2026-11-20T14:26:13Z
+# utc: 2026-11-21T06:05:45Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
 # command: sh posttrans.sh with SM750_RPM_MODULES_ROOT (rootless)
@@ -8,14 +8,14 @@
 --- no supported kernel with headers ---
 warning: skipping 6.18.13-200.fc43.x86_64: matching kernel headers are absent
 warning: no supported installed kernel has usable headers; the module was not built
-warning: install kernel-devel for a supported kernel, then run: dkms install -m sm750hdmifb -v 0.6.1 -k <kernel>
+warning: install kernel-devel for a supported kernel, then run: dkms install -m sm750hdmifb -v 0.6.2 -k <kernel>
 exit: 0
 --- one usable kernel, one header-less kernel ---
 warning: skipping 6.18.13-200.fc43.x86_64: matching kernel headers are absent
 exit: 0
 --- recorded calls (mixed root) ---
-dkms build -m sm750hdmifb -v 0.6.1 -k 7.3.4-100.fc43.x86_64
-dkms install -m sm750hdmifb -v 0.6.1 -k 7.3.4-100.fc43.x86_64 --force
+dkms build -m sm750hdmifb -v 0.6.2 -k 7.3.4-100.fc43.x86_64
+dkms install -m sm750hdmifb -v 0.6.2 -k 7.3.4-100.fc43.x86_64 --force
 depmod -a 7.3.4-100.fc43.x86_64
 dkms status
 --- stale registrations handed to the purge ---
@@ -24,14 +24,14 @@ sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: built
 sm750hdmifb/0.6.0, 7.2.15-100.fc43.x86_64, x86_64: installed
 sm750hdmifb/0.6.0, 7.3.3-100.fc43.x86_64, x86_64: installed
 sm750hdmifb/0.6.0: added
-sm750hdmifb/0.6.1, 7.3.4-100.fc43.x86_64, x86_64: installed
-sm750hdmifb/0.6.1: added
+sm750hdmifb/0.6.2, 7.3.4-100.fc43.x86_64, x86_64: installed
+sm750hdmifb/0.6.2: added
 sm750hdmifb-ng/0.9.0, 7.3.4-100.fc43.x86_64, x86_64: built
 othermodule/1.0, 7.3.4-100.fc43.x86_64, x86_64: installed
 --- purge run (no usable kernel, canned status) ---
 warning: skipping 6.18.13-200.fc43.x86_64: matching kernel headers are absent
 warning: no supported installed kernel has usable headers; the module was not built
-warning: install kernel-devel for a supported kernel, then run: dkms install -m sm750hdmifb -v 0.6.1 -k <kernel>
+warning: install kernel-devel for a supported kernel, then run: dkms install -m sm750hdmifb -v 0.6.2 -k <kernel>
 removing stale DKMS registration: sm750hdmifb/0.5.9
 removing stale DKMS registration: sm750hdmifb/0.6.0
 exit: 0
@@ -46,7 +46,7 @@ source symlink); the scriptlet must warn, keep exit 0 and keep
 purging the remaining stale versions.
 warning: skipping 6.18.13-200.fc43.x86_64: matching kernel headers are absent
 warning: no supported installed kernel has usable headers; the module was not built
-warning: install kernel-devel for a supported kernel, then run: dkms install -m sm750hdmifb -v 0.6.1 -k <kernel>
+warning: install kernel-devel for a supported kernel, then run: dkms install -m sm750hdmifb -v 0.6.2 -k <kernel>
 removing stale DKMS registration: sm750hdmifb/0.5.9
 Error! Could not locate dkms.conf file.
 File: /var/lib/dkms/sm750hdmifb/0.5.9/source/dkms.conf does not exist.

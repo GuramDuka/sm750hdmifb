@@ -104,13 +104,15 @@ deliberately NOT granted - a grant to `cat` on that path would be a grant to
 read every future allowlist, and `visudo` on the live file is not needed once
 the staged file is verified. Verification is by `sudo -n -l` content only.
 
-### The 19 NOPASSWD entries
+### The 27 NOPASSWD entries
 
-`sudo -n -l` lists 19 entries: 16 for this work plus three that predate it
-(`/usr/bin/dmidecode`, `/usr/local/cuda/bin/ncu`, `/usr/local/cuda/bin/nvprof`).
-The 16, at 0.6.0:
+`sudo -n -l` lists 27 entries, measured 2026-11-21: 23 for this work plus four
+that predate it (`/usr/bin/dmidecode`, `/usr/bin/nice`,
+`/usr/local/cuda/bin/ncu`, `/usr/local/cuda/bin/nvprof`). The 23, at 0.6.2:
 
 ```text
+/usr/local/sbin/sm750-crc
+/usr/local/sbin/sm750-crc-cycle
 /usr/local/sbin/sm750-regs
 /usr/bin/dmesg
 /usr/bin/journalctl -k -b --no-pager
@@ -118,14 +120,19 @@ The 16, at 0.6.0:
 /usr/local/sbin/sm750-lspci
 /usr/local/sbin/sm750-vbios-dump
 /usr/bin/dkms status
-dkms install -m sm750hdmifb -v 0.6.0
-dkms uninstall -m sm750hdmifb -v 0.6.0
-dkms build -m sm750hdmifb -v 0.6.0
-dkms remove -m sm750hdmifb -v 0.6.0 --all
+/usr/bin/dkms build -m sm750hdmifb -v 0.6.0
+/usr/bin/dkms install -m sm750hdmifb -v 0.6.0
+/usr/bin/dkms uninstall -m sm750hdmifb -v 0.6.0
+/usr/bin/dkms remove -m sm750hdmifb -v 0.6.0 --all
+/usr/bin/dkms build -m sm750hdmifb -v 0.6.1
+/usr/bin/dkms install -m sm750hdmifb -v 0.6.1
+/usr/bin/dkms uninstall -m sm750hdmifb -v 0.6.1
+/usr/bin/dkms remove -m sm750hdmifb -v 0.6.1 --all
 /usr/bin/depmod -a
 /usr/bin/modprobe -r sm750hdmidrm
 /usr/bin/modprobe sm750hdmidrm
 /usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
+/usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.1-1.fc43.noarch.rpm
 /usr/bin/dnf remove -y sm750hdmifb
 ```
 
@@ -580,6 +587,37 @@ esac
 The body above is the file as staged. When the script changes, replace both
 this section and the staged copy; the grant is on the path, so the sudoers line
 does not change.
+
+### 3.5 Installing the 0.6.2 package
+
+The allowlist names three `dnf install` paths, one per released package
+(0.6.0, 0.6.1). The 0.6.2 build needs one more line; everything else the
+install does (`dkms build`, `dkms install` for 0.6.2, `depmod`) runs inside the
+scriptlets and needs no separate grant.
+
+Install (host owner, root), in this order, so the resident module is unloaded
+only after the new tree is on disk:
+
+```sh
+sudo dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-1.fc43.noarch.rpm
+sudo dkms status -m sm750hdmifb
+modprobe -r sm750hdmidrm || true
+sudo modprobe sm750hdmidrm
+cat /sys/module/sm750hdmidrm/version
+```
+
+The one line to add to the allowlist in section 1. It contains no colon, so it
+passes the colon audit:
+
+```text
+coder ALL=(root) NOPASSWD: /usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-1.fc43.noarch.rpm
+```
+
+Until that line exists, the 0.6.2 package cannot be installed by this account,
+and `/sys/module/sm750hdmidrm/version` keeps reporting the 0.6.1 label of the
+RPM built from the same tree on 2026-11-20. The source is identical, so the
+hardware evidence in `docs/evidence/runtime/26-test-card-crc-fix.txt` still
+applies; only the version string differs.
 
 ## 4. udev ACL rule
 

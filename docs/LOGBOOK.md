@@ -2488,3 +2488,203 @@ and make crc-check all exit 0; four kernel builds exit 0.
   now names this run and the evidence-directory choice).
 - Hygiene: scratch under `/mega/tmp/sm750/` only, no version string changed
   (0.6.1 throughout), no `sudo`, no commit; tree left dirty for review.
+
+### 2026-11-20T20:05Z | gem-implementer | T38: the test card animates a bouncing disc at 25 fps
+
+- Action: answered the owner's report that the card is visible but only jumps
+  once every five seconds. T38 adds a second timer and one moving element
+  instead of speeding up the full repaint. `test_pattern_anim_ms` (uint, 0644,
+  default 40, `0` disables, clamped 10..1000 with one `drm_info_once`) drives a
+  `delayed_work` tick that moves a filled disc with a 2 px black edge along a
+  diagonal, reflecting off the inner border and changing colour on each bounce.
+  `test_pattern_period_ms` keeps its meaning: the full card is repainted with
+  the rotated palette once per 5 s, and the disc keeps its position across that
+  repaint.
+- Refactor: the painter became a pure pixel function plus a rectangle writer.
+  `sm750_test_pattern_pixel(ctx, x, y)` computes any background pixel from the
+  column band, the row band, the grid, the sweep, the crosshair, the circle and
+  the border; `sm750_test_pattern_rect()` writes any rectangle through the one
+  probe-time line buffer, padded to `scanout_pitch`. The full card is
+  `rect(0, 0, width, height)`; an animation tick is two bounding boxes, about
+  35 KiB at 1080p in 32 bpp against 8 MiB for a frame. The 289-entry circle
+  table moved from a stack array in the painter to a second probe-time
+  `devm_kmalloc_array` buffer, so no work item carries a kilobyte of stack.
+- Safety properties unchanged: the paint still happens only in the
+  `if (!ret)` block of `sm750_pipe_enable()` after the blank diagnostic and
+  before `drm_crtc_vblank_on()`, with one message per paint; `test_pattern_fresh`
+  still skips the enabling commit's own upload; `sm750_test_pattern_cancel()`
+  still runs in `sm750_pipe_disable()`, in `sm750_pipe_update()` on a client
+  commit, on the enable fail path and in `sm750_pci_remove()`; ticks stay silent
+  and re-check the flags under `mode_lock`; both snapshot flags are invalidated
+  after every paint and every tick.
+- Files: `src/sm750_drm.c` (macros, the third parameter, six disc fields, the
+  pixel/rect/disc writers, the tick and its rescheduling rule, the probe
+  buffers), `tests/check-test-pattern.sh` (thirteen controls, four of them new),
+  `README.md`, `docs/PARAMETERS.md`, `docs/DEFECTS.md` (A34 row and prose),
+  `docs/TEST-STRATEGY.md` (S12 row and subsection), `docs/DELIVERABLES.md`.
+- Measured, all exit 0 in one batch: `make CC=/usr/bin/gcc`;
+  `make CC=/usr/bin/gcc KDIR=/mega/tmp/sm750/t5/k617/usr/src/kernels/6.17.1-300.fc43.x86_64`;
+  a second host-header `make` so `src/sm750hdmidrm.ko` matches the running
+  kernel; `make check` with the libdrm sysroot (17 commands);
+  `tests/check-test-pattern.sh`, `tests/check-drm-policy.sh`,
+  `tests/check-console-blank.sh`, `tests/check-crc-uapi.sh`,
+  `tests/check-restore-path.sh`, `tests/check-scratch-policy.sh`,
+  `tests/check-release-version.sh`, `tests/check-drm-packaging.sh`,
+  `tests/check-static.sh`, `tests/check-rpm-dkms.sh` (with
+  `SM750_RPM_EVIDENCE=/mega/tmp/sm750/t38-evid` for the same reason as T37),
+  `./build-package.sh`, `./tests/audit-release.sh`.
+- Deliberately untouched: `sm750_crc_enable()`, the CRC region logic,
+  `tests/check-scanout-crc.sh` and `tools/sm750-crc-cycle.sh`, because the CRC
+  instability RCA is in flight. The animation moves pixels continuously and a
+  CRC over the scanout window will see that; it is a property of the RCA, not a
+  change made here.
+- Evidence: `docs/evidence/runtime/25-test-card-animation.txt` - geometry for
+  1024x768 and 1920x1080, the per-tick byte cost, the gate transcript, and an
+  explicit `NOT YET OBSERVED ON THE PANEL` section: this session cannot watch
+  the panel, so the disc is source- and build-verified only.
+- Hygiene: ASCII only, scratch under `/mega/tmp/sm750/` only, no version change
+  (0.6.1), no `sudo`, no commit.
+
+### 2026-11-20T23:20Z | orchestrator | T39: the ten-slide deck, in Markdown and as a standalone page
+
+- Action: met the owner's request (m03062) for a presentation of the work in two
+  forms - a Markdown deck under `docs/` for reading and editing, and a
+  ten-slide HTML deck with an architecture diagram - both reachable from
+  `README.md` only through raw-HTML links, because a forge renders Markdown by
+  stripping raw HTML and would drop the page's script and style.
+- Files: `docs/DECK.md` (8281 bytes, Marp front matter, ten `##` slides, 64
+  `file:line` citations), `docs/deck/index.html` (24098 bytes, ten
+  `<section class="slide">`, inline SVG architecture diagram on slide 3, hash
+  routing `#/3`, `@media print` stylesheet with one page per slide,
+  `<noscript>` fallback that stacks all ten slides, zero external requests),
+  `README.md` (new "Presentation deck" subsection with four links),
+  `docs/DELIVERABLES.md` (rows in 5.1 for both files, row in 5.4 for the T38
+  evidence).
+- Hosting facts that decided the design, measured anonymously with `curl`:
+  the primary remote (Forgejo 17.0.1) serves a raw `.html` as
+  `text/html; charset=utf-8` with `content-disposition: inline`, so the page
+  renders there; `raw.githubusercontent.com` and `cdn.jsdelivr.net/gh/` serve
+  `.html` as `text/plain`; `https://htmlpreview.github.io/?<raw url>` serves it
+  as `text/html`. README therefore links the primary remote directly and the
+  GitHub mirror through that viewer.
+- Verification: every citation resolved against `git show HEAD:<path>` with a
+  scratch script under `/mega/tmp/sm750/` (44 distinct citations, 0 unresolved,
+  printed source line matched the claim in each spot check); the HTML parses
+  with balanced tags and no unclosed elements; `node --check` on the inline
+  script; both files ASCII-clean; no `/home/<user>`, token, licence-phrase or
+  binary-extension pattern the release audit bans; zero `http://`/`https://`
+  substrings inside the page.
+- Rendered check, headless Chromium at 1600x900: all ten slides render with
+  their content, slide 3 draws the stacked architecture diagram with both
+  dashed side boxes, and `--print-to-pdf` yields exactly 10 pages, so the print
+  stylesheet produces one slide per page.
+- Corrected in passing: `docs/DELIVERABLES.md` claimed 116 payload files against
+  its own command, which returns 129 before this task and 131 with the two deck
+  files; the sentence now says 131.
+- Hygiene: ASCII only, no version change, no `sudo`, no commit; the T38 work in
+  `src/sm750_drm.c` was untouched by this task.
+### 2026-11-20T20:25Z | gem-implementer | T40: a CRC source owns the scanout window, and the one-shot upload skip is deleted
+
+- Action: implemented R1 and R2 from `docs/evidence/runtime/24-test-card-crc-conflict-rca.txt`,
+  whose harness failure was `FAIL: CRC is not stable for a static frame: 3
+  distinct values in 12 frames`. R1: `sm750_crc_enable()` now calls
+  `sm750_test_pattern_cancel(sdev)` between `crc_enabled = true` and
+  `sm750_crc_arm()`, inside the existing `crc_mutex` section, because the
+  reader and the painter share the same 262144-byte window; the
+  `should_paint()` predicate refuses in its first statement when
+  `READ_ONCE(sdev->crc_enabled)` is set, so `always` does not override an armed
+  source either; and the tick re-checks `!READ_ONCE(sdev->crc_enabled)` inside
+  its `mode_lock` section so a work item that lost the `cancel_delayed_work_sync()`
+  race cannot paint afterwards. `sm750_crc_disable()` deliberately clears
+  nothing: the card stays off until the next enable decides again.
+- Action: deleted `test_pattern_fresh` outright - field, set, skip branch and
+  clear. The RCA proved the flag is consumed one commit too late: the default
+  `drm_atomic_helper_commit_tail()` commits planes before modeset enables
+  (`drm_atomic_helper.c:1984-2003`), so `sm750_pipe_enable()` set it after the
+  enabling commit's own `sm750_pipe_update()` had run; the first update it
+  skipped was the client's first present, and the `goto event` skipped the
+  `sm750_test_pattern_cancel()` below it, so the rotation survived for the
+  whole session. The paint condition is now `!READ_ONCE(sdev->drm.master) &&
+  blank` (src/sm750_drm.c:3987): a userspace master's black frame is a picture
+  and is never painted over, while the in-kernel fbdev client, never a master,
+  still gets the card. No equivalent one-shot was reintroduced.
+- Correction to the T38 entry above (2026-11-20T20:05Z), which says
+  "`test_pattern_fresh` still skips the enabling commit's own upload": that
+  sentence was true only of the intent, not of the code - the flag skipped the
+  client's first upload instead. This entry replaces that claim; the T38 entry
+  stands as written.
+- Files: `src/sm750_drm.c` (forward declaration :3270, cancel :3295, tick
+  condition :3927, `sm750_test_pattern_should_paint()` :3972-3988, call site
+  :4096, cancel in `sm750_pipe_update()` :4194, `test_pattern_fresh` gone),
+  `tests/check-test-pattern.sh` (`check_crc_ownership()`, the
+  `sm750_pipe_update()` assertions, five new controls - eighteen in total),
+  `README.md`, `docs/PARAMETERS.md`, `docs/DEFECTS.md` (A36 row and prose, A34
+  prose), `docs/TEST-STRATEGY.md` (S12 row and subsection),
+  `docs/evidence/runtime/26-test-card-crc-fix.txt`.
+- Measured: `make CC=/usr/bin/gcc` 0; `make check` (libdrm sysroot) 0;
+  `./tests/check-test-pattern.sh` 0 with all eighteen controls rejected;
+  `./tests/check-scanout-crc.sh` 77 (its own root-only skip - the script is
+  byte-identical, and this session is unprivileged on a non-`KD_TEXT` VT);
+  `./tests/check-drm-policy.sh` 0; `./tests/check-release-version.sh` 0;
+  `./tests/check-drm-packaging.sh` 0; `./tests/check-static.sh` 0;
+  `./build-package.sh` 0; `./tests/audit-release.sh` 0; the 6.17.1-300-header
+  build 0; the host rebuild 0 (`modinfo -F vermagic` =
+  `7.3.4-100.fc43.x86_64 SMP preempt mod_unload`); `bash -n` on the gate 0.
+- Deliberately untouched: `sm750_scanout_crc32()`, the CRC region logic, the
+  CRC work function, `tests/check-scanout-crc.sh` and
+  `tools/sm750-crc-cycle.sh`. R3 from the RCA (`pipe_enable()` resetting
+  `scanout_offset` after the enabling commit's plane update) is filed and not
+  fixed here.
+- Evidence: `docs/evidence/runtime/26-test-card-crc-fix.txt` - the mechanism,
+  both changes, the fifteen-control transcript with the five new controls, the
+  verification exit codes, and an explicit `NOT YET OBSERVED ON THE PANEL`
+  section: nobody watched the monitor, so the CRC fix is source- and
+  build-verified only, and the arm/disarm runbook is left for a root session.
+- Hygiene: ASCII only, scratch under `/mega/tmp/sm750/` only, no version change
+  (0.6.1), no `sudo`, no commit.
+
+### 2026-11-21T09:10Z | orchestrator | 0.6.2: version bump, release notes, deck and packaging refreshed
+
+- Bumped 0.6.1 -> 0.6.2, because T37/T38/T40 add shipped behaviour after the
+  0.6.1 commit `1f74688` was pushed: build-package.sh:9, dkms.conf:3,
+  src/sm750_drm.c:78 and :83 (`DRIVER_PATCHLEVEL 2`), packaging/sm750hdmifb.spec
+  :17 and :21, tests/check-drm-packaging.sh:13, tests/check-rpm-dkms.sh (nine
+  occurrences), docs/ci/build.yml:63/:65/:66/:79/:80.
+- New spec `%changelog` entries: `* Sat Nov 21 2026 ... - 0.6.2-1` describes the
+  test card, the rotation, the bouncing disc, the three parameters, CRC
+  ownership and the master predicate, `tests/check-test-pattern.sh` and
+  `tools/sm750-console.sh`; the previous entry is restored as `- 0.6.1-1`. The
+  first attempt carried `Fri Nov 21 2026` and rpmbuild answered
+  `bogus date in %changelog`; the weekday was corrected to `Sat`.
+- docs/RELEASE-NOTES.md gained `## 0.6.2 - Test card, console helper, CRC
+  ownership` and `## 0.6.1 - Display-control transition, blank-console
+  diagnostic` above the 0.6.0 section, which had never been written for 0.6.1.
+- Version references refreshed to 0.6.2 in README.md (nine lines, historical
+  `since 0.6.0` phrases kept), docs/PACKAGING-RPM.md (29 lines, `before 0.6.0`
+  and `pre-0.6.0` kept), docs/DECK.md and docs/deck/index.html (current-version
+  mentions only; the A35 row stays 0.6.1 because that is what failed the gate).
+- docs/ROOT-ACTIONS.md: the allowlist section said "The 19 NOPASSWD entries" at
+  0.6.0; `sudo -n -l` now reports 27, so the section is retitled and lists the
+  23 work entries plus the four that predate this work (`dmidecode`, `nice`,
+  `ncu`, `nvprof`). New section 3.5 records that installing the 0.6.2 package
+  needs one more exact path in the allowlist, and gives the install order that
+  unloads the resident module only after the new tree is on disk.
+- Rebuilt `dist/` from the committed tree: `sm750hdmifb_0.6.2_all.deb` sha256
+  `0987173641f9841b454ce1bb75f27e20a4e4be43b984f95a4a7c98765d2b3255`,
+  `sm750hdmifb-0.6.2-source.tar.gz` sha256
+  `82a7a4a40b042162068227a8244d42c53752c0737e0add34dbfc321d4da07395`, and
+  `/mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-1.fc43.noarch.rpm`.
+  The first `tests/audit-release.sh` failed with
+  `Local path, machine identifier, or credential pattern remains` on the new
+  release-notes sentence that quoted the developer home directory; the sentence
+  now says "a developer home directory" and the audit passes.
+- Gates at 0.6.2, all exit 0: `./tests/check-release-version.sh` ("passed:
+  0.6.2"), `./tests/check-drm-packaging.sh`, the rootless-libdrm `make check`
+  (17 commands, four python tests OK), `./tests/check-static.sh` (cppcheck and
+  coccinelle 0 findings), `./tests/check-test-pattern.sh` (eighteen controls
+  rejected), `./tests/check-scratch-policy.sh`, `./build-package.sh`,
+  `./tests/audit-release.sh`, `rpmbuild -ba`, and `./tests/check-rpm-dkms.sh`
+  ("sm750hdmifb 0.6.2, sandbox built, root-only steps skipped").
+- Process: the owner's new rule "after every logbook or history change, push"
+  is now part of the contributor contract at AGENTS.md:13-17, and this entry is
+  pushed in the same session.

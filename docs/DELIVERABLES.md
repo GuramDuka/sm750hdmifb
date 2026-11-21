@@ -125,7 +125,7 @@ to `src/*.c` or `src/*.h` (`docs/evidence/builds/11-warnings-scan.log`).
 ```
 
 Expected: exit 0. The script rebuilds the noarch RPM from a fresh `_topdir`,
-asserts the payload against `git ls-files` (116 files in the current tree; the
+asserts the payload against `git ls-files` (131 files in the current tree; the
 same command the script uses is `git ls-files -- . ':(exclude)docs/plan'
 ':(exclude)docs/evidence' ':(exclude)docs/images' | wc -l`), the `%files` list
 (36 files), the scriptlets and the dependencies, runs the `%posttrans` branch
@@ -399,6 +399,8 @@ list.
 | `docs/TESTING.md` | validation scope, recovery, live reload |
 | `docs/VBLANK.md` | private vblank timer and its locking |
 | `docs/VBIOS-REVERSE-ENGINEERING.md` | option-ROM structure map, the bit-exact 16-bit reconstruction, and the execution-trace comparison of both images, with their limits |
+| `docs/DECK.md` | ten-slide presentation deck in Marp-flavoured Markdown: what the driver is, the architecture, the panel path, the test card, defects, tests, packaging, open items, verified citations |
+| `docs/deck/index.html` | the same ten slides as one standalone page: hand-written reveal-style JavaScript, inline SVG architecture diagram, hash routing (`#/3`), print stylesheet, no-script fallback, zero external requests |
 
 ### 5.2 Audit, test and packaging documentation
 
@@ -456,6 +458,8 @@ list.
 | `docs/evidence/scanout/04-checks.txt` | PASS/FAIL/SKIP lines of `tests/check-scanout-crc.sh` |
 | `docs/evidence/scanout/05-crc-debugfs-build.txt` | four-kernel build record of the T28 hosting attempt; the hosting itself was removed in T30, kept as history |
 | `docs/evidence/scanout/06-crc-debugfs-runtime.txt` | SKIP record for the T28 hosted files as uid 1005; superseded by `09-crc-single-owner.txt` |
+| `docs/evidence/runtime/25-test-card-animation.txt` | T38: the animated test card - the disc geometry and the per-tick cost at 1024x768 and 1920x1080, the two timing parameters with their clamps, how a tick avoids a full-frame write, the gate transcript with thirteen rejected negative controls, and an explicit `NOT YET OBSERVED ON THE PANEL` section |
+| `docs/evidence/runtime/26-test-card-crc-fix.txt` | T40: the CRC-ownership fix - why the T37 one-shot skip swallowed the client's first frame, R1 (an armed scanout CRC source cancels the card, refuses a paint and stops a racing tick) and R2 (the paint condition becomes `!master && blank`), the files touched, the eighteen-control gate transcript with the five new controls and the defect each catches, the verification exit codes, and an explicit `NOT YET OBSERVED ON THE PANEL` section with the arm/disarm runbook |
 | `docs/evidence/runtime/23-test-card-fallback.txt` | T37: the test-card fallback - trigger condition, the guard set with the geometry math, the pixel encoding for both bpp, the parameter values and clamping, the gate transcript with nine rejected negative controls, the fixed A31 single-sample restructure, and an explicit `NOT YET OBSERVED ON THE PANEL` section |
 | `docs/evidence/runtime/22-restore-fix-hardware-proof.txt` | T34: the on-card run of the T32 restore-path fix - module srcversion and vermagic, the six CRC-cycle PASS lines, the single T31 blank-console line, 30/30 restore cycles, 20/20 mode changes, 95 enable events across two geometries, the zero-fault census with the exact grep, the S10 console-scanout result under `KD_TEXT`, and the limitations (one card, one panel, harness form unexercised) |
 | `docs/evidence/runtime/21-fbdev-restore-fix.txt` | T32: the restore-path failure chain, the two wait loops before and after with the mask rationale, the `max(20 ms, 2 vertical periods)` budget derivation, the disable/enable hook changes, the gate transcript with its four rejected controls, the root harness design, and an explicit not-yet-proven-on-hardware section naming the run that would settle it |

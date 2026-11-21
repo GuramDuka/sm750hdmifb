@@ -1,6 +1,56 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Release notes
 
+## 0.6.2 - Test card, console helper, CRC ownership
+
+- **A panel with no client is never dead-black.** When the pipe is enabled with
+  a frame that is entirely blank and no userspace DRM master owns the display,
+  the driver now paints a test card: seven EBU colour bars with a black
+  right-edge bar, an eight-step grayscale staircase, a 16x12 grid, a centred
+  crosshair and circle, and a 1 px border. `test_pattern` selects `auto`,
+  `always` or `off`. This closes the case where the foreground VT is in
+  `KD_GRAPHICS`, the kernel drops console output before fbcon and the card scans
+  a frame nobody painted.
+- **The card resists burn-in and shows motion.** `test_pattern_period_ms`
+  (default 5000) rotates the palette, and `test_pattern_anim_ms` (default 40, `0`
+  stops it) drives a bouncing disc across the frame; a tick repaints only the two
+  bounding boxes it touches, about 35 KiB at 1080p in 32 bpp instead of the
+  8 MiB frame, so 25 frames per second cost no measurable bandwidth.
+- **A scanout CRC source now owns the window.** An armed CRC source cancels the
+  card and the paint predicate returns false while `crc_enabled` is set, so a
+  repaint can no longer tear the CRC stream (defect A36: three distinct values in
+  twelve static frames). The one-shot `test_pattern_fresh` flag is gone: it was
+  consumed one commit too late, because `drm_atomic_helper_commit_tail()` runs
+  `commit_planes` before `commit_modeset_enables`, so it dropped the client's
+  first present instead of the enabling commit. Painting is gated on "no
+  userspace DRM master and a blank frame", so a master's black output stays a
+  picture.
+- **Console helper.** `tools/sm750-console.sh` reports the active VT, its
+  `KDGETMODE`, the fbcon bind state and the scanout content, and switches the VT
+  back to `KD_TEXT` or to `KD_GRAPHICS`. Installation needs root; see
+  `docs/ROOT-ACTIONS.md` 3.4.
+- **New gates.** `tests/check-test-pattern.sh` plants eighteen defects,
+  including a paint before `sm750_program_mode()`, a missing softscale guard, a
+  repaint that ignores a backbuffer, a paint while a CRC source is armed, a
+  restored one-shot upload skip, a missing master check, a velocity that never
+  inverts and a full-frame repaint on every tick.
+- **Repository hygiene.** `tools/sm750-restore-cycle.sh` no longer hardcodes a
+  developer home directory; it resolves the repository through `SM750_REPO` and
+  `getent passwd`, so the release audit passes on a clean tree (defect A35).
+
+## 0.6.1 - Display-control transition, blank-console diagnostic
+
+- **A modeset no longer fails on this panel.** The display-control transition
+  waited for two bits with an exact compare and discarded the display-off
+  result; it now compares through a mask, re-pokes the register on every poll and
+  derives the wait budget from the vertical period, so `failed to enable HDMI
+  mode` no longer appears (defect A32, proven with 30 of 30 restore cycles and 20
+  of 20 mode changes).
+- **A blank console framebuffer is named once.** `sm750_shadow_frame_is_blank()`
+  and one `drm_info` line report the case where the bright frame nobody painted
+  is the frame being scanned, instead of leaving it to guesswork.
+- **New gates.** `tests/check-restore-path.sh` and `tests/check-console-blank.sh`.
+
 ## 0.6.0 - Version reporting, register dump and RPM packaging
 
 - **The driver reports its real version.** Both `drm_driver` instances used to

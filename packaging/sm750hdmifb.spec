@@ -14,11 +14,11 @@
 #   tests/check-rpm-dkms.sh
 
 %global dkms_name     sm750hdmifb
-%global dkms_version  0.6.1
+%global dkms_version  0.6.2
 %global module_name   sm750hdmidrm
 
 Name:           sm750hdmifb
-Version:        0.6.1
+Version:        0.6.2
 Release:        1%{?dist}
 Summary:        DKMS source for the SM750G10 SiI9024A HDMI DRM-KMS driver
 License:        GPL-2.0-only
@@ -299,6 +299,20 @@ exit 0
 %doc README.md LICENSE docs/RELEASE-NOTES.md docs/TESTING.md packaging/copyright
 
 %changelog
+* Sat Nov 21 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.2-1
+- Release 0.6.2: a test-card fallback paints an EBU colour bar pattern, a
+  grayscale staircase, a grid, a crosshair and a border into the scanout window
+  when the pipe is enabled with an unowned, entirely blank frame, so a panel
+  with no client is never dead-black; the card rotates its palette every five
+  seconds and carries a bouncing disc whose tick repaints only the two bounding
+  boxes it touches (about 35 KiB at 1080p in 32 bpp, not the 8 MiB frame), which
+  keeps a static panel from burning in; parameters test_pattern,
+  test_pattern_period_ms and test_pattern_anim_ms, the last two writable at
+  runtime; an armed scanout CRC source cancels the card and owns the window for
+  its whole lifetime, so the CRC stream can no longer be torn by a repaint, and
+  a frame from a userspace DRM master is never overwritten; new gate
+  tests/check-test-pattern.sh; new helper tools/sm750-console.sh reports the
+  VT mode, the fbcon bind state and the scanout content.
 * Fri Nov 20 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.1-1
 - Release 0.6.1: the display-control transition waits compare through a mask
   and re-poke the register on every poll, and the mode wait budget is derived

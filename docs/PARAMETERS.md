@@ -7,8 +7,9 @@ runtime. Use `sm750hdmidrm.name=value` on the kernel command line or an
 override build-time defaults.
 
 Four diagnostic parameters are deliberately writable after load:
-`dma_batch_rows`, `staging_timing`, `test_pattern` and
-`test_pattern_period_ms` are exposed with mode `0644`, so they can be changed
+`dma_batch_rows`, `staging_timing`, `test_pattern`,
+`test_pattern_period_ms` and `test_pattern_anim_ms` are exposed with mode
+`0644`, so they can be changed
 through `/sys/module/sm750hdmidrm/parameters/` to compare upload batching and
 timing on a live system, or to turn the test card on and off. Every other
 parameter is `0444` and is fixed once the module is loaded.
@@ -32,8 +33,9 @@ parameter is `0444` and is fixed once the module is loaded.
 | `backbuffer_staging` | `1` | Render an exact full-frame update into off-screen VRAM, then present it with the display controller's vblank-synchronised address flip. It is automatically unavailable when two scanout buffers do not fit. |
 | `shadow_dma_min_bytes` | `4096` | Smallest aligned upload span sent through DMA1. The one-RGB565-scanline default avoids DMA setup overhead for small interactive updates. Valid range is checked at probe. |
 | `crc_window_bytes` | `262144` | Bytes read from the visible scanout offset for each CRC entry and by the `sm750_scanout` debugfs dump. Values below 4096 are raised to 4096, the length is rounded down to a multiple of 4 and clamped to the visible area. |
-| `test_pattern` | `auto` | Writable through sysfs. Test-card fallback when no client paints the panel: `off` never paints, `auto` paints only a frame that samples as entirely blank, `always` paints on every enable. Skipped on softscaled windows, below 320x200, and when the frame does not fit the VRAM left after the scanout offset. |
-| `test_pattern_period_ms` | `5000` | Writable through sysfs. Milliseconds between test-card palette rotations; `0` keeps the card static. Values outside 500-600000 ms are clamped once with a `drm_info` line. |
+| `test_pattern` | `auto` | Writable through sysfs. Test-card fallback when no client paints the panel: `off` never paints, `auto` paints only a frame that samples as entirely blank and is not owned by a userspace DRM master, `always` paints on every enable. Skipped on softscaled windows, below 320x200, and when the frame does not fit the VRAM left after the scanout offset. Inert, in every mode, while a scanout CRC source is armed: arming it cancels a running card and the flag stays set across a suspend/resume of the source. |
+| `test_pattern_period_ms` | `5000` | Writable through sysfs. Milliseconds between test-card palette rotations; `0` keeps the palette static. Values outside 500-600000 ms are clamped once with a `drm_info` line. |
+| `test_pattern_anim_ms` | `40` | Writable through sysfs. Milliseconds between test-card animation ticks (25 fps at the default); `0` stops the bouncing disc and leaves the card with the palette rotation only. Values outside 10-1000 ms are clamped once with a `drm_info` line. |
 | `preferred_width` | `0` | Preferred exposed mode width; use with height and refresh. |
 | `preferred_height` | `0` | Preferred exposed mode height. |
 | `preferred_refresh` | `0` | Preferred integer refresh rate in hertz. |

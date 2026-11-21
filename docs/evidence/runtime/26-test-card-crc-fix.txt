@@ -1,0 +1,224 @@
+T40 - the test card stops fighting the scanout CRC stream
+==========================================================
+
+Recorded: 2026-11-20 (UTC), task T40, on the uncommitted T37+T38 tree
+(HEAD f691282 plus the T38 animation work).
+Scope: the two code changes the RCA in docs/evidence/runtime/
+24-test-card-crc-conflict-rca.txt prescribed (R1 and R2), the gate controls
+that pin them, and what is still unproven.
+
+Everything below is source-level and build-level evidence. The panel was not
+watched during this task, cannot be watched from this session, and section 8
+says so plainly.
+
+1. The defect in one paragraph
+------------------------------
+
+T37 shipped a one-shot flag, `test_pattern_fresh`, meant to stop the enabling
+commit's own plane update from overwriting the freshly painted card. It could
+not do that job. `sm750_pipe_update()` is called from `commit_planes()`, which
+the default atomic tail (`drm_atomic_helper_commit_tail()`,
+`drm_atomic_helper.c:1984-2003`) runs before `commit_modeset_enables()`;
+`sm750_pipe_enable()` is the modeset enable. The flag was set after the update
+it existed to skip, so the first update it swallowed was the *client's* first
+present, and the `goto event` around it also jumped over the
+`sm750_test_pattern_cancel()` that follows, leaving the 5 s palette rotation
+running on a pipe a client had taken over. The rotating card kept rewriting the
+262144-byte window `sm750_scanout_crc32()` reads in 256-byte chunks, so one
+readback entry straddled two palettes and the harness reported
+`FAIL: CRC is not stable for a static frame: 3 distinct values in 12 frames`.
+
+2. R1 - a CRC source owns the window
+------------------------------------
+
+Three edits in src/sm750_drm.c:
+
+- `sm750_crc_enable()` now cancels the card after it marks the source armed and
+  before it arms the interrupt:
+
+      sdev->crc_enabled = true;                                  /* :3291 */
+      sdev->crc_warned = false;
+      sm750_test_pattern_cancel(sdev);                           /* :3295 */
+      ret = sm750_crc_arm(sdev);                                 /* :3296 */
+
+  The cancel sits inside the existing `crc_mutex` section and takes no
+  `mode_lock`, so no lock order changes. A forward declaration of
+  `sm750_test_pattern_cancel()` was added above `sm750_crc_enable()` (:3270)
+  because the definition lives in the test-card block further down.
+
+- `sm750_test_pattern_should_paint()` gained the device and a first-statement
+  refusal:
+
+      if (READ_ONCE(sdev->crc_enabled))                          /* :3975 */
+              return false;
+
+  This covers `auto` and `always` alike. `test_pattern=always` is a module
+  option, not a reason to read a moving window.
+
+- The tick re-checks the same flag inside its `mode_lock` section
+  (`:3927`), so a work item that already lost the `cancel_delayed_work_sync()`
+  race paints nothing:
+
+      if (sdev->test_pattern_active && sdev->scanout_pitch &&
+          !READ_ONCE(sdev->crc_enabled)) {
+
+`sm750_crc_disable()` clears nothing about the card: it stays off until the
+next `sm750_pipe_enable()`, which is the only place that decides to paint.
+`sm750_crc_suspend()` keeps `crc_enabled`, so a suspend/resume of the source
+does not let the card back in mid-session.
+
+3. R2 - ownership, not emptiness, decides the paint
+---------------------------------------------------
+
+`test_pattern_fresh` is gone: the field, the set in `sm750_pipe_enable()`, the
+skip branch and its comment in `sm750_pipe_update()`, and the clear in
+`sm750_test_pattern_cancel()`. `grep -c test_pattern_fresh src/sm750_drm.c`
+returns 0. No equivalent one-shot was reintroduced: any such flag would again
+have to guess which commit it belongs to, and the ownership test needs no guess.
+
+The paint condition is now, in full:
+
+      if (sm750_test_pattern_should_paint(sdev, blank))           /* :4096 */
+
+with
+
+      return !READ_ONCE(sdev->drm.master) && blank;               /* :3987 */
+
+A userspace DRM master is producing frames by definition, so a black frame from
+one - a desktop, a screensaver, a paused video, the CRC harness' own black
+buffer - is a picture and is never painted over. The in-kernel fbdev client
+never becomes a master, so the `KD_GRAPHICS` case the card exists for still gets
+it. `sm750_pipe_update()` now stops the card as its first test-card action
+(`:4194`) and reaches its only `goto event` (`:4202`) afterwards.
+
+The other guards are unchanged and still evaluated in the same order: no line
+buffer or no circle table, a softscaled window, width < 320 or height < 200, a
+pitch smaller than the row or larger than the probe-time line buffer, and a
+frame that does not fit the VRAM left after the scanout offset.
+
+4. Files touched
+----------------
+
+- src/sm750_drm.c: forward declaration :3270, cancel in `sm750_crc_enable()`
+  :3295, tick condition :3927, `sm750_test_pattern_should_paint()` :3972-3988,
+  call site :4096, cancel in `sm750_pipe_update()` :4194; `test_pattern_fresh`
+  removed everywhere.
+- tests/check-test-pattern.sh: `check_crc_ownership()` added, `check_call()` and
+  the `sm750_pipe_update()` assertions rewritten, five new planted controls.
+- README.md, docs/PARAMETERS.md, docs/DEFECTS.md (A36), docs/TEST-STRATEGY.md
+  (S12) and this file.
+- Not touched, as required: `sm750_scanout_crc32()`, the CRC region logic, the
+  CRC work function, `tests/check-scanout-crc.sh`, `tools/sm750-crc-cycle.sh`.
+
+5. Gate transcript
+------------------
+
+    Test-pattern fallback checks passed: /home/coder/sm750hdmifb/src/sm750_drm.c
+    negative control default_off: rejected (exit 1): Test pattern: ... test_pattern does not default to auto
+    negative control paint_before_program_mode: rejected (exit 1): Test pattern: the test card is painted before sm750_program_mode()
+    negative control no_softscale_guard: rejected (exit 1): Test pattern: the painter does not skip a softscaled window
+    negative control memcpy_without_pitch: rejected (exit 1): Test pattern: the writer does not copy a full pitch-padded row
+    negative control no_cancel_on_disable: rejected (exit 1): Test pattern: sm750_pipe_disable leaves the rotation running
+    negative control no_cancel_on_update: rejected (exit 1): Test pattern: a client commit does not stop the rotation
+    negative control phase_never_advances: rejected (exit 1): Test pattern: a tick does not advance the palette phase
+    negative control per_tick_logging: rejected (exit 1): Test pattern: a rotation tick logs with drm_info
+    negative control period_default_zero: rejected (exit 1): Test pattern: ... test_pattern_period_ms does not default to 5000
+    negative control anim_default_zero: rejected (exit 1): Test pattern: ... test_pattern_anim_ms does not default to 40
+    negative control velocity_never_inverted: rejected (exit 1): Test pattern: the disc never reflects off a vertical edge
+    negative control disc_frame_logging: rejected (exit 1): Test pattern: an animation tick logs with drm_info
+    negative control full_frame_tick: rejected (exit 1): Test pattern: an animation tick does not move the disc
+    negative control crc_source_ignored: rejected (exit 1): Test pattern: the paint decision ignores an armed CRC source
+    negative control crc_arm_keeps_card: rejected (exit 1): Test pattern: arming a CRC source leaves a paint in flight
+    negative control tick_ignores_crc: rejected (exit 1): Test pattern: a tick that lost the race can still paint under an armed CRC source
+    negative control one_shot_upload_skip: rejected (exit 1): Test pattern: sm750_pipe_update can skip an upload before stopping the card
+    negative control black_master_frame: rejected (exit 1): Test pattern: an unowned blank frame is not distinguished from a master's black frame
+    Test-pattern fallback checks passed
+
+The five controls added here, and the defect each one catches:
+
+| control | planted defect | what it would cost |
+| --- | --- | --- |
+| crc_source_ignored | `should_paint()` loses its `crc_enabled` refusal | the card paints into a window a CRC source is reading: the RCA failure returns |
+| crc_arm_keeps_card | `sm750_crc_enable()` no longer cancels | a paint or a queued tick survives arming, so the first CRC entry is torn |
+| tick_ignores_crc | the tick drops its `!crc_enabled` re-check | a work item that lost the cancel race paints under the armed source |
+| one_shot_upload_skip | a `goto event` inserted before the cancel | the client's first frame is swallowed and the rotation keeps running: exactly A36 |
+| black_master_frame | the condition becomes `return blank;` | a desktop, screensaver or CRC harness black frame is painted over |
+
+6. Verification commands and results
+-----------------------------------
+
+    make CC=/usr/bin/gcc                                   exit 0
+    make check                                             exit 0
+    ./tests/check-test-pattern.sh                           exit 0
+    ./tests/check-scanout-crc.sh                            exit 77
+    ./tests/check-drm-policy.sh                             exit 0
+    ./tests/check-release-version.sh                        exit 0
+    ./tests/check-drm-packaging.sh                          exit 0
+    ./tests/check-static.sh                                 exit 0
+    ./build-package.sh                                      exit 0
+    ./tests/audit-release.sh                                exit 0
+    make CC=/usr/bin/gcc KDIR=.../6.17.1-300.fc43.x86_64    exit 0
+    make CC=/usr/bin/gcc (host headers again)               exit 0
+    bash -n tests/check-test-pattern.sh                     exit 0
+
+`tests/check-scanout-crc.sh` exits 77 because it is a root-only harness and this
+session runs unprivileged on a VT that is not `KD_TEXT`; that is the script's
+own skip path, unchanged by this task and by design. The acceptance criterion
+that the harness must pass unmodified therefore remains a hardware check; see
+section 8.
+
+7. Parameters as seen by an operator
+------------------------------------
+
+| parameter | default | effect after this change |
+| --- | --- | --- |
+| `test_pattern` | `auto` | `auto` needs a blank frame *and* no userspace master; inert while a CRC source is armed |
+| `test_pattern=always` | - | still paints on any enable regardless of master, but never while a CRC source is armed |
+| `test_pattern_anim_ms` | `40` | 25 fps disc; unchanged |
+| `test_pattern_period_ms` | `5000` | palette rotation; unchanged, and it is what used to tear the CRC |
+
+8. NOT YET OBSERVED ON THE PANEL
+--------------------------------
+
+This session has no access to the panel, cannot change the VT and cannot load
+the module. Nothing in this file was seen on a monitor.
+
+What is established by the RCA: the pre-fix card made
+`tests/check-scanout-crc.sh` fail with three distinct CRCs over twelve static
+frames, and the mechanism (a 256-byte read straddling a rotating repaint) is
+understood line by line.
+
+What is not established, and needs one root session:
+
+1. Arm the CRC source and confirm the card never appears:
+
+       sudo insmod src/sm750hdmidrm.ko test_pattern=auto
+       sudo sh -c 'echo 1 > /sys/kernel/debug/dri/0/crc/control'   # or the harness
+       sudo dmesg | grep -c "painted a test card"                  # 0 while armed
+       sudo ./tests/check-scanout-crc.sh                           # expected exit 0
+
+2. Disable the CRC source and confirm the card and the disc return on the next
+   enable (a module reload on the `KD_GRAPHICS` VT):
+
+       sudo sh -c 'echo 0 > /sys/kernel/debug/dri/0/crc/control'
+       sudo modprobe -r sm750hdmidrm && sudo insmod src/sm750hdmidrm.ko
+       sudo dmesg | grep "painted a test card"                     # exactly one line
+
+3. Confirm a real client is never painted over: attach a userspace master and
+   draw an all-black frame. No `painted a test card` line may appear, and the
+   CRC harness must still be able to run its black-buffer test.
+
+4. Confirm the ordering under load: arm the CRC while the disc is moving and
+   check that the first CRC entry already matches the second.
+
+The unclosed RCA item - which fbdev-client path triggered the 22:13:39 re-enable
+- is root-only as well and is not addressed here.
+
+9. Not changed
+--------------
+
+`sm750_scanout_crc32()`, the CRC region computation, the CRC work function,
+`tests/check-scanout-crc.sh` and `tools/sm750-crc-cycle.sh` are byte-identical
+to HEAD f691282. R3 from the RCA (a `pipe_enable()` reset of `scanout_offset`
+clobbering an enabling commit's frame) is filed and deliberately not fixed
+here; it needs its own defect row and its own evidence.
