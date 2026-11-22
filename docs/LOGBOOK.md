@@ -3255,5 +3255,20 @@ of work, best practice, icons and images, linked to the documentation.
   (check-rpm-dkms.sh via check-package, check-static.sh via make static,
   check-console-scanout.sh via make console-check, build-all-kernels.sh via
   check-all-kernels).
+- Census correction after a grep pass: 26 check scripts total. In `make
+  check` (18 recipe commands): check-drm-module, check-drm-policy, check-drm
+  -xorg-config, check-drm-packaging, check-release-version, check-softscale
+  -map, check-softscale-sharpen, check-softscale-codegen, check-hardware
+  -cursor, check-shadow-dma, check-backbuffer-staging, check-shadow-async,
+  check-shadow-source-damage, python3 test-vblank-timer.py, test-bbdither
+  -rgb565, test-scale-optimizations, python3 test-staging-results.py,
+  check-sm750-smi. Inside check-drm-policy.sh: check-crc-uapi, check-console
+  -blank, check-test-pattern, check-restore-path, check-scratch-policy,
+  check-sii902x-recovery, check-sysfs-attributes. Opt-in make targets:
+  check-static.sh (make static), check-scanout-crc.sh (make crc-check),
+  check-console-scanout.sh (make console-check), check-rpm-dkms.sh (make
+  check-package), build-all-kernels.sh (make check-all-kernels). Standalone:
+  check-sm750-pkg.sh (documented in docs/ROOT-ACTIONS.md 3.8, no make
+  target yet).
 - Plan verified with yaml.safe_load: status completed, 75 decisions, 25 tasks
   (T55 pending); ASCII clean; `git diff --check` clean.
