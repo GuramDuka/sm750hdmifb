@@ -3159,3 +3159,15 @@ and make crc-check all exit 0; four kernel builds exit 0.
   `46551a9aa21277e1e0af2152bc7dadeaa94fc7fcb10da4e46af73066bfb9ed44`,
   `sm750hdmifb-tools_0.6.4_amd64.deb` sha256
   `8c536e163e4baedda584c907d35bc44e20438a8830c603ba427ec9c5ac88cbec`.
+
+### 2026-11-22T16:45Z | orchestrator | installed sm750-smi was one revision behind; refresh requested
+- Verified the full sm750-smi output under sudo. The source banner is correct
+  (all five rows 79 columns), but the INSTALLED `/usr/bin/sm750-smi` is the
+  RPM payload shipped before the alignment fix: its PCI Bus Id row prints 80
+  columns (format still `%-64.64s`). Confirmed by strings: installed binary
+  has `| PCI Bus Id: %-64.64s |`, in-tree build has `%-63.63s`. The 0.6.4-1
+  tools RPM was built from the pre-fix source, so the fix must ride the next
+  release. Dist rebuilt: tools deb sha256
+  `2c226e53a0aecdd143a63a7ac1649e6b50af218f1d5a7f07eb951140451ed3ae`.
+  Meanwhile `sudo cp tools/sm750-smi /usr/bin/sm750-smi` is not needed; the
+  corrected RPM will land with the next release bump.
