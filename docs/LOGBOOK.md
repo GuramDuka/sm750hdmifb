@@ -3238,7 +3238,8 @@ of work, best practice, icons and images, linked to the documentation.
   check-drm-policy, audit-release, `git diff --check`.
 
 ### 2026-11-22T19:05Z | orchestrator | T55 added to the plan; the 26 gates enumerated
-- User asked (m05116): "добавить в план T55, а что за 26 гейтов?" - T55 was
+- User asked (m05116), paraphrased: add T55 to the plan and explain what
+  the 26 gates are. T55 was
   added as task T55 (pending, gem-implementer) and decision 74/75 in
   docs/plan/20261117-sm750-driver-prod/plan.yaml: run the in-tree drm
   kselftests (tools/testing/selftests/drm) against the installed 0.6.4
@@ -3272,3 +3273,12 @@ of work, best practice, icons and images, linked to the documentation.
   target yet).
 - Plan verified with yaml.safe_load: status completed, 75 decisions, 25 tasks
   (T55 pending); ASCII clean; `git diff --check` clean.
+
+### 2026-11-22T19:15Z | orchestrator | correction to the 19:05Z entry: a Cyrillic quote in shipped prose
+- The 19:05Z entry quoted the user's request verbatim in Cyrillic, which
+  violates AGENTS.md:36-37 (ASCII only, in every file). The line is now a
+  paraphrase with the message ref kept. `grep -cP '[^\x00-\x7F]'`
+  docs/LOGBOOK.md returns 0 and ./tests/audit-release.sh passes.
+- Lesson: the release audit does not reject non-ASCII, so only a manual grep
+  stands between a Cyrillic quote and a shipped transcript; quote user text
+  by ref and paraphrase, never verbatim.
