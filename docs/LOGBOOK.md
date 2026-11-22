@@ -3202,3 +3202,37 @@ and make crc-check all exit 0; four kernel builds exit 0.
   `1c58a44318539c6173c79f8f9df6f4b601cc1da88557791806bf5f8380160776`, source
   `38b97f03ecd19d0ae108698ea92158e192c9faf932253be3d9a2991fc6c9c46e`, tools
   deb `6758fbca31aad2095f203f97a25258773b2f4a6c44d17652b01a2e0f41406ce5`.
+
+### 2026-11-22T18:20Z | orchestrator | README Overview section and stale-version sweep
+
+Request (`m04911`): add a top section to `README.md` presenting the full body
+of work, best practice, icons and images, linked to the documentation.
+
+- Icons: AGENTS.md forbids Unicode and emoji in every file, so the section uses
+  an ASCII key-fact line, an ASCII signal-path diagram and HTML table styling;
+  images stay the three existing `docs/images/` screenshots (already embedded
+  in Screenshots and accepted as an A22 trade-off).
+- New `## Overview` section in README.md (nine blocks): intro paragraph,
+  key-fact line, ASCII signal-path diagram, "Where to start" quick table,
+  "What was delivered" ten-row table linking every deliverable to its document,
+  "At a glance" measured-numbers table, "How a claim is checked" (evidence or
+  gap, planted-defect gates, no weakened checks), a fifteen-row documentation
+  map, and the scope-and-risk blockquote moved under it.
+- README.md stale-version sweep to the live state: release prose 0.6.2 -> 0.6.4
+  (three places), module/runtime table rows, kernel-compatibility paragraph,
+  RPM example installs now `-2.fc43` (the shipped release), and the
+  `sm750-smi` sample output replaced with a live capture from the installed
+  0.6.4 module (measured under sudo: all 27 fields populated, memory.total
+  16777216, display.mode 1024x768, crc.support 1).
+- Verified figures used in "At a glance": 11252 lines of C/H in src/, 42 defect
+  rows A01-A42, 6 PASS / 0 FAIL / 1 GAP, 26 gate scripts with 18 `make check`
+  commands, 9-combination build matrix, 39 runtime + 28 build + 7 packaging
+  evidence transcripts, 21 docs. Link check: 86 relative/anchor links, 0
+  broken, 0 missing anchors. ASCII 0 bytes; no /home paths; audit-token safe.
+- Found and fixed while re-running gates: `tests/check-sysfs-attributes.sh`
+  (added by T52) was missing from the scratch-policy census; added to
+  tests/check-scratch-policy.sh (now 15 scripts) plus the discovery assertion
+  caught it.
+- Gates: check-release-version (0.6.4), check-drm-packaging, check-scratch
+  (15 scripts), check-sm750-smi (libdrm env), make check (all pass),
+  check-drm-policy, audit-release, `git diff --check`.

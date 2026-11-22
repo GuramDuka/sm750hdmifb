@@ -38,6 +38,7 @@ scripts=(
 	tests/check-sii902x-recovery.sh
 	tests/check-sm750-smi.sh
 	tests/check-sm750-pkg.sh
+	tests/check-sysfs-attributes.sh
 	tools/benchmark-staging.sh
 	tools/sm750-crc-cycle.sh
 )

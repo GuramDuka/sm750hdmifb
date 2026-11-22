@@ -6,10 +6,118 @@ ultrawide desktop, with bandwidth-saving colour conversion and update
 optimisations for smoother performance.**
 
 Linux display driver for the single-HDMI `SE-DP750A-HDMI` PCIe card. Current
-release **0.6.2**: atomic KMS, dithered 16-bit scanout, hardware cursor, DMA and
-polling upload paths, a test-card fallback so a panel with no client is never
-dead-black, DKMS packages for `.deb` and `.rpm`, and an acceptance audit of
-6 PASS / 0 FAIL / 1 GAP run against the 0.6.0 tree and re-verified since.
+release **0.6.4**: atomic KMS, dithered 16-bit scanout, hardware cursor, DMA and
+polling upload paths, sysfs monitoring attributes, a test-card fallback so a
+panel with no client is never dead-black, DKMS packages for `.deb` and `.rpm`,
+and an acceptance audit of 6 PASS / 0 FAIL / 1 GAP run against the 0.6.0 tree
+and re-verified since.
+
+> **Scope and risk:** this out-of-tree driver supports one specific SM750
+> board. Optional non-EDID modes can exceed published GPU or monitor clock
+> limits and may produce no signal, distortion, or an unstable display. Keep
+> SSH or another recovery route available when trying them.
+
+## Overview
+
+A full production pass over an out-of-tree Linux DRM/KMS driver for one
+specific card: the hardware was identified, the device documentation was found,
+read and archived, the option ROM was reconstructed from the image, the driver
+was brought to feature-complete state, every check was written down and turned
+into a gate, and the result was packaged for DKMS on RPM and Debian.
+
+`release 0.6.4` `kernel 6.17 and newer` `x86_64` `GPL-2.0-only` `DKMS`
+`no firmware blobs` `no closed libraries`
+
+The signal path this driver owns ends at the transmitter:
+
+```
+  framebuffer           SM750 scanout          SiI9024A           monitor
++---------------+    +------------------+    +-----------+    +-----------+
+| 16-bit dithered|--->| DMA1 or polling |--->| TMDS      |--->| HDMI panel|
+| or 32-bit frame|    | upload, cursor   |    | encoder   |    | (EDID)    |
++---------------+    +------------------+    +-----------+    +-----------+
+```
+
+Unicode icons and remote badge images are deliberately absent: this repository
+is ASCII only and every asset it references lives in the tree, so the whole
+document renders the same on a forge, in a terminal mail client and in a
+packaged tarball.
+
+### Where to start
+
+| I want to | Go to |
+| --- | --- |
+| check whether my card is supported | [Is my card supported?](#is-my-card-supported) |
+| install it | [Install](#install) |
+| see it running | [Screenshots](#screenshots) and the [presentation deck](#presentation-deck) |
+| read what the driver can do | [Status](#status), [Normal use](#normal-use), [Module parameters](docs/PARAMETERS.md) |
+| reproduce or dispute a claim | [Acceptance report](docs/ACCEPTANCE-REPORT.md), [test strategy](docs/TEST-STRATEGY.md), [deliverables](docs/DELIVERABLES.md) |
+| see the full work log | [Project logbook](docs/LOGBOOK.md) |
+
+### What was delivered
+
+| Area | Result | Recorded in |
+| --- | --- | --- |
+| Device identification | Silicon Motion `SM750G10-AC` rev A1, PCI `126f:0750`, `SiI9024ACNU` HDMI transmitter, 16 MiB display memory, one HDMI output; EDID, DDC, HPD and receive-sense behaviour measured on the panel | [hardware](docs/HARDWARE.md) |
+| Specification archive | SM750 datasheet v1.4 and the product brief stored with SHA-256 hashes, an index, a register map and a gap list; every MMIO register the source touches is cross-referenced to a page | [specification archive](docs/specs/INDEX.md), [registers](docs/REGISTERS.md) |
+| Option ROM | 49152-byte VBIOS captured, mapped into 239 regions and rebuilt byte for byte; the reconstruction is executed and compared instruction by instruction against the original | [VBIOS reconstruction](docs/VBIOS-REVERSE-ENGINEERING.md) |
+| Scanout | atomic KMS, 16-bit `rgb565` scanout with ordered dithering, software scaling for ultrawide modes, double-buffered staging with an asynchronous upload worker, hardware cursor, CRTC CRC source and a debugfs scanout window | [modes](docs/MODES.md), [staging benchmark](docs/STAGING-BENCHMARK.md) |
+| Panel safety | a test card with a bouncing-disc animation paints whenever no client has produced a frame, rotates its colours against burn-in, and yields the scanout the moment a real client commits | [parameters](docs/PARAMETERS.md) |
+| Observability | twelve sysfs monitoring attributes beside the DRM device node and `sm750-smi`, a 27-field reporting tool for mode, link, HPD, receive sense, memory, CRC and process state | [sm750-smi](#gates-and-test-scripts), [parameters](docs/PARAMETERS.md) |
+| Robustness | bridge readiness polled with a bounded budget, I2C transaction timeouts survived and retried with a bus recovery, restore path reworked so a failed commit cannot blank the panel, stale DKMS registrations purged on upgrade | [defect inventory](docs/DEFECTS.md) |
+| Test suites | the vendor-neutral suites located, piloted and recorded: IGT KMS subset, `modetest`, `kmscube`, nine-combination build matrix, plus 26 project gates of which 18 run in the default `make check` | [test strategy and results](docs/TEST-STRATEGY.md) |
+| Packaging | one DKMS source tree with a noarch module package and an arch-dependent tools package, RPM and Debian, changelogs, dependency checks, sandbox build and a stale-version upgrade path | [RPM packaging](docs/PACKAGING-RPM.md) |
+| Audit | every finding tracked with an id, a disposition and evidence; acceptance verdict recorded criterion by criterion | [repository audit](docs/AUDIT.md), [defects](docs/DEFECTS.md), [acceptance](docs/ACCEPTANCE-REPORT.md) |
+
+### At a glance
+
+| Measure | Value |
+| --- | --- |
+| Driver source | 11252 lines of C and headers under `src/` |
+| Defect findings tracked | 42, from A01 to A42, each with a disposition |
+| Acceptance criteria | 6 PASS, 0 FAIL, 1 GAP - the gap is pixel-level capture at the panel, which needs a human or capture hardware |
+| Project gates | 26 gate scripts, 18 commands in `make check`, five opt-in targets with planted-defect controls |
+| Kernel and format matrix | 9 combinations, kernel 6.17.1 through the 7.4 daily headers |
+| IGT KMS subset | 26 pass, 14 skip, 1 fail by design |
+| GL path | `kmscube`, 299 frames in 5.07 s, 59.01 fps on llvmpipe |
+| Vblank rate | 60.43 per second measured over 120 events |
+| Evidence | 39 runtime transcripts, 28 build transcripts and 7 packaging transcripts under `docs/evidence/` |
+| Documentation | 21 documents under `docs/`, plus the specification archive and the deck |
+
+### How a claim is checked
+
+Three habits run through the whole repository, and they are what the gates
+enforce:
+
+- **Evidence or it is a gap.** A statement in prose that no transcript under
+  `docs/evidence/` supports is filed as an open gap, not as a result.
+- **A gate, not a promise.** Each fixed defect gets a check with planted
+  defects: the gate is re-run against a deliberately broken copy and must fail
+  by name, so a check that silently stops detecting anything is itself caught.
+- **No weakened checks.** A check changes only together with a stated reason
+  and an evidence path; the release audit refuses a tarball that drifts from
+  the tracked tree, a transcript that carries a local path, or a version that
+  disagrees between `dkms.conf`, the specs and the build script.
+
+### Documentation map
+
+| Document | Contents |
+| --- | --- |
+| [Acceptance report](docs/ACCEPTANCE-REPORT.md) | Criterion-by-criterion verdict with the command and the evidence path behind each row |
+| [Test strategy](docs/TEST-STRATEGY.md) | Every suite, its selection rationale, pass criteria and recorded results |
+| [Defects](docs/DEFECTS.md) | Findings with ids, root causes, dispositions and the gate that guards each fix |
+| [Repository audit](docs/AUDIT.md) | Point-in-time audit of the tree, with dated path notes where the tree moved on |
+| [Deliverables](docs/DELIVERABLES.md) | What ships, how it is rebuilt, and the exact reproduction commands |
+| [Hardware](docs/HARDWARE.md) | Board identification, empirical quirks, and workarounds that must not be removed on the strength of the datasheet alone |
+| [Specifications](docs/specs/INDEX.md) | Archived vendor documents, hashes, register map and the documented-but-unused register list |
+| [Registers](docs/REGISTERS.md), [modes](docs/MODES.md) | MMIO reference and the mode, clock and bandwidth limits with their risks |
+| [Parameters](docs/PARAMETERS.md) | Every module parameter, its default, its range and its live behaviour |
+| [Packaging](docs/PACKAGING-RPM.md) | RPM and DKMS layout, scriptlets, upgrade and purge behaviour |
+| [Build environment](docs/ENVIRONMENT.md) | Host, toolchain, kernels, privileges and the reason behind each workaround |
+| [Root actions](docs/ROOT-ACTIONS.md) | The exact privileged commands, the helpers they install and the recovery routes |
+| [Logbook](docs/LOGBOOK.md) | The chronological record: what happened, when, by whom, with the evidence path |
+| [Plan of record](docs/plan/20261117-sm750-driver-prod/plan.yaml) | Task scope, acceptance criteria and every decision with its rationale |
+| [Presentation deck](docs/DECK.md) | Ten slides on the architecture and the open items |
 
 > **Scope and risk:** this out-of-tree driver supports one specific SM750
 > board. Optional non-EDID modes can exceed published GPU or monitor clock
@@ -31,14 +139,14 @@ transmitter, or different GPIO wiring and are not currently supported.
 
 ## Status
 
-Release 0.6.2. The driver is feature-complete for this board and meets the
+Release 0.6.4. The driver is feature-complete for this board and meets the
 project's production criteria except for one item that needs a person at the
 panel; see the [acceptance report](docs/ACCEPTANCE-REPORT.md).
 
 | Area | Verified state |
 |---|---|
-| Module | `sm750hdmidrm` 0.6.2, built by DKMS from one source tree |
-| Runtime | DKMS built and installed 0.6.1 for kernels 7.2.15-100, 7.3.3-100 and 7.3.4-100 (Fedora 43) from this tree, exercised on 7.3.4-100; installing the 0.6.2 package needs one allowlist line (`docs/ROOT-ACTIONS.md` 3.5) |
+| Module | `sm750hdmidrm` 0.6.4, built by DKMS from one source tree |
+| Runtime | DKMS built and installed 0.6.4 for kernels 7.2.15-100, 7.3.3-100 and 7.3.4-100 (Fedora 43) from this tree, loaded and exercised on 7.3.4-100; the version-free `sm750-pkg` helper performs install and rollback (`docs/ROOT-ACTIONS.md` 3.8) |
 | Test card | seen on the panel; the disc animates and the scanout CRC gate stays green while it runs (`docs/evidence/runtime/26-test-card-crc-fix.txt`) |
 | Build matrix | 9 kernel and scanout-format combinations, 6.17.1 through the 7.4 daily headers |
 | Modeset | atomic commit verified with `modetest`, 1920x1080 at 60 Hz |
@@ -121,8 +229,8 @@ tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.4-source.tar.gz" \
 
 rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb.spec
 rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb-tools.spec
-sudo dnf install -y "$topdir"/RPMS/noarch/sm750hdmifb-0.6.4-1.fc43.noarch.rpm \
-    "$topdir"/RPMS/x86_64/sm750hdmifb-tools-0.6.4-1.fc43.x86_64.rpm
+sudo dnf install -y "$topdir"/RPMS/noarch/sm750hdmifb-0.6.4-2.fc43.noarch.rpm \
+    "$topdir"/RPMS/x86_64/sm750hdmifb-tools-0.6.4-2.fc43.x86_64.rpm
 sm750-smi
 sudo reboot
 ```
@@ -164,13 +272,13 @@ module is `sm750hdmidrm.ko` so it cannot be confused with `sm750fb.ko`.
 
 ### Kernel compatibility
 
-**Built on 6.17 through 7.4, runtime-validated on 7.3.4.** Release 0.6.2 is
+**Built on 6.17 through 7.4, runtime-validated on 7.3.4.** Release 0.6.4 is
 installed by DKMS for the Fedora 43 kernels 7.2.15-100, 7.3.3-100 and
 7.3.4-100, and was loaded and exercised on 7.3.4-100, the reference host
 kernel. The other two are built and installed but have not been booted. Linux
 7.4 is still in development: only its headers have been compiled against, so it
 remains untested at runtime. See the
-[0.6.2 release notes](docs/RELEASE-NOTES.md) and the
+[release notes](docs/RELEASE-NOTES.md) and the
 [acceptance report](docs/ACCEPTANCE-REPORT.md).
 
 The driver is intended for **Linux 6.17 and newer**. DKMS deliberately refuses
@@ -274,63 +382,59 @@ sm750-smi --list-fields                    # fields, descriptions, data sources
 sm750-smi --loop=2                         # redraw every 2 s, Ctrl-C exits 0
 ```
 
-Unprivileged run on this host, 0.6.2 module and a 1920x1080 panel:
+Run on this host, 0.6.4 module and a 1024x768 panel:
 
 ```
 +-----------------------------------------------------------------------------+
 | sm750-smi - Silicon Motion SM750 monitoring                                 |
-| Driver Version: 0.6.2                SrcVersion: 760B67791A964AC81795475    |
-| PCI Bus Id: 0000:01:00.0                                                     |
+| Driver Version: 0.6.4                SrcVersion: 53463BAE2A15EB88A4376E8    |
+| PCI Bus Id: 0000:01:00.0                                                    |
 +-----------------------------------------------------------------------------+
-Sun Nov 22 10:19:31 2026
-processes: 691 /proc entries were not readable; the list may be partial
+Sun Nov 22 17:44:25 2026
   name                         sm750hdmidrm
-  driver_version               0.6.2
-  srcversion                   760B67791A964AC81795475
+  driver_version               0.6.4
+  srcversion                   53463BAE2A15EB88A4376E8
   bus_id                       0000:01:00.0
   pci.device_id                126f:0750
   pci.subsystem_id             126f:0750
   pci.revision                 a1
-  memory.total                 n/a (driver attribute not present in this version)
-  memory.used                  n/a (driver attribute not present in this version)
-  memory.free                  n/a (driver attribute not present in this version)
+  memory.total                 16777216
+  memory.used                  3147008
+  memory.free                  13630208
   display.connector            HDMI-A-1
   display.connected            connected
-  display.mode                 1920x1080
+  display.mode                 1024x768
   display.refresh_hz           60.00
-  display.pixel_clock_khz      148500
-  display.hpd                  n/a (driver attribute not present in this version)
-  display.rxsense              n/a (driver attribute not present in this version)
-  display.link                 n/a (driver attribute not present in this version)
+  display.pixel_clock_khz      52329
+  display.hpd                  1
+  display.rxsense              1
+  display.link                 connected
   crtc.index                   0
-  vblank.count                 38571
-  crc.support                  n/a (needs root (debugfs))
+  vblank.count                 311
+  crc.support                  1
   test_pattern                 auto
   test_pattern_period_ms       5000
   test_pattern_anim_ms         40
-  processes.count              2
+  processes.count              0
   power.runtime_status         active
   module_loaded                yes
 
 Processes:
   PID      COMMAND           NODE
-  259363   check-vblank      /dev/dri/card0
-  259399   sm750-smi         /dev/dri/card0
-  (list may be partial: 691 /proc entries were not readable)
+  (none: no process holds the card node)
 ```
 
-The `n/a` rows name their reason. That capture is from the 0.6.2 module: the
-VRAM, HPD, RXSENSE and link attributes did not exist, so `memory.*` and
-`display.hpd|rxsense|link` reported `driver attribute not present in this
-version`, and `crc.support` needed root because the CRC control file lives in
-debugfs. Since 0.6.4 the module publishes twelve attributes on the PCI device
-(`/sys/class/drm/cardN/device/`), so `memory.total`, `memory.used`,
-`memory.free`, `display.hpd`, `display.rxsense`, `display.link`,
-`crtc.index`, `vblank.count` and `crc.support` read from the driver instead of
-falling back; `display.mode`, `display.refresh_hz` and
+Every row above is live. Since 0.6.4 the module publishes twelve attributes on
+the PCI device (`/sys/class/drm/cardN/device/`), so `memory.total`,
+`memory.used`, `memory.free`, `display.hpd`, `display.rxsense`,
+`display.link`, `crtc.index`, `vblank.count` and `crc.support` read from the
+driver instead of falling back; `display.mode`, `display.refresh_hz` and
 `display.pixel_clock_khz` prefer the driver's own view of the active pipe.
 The fallbacks stay in place, so an older module is still picked up with no
-rebuild. `--sysfs-root`, `--card` and `--proc-root`
+rebuild: with a 0.6.2 module those rows print
+`n/a (driver attribute not present in this version)` and `crc.support` prints
+`n/a (needs root (debugfs))` because the CRC control file lives in debugfs.
+`--sysfs-root`, `--card` and `--proc-root`
 point the tool at a synthetic tree, which is how `tests/check-sm750-smi.sh`
 exercises every field without a GPU; a missing card node prints the PCI-only
 view and exits 2.
