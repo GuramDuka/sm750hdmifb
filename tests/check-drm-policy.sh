@@ -247,4 +247,10 @@ test "$stage_count" -ge 6 || {
 # it, and the restore harness greps the same nine-marker census as the hardware
 # proof. With its own planted-defect controls.
 ./tests/check-scratch-policy.sh
+# A42: the SiI9024A readiness gate watches HPD (0x3d bit 2) with a 500 ms
+# budget and accepts a powered receiver, a timed-out TPI write is retried after
+# a bus clear without failing the enable, and the EDID read is skipped while
+# the transmitter is powered down. Source-level, with its own five
+# planted-defect controls.
+./tests/check-sii902x-recovery.sh
 echo "DRM mode policy checks passed"

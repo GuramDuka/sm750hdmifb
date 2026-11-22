@@ -15,6 +15,9 @@ sm750_dev_only=(
 	docs/plan
 	docs/evidence
 	docs/images
+	# Research notes quote vendor documents whose redistribution terms are
+	# unknown, so they are tracked but never shipped.
+	docs/notes
 )
 
 # The git pathspecs that drop every entry above, one per line, for

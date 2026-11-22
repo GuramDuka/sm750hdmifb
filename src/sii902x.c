@@ -54,6 +54,18 @@
 #define EDID_BLOCK_SIZE			128
 #define EDID_MAX_SIZE			(2 * EDID_BLOCK_SIZE)
 
+/*
+ * 0x3d bit 2 is live HPD and bit 3 live receiver sense. A sink that asserts
+ * HPD but not RSEN is the documented "EDID is readable, display not powered"
+ * state, so a stable HPD is the readiness condition and RSEN is a diagnostic.
+ */
+#define SII902X_READY_POLL_MS		25
+#define SII902X_READY_STABLE_MS		100
+#define SII902X_READY_BUDGET_MS		500
+/* A timeout means the sink powered up mid-transfer: clear and repeat. */
+#define SII902X_WRITE_ATTEMPTS		3
+#define SII902X_RECOVER_DELAY_US	10000
+
 static bool sii902x_use_hardware_i2c;
 static bool sii902x_force_dvi;
 static bool sii902x_falling_edge;
@@ -65,6 +77,7 @@ static bool sii902x_rom_exact;
 static bool sii902x_rom_hdmi;
 static bool sii902x_force_black;
 static bool sii902x_mode_prepared;
+static const char *sii902x_mode_stage = "unknown";
 
 module_param_named(sii9024_dvi, sii902x_force_dvi, bool, 0444);
 MODULE_PARM_DESC(sii9024_dvi,
@@ -116,10 +129,15 @@ static const struct sii902x_reg_value sii9024_legacy_init[] = {
 	{ 0xf5, 0x00 },
 };
 
-static int sii902x_write_avi_infoframe(const struct fb_var_screeninfo *var,
+static int sii902x_write_avi_infoframe(struct device *dev,
+				       const struct fb_var_screeninfo *var,
 				       unsigned int refresh);
 static int sii902x_read(unsigned char reg, unsigned char *value);
 static int sii902x_write(unsigned char reg, unsigned char value);
+static int sii902x_write_recovering(struct device *dev, const char *what,
+				    unsigned char reg,
+				    const unsigned char *data,
+				    unsigned int length);
 
 bool sm750_sii902x_literal_rom_requested(void)
 {
@@ -158,7 +176,7 @@ static int sii902x_set_source_termination(bool enable, unsigned char *result)
 /* Vendor Linux and WinCE paths set page 0, register 0x0a bit 3 on HPD. */
 static int sii902x_apply_hotplug_workaround(struct device *dev)
 {
-	unsigned char status, readback;
+	unsigned char status, value;
 	int ret;
 
 	ret = sii902x_read(SII902X_INT_STATUS, &status);
@@ -170,18 +188,38 @@ static int sii902x_apply_hotplug_workaround(struct device *dev)
 		return 0;
 	}
 
-	ret = sii902x_indexed_update(0x00, 0x0a, BIT(3), BIT(3),
-				      &readback);
+	value = 0x00;
+	ret = sii902x_write_recovering(dev, "HPD workaround page",
+				       SII902X_IND_SET_PAGE, &value, 1);
+	if (ret)
+		return ret;
+	value = 0x0a;
+	ret = sii902x_write_recovering(dev, "HPD workaround offset",
+				       SII902X_IND_OFFSET, &value, 1);
+	if (ret)
+		return ret;
+	ret = sii902x_read(SII902X_IND_VALUE, &value);
+	if (ret)
+		return ret;
+	value |= BIT(3);
+	ret = sii902x_write_recovering(dev, "HPD workaround value",
+				       SII902X_IND_VALUE, &value, 1);
 	if (!ret)
 		dev_dbg(dev,
 			 "SiI9024A vendor HPD workaround applied: page0[0a]=%02x\n",
-			 readback);
+			 value);
 	return ret;
 }
 
 bool sm750_sii902x_black_requested(void)
 {
 	return sii902x_force_black;
+}
+
+/* The stage label comes from sm750_program_mode() so a timeout names it. */
+void sm750_sii902x_set_mode_stage(const char *stage)
+{
+	sii902x_mode_stage = stage ? stage : "unknown";
 }
 
 int sm750_sii902x_set_black(bool enable, unsigned char *readback)
@@ -256,6 +294,56 @@ static int sii902x_write_block(unsigned char reg, const unsigned char *data,
 					       data, length);
 	return sm750_sw_i2c_write_block(SII902X_I2C_ADDR_WRITE, reg, data,
 					length);
+}
+
+static int sii902x_write_block_retrying(unsigned char reg,
+					const unsigned char *data,
+					unsigned int length,
+					unsigned int *retries)
+{
+	unsigned int attempt;
+	int ret = -ETIMEDOUT;
+
+	for (attempt = 0; attempt < SII902X_WRITE_ATTEMPTS; attempt++) {
+		ret = sii902x_write_block(reg, data, length);
+		if (ret != -ETIMEDOUT)
+			break;
+		if (attempt + 1 == SII902X_WRITE_ATTEMPTS)
+			break;
+		if (!sii902x_use_hardware_i2c)
+			sm750_sw_i2c_recover_bus();
+		usleep_range(SII902X_RECOVER_DELAY_US,
+			     SII902X_RECOVER_DELAY_US + 5000);
+	}
+	if (retries)
+		*retries = attempt;
+	return ret;
+}
+
+/*
+ * A stalled bit-banged bus is what a sink looks like while it powers up: the
+ * slave holds the lines and every clock wait expires. Clear the bus, let the
+ * sink settle and repeat. Only a timeout is recoverable - a NACK is an answer,
+ * and the DDC-release write is designed to be unacknowledged. A write that
+ * still times out must not fail the whole enable: the caller continues on the
+ * compatibility path, and the one line keeps the failing stage diagnosable
+ * (docs/evidence/EVIDENCE-GAPS.md GAP-B8).
+ */
+static int sii902x_write_recovering(struct device *dev, const char *what,
+				    unsigned char reg,
+				    const unsigned char *data,
+				    unsigned int length)
+{
+	unsigned int retries = 0;
+	int ret;
+
+	ret = sii902x_write_block_retrying(reg, data, length, &retries);
+	if (ret != -ETIMEDOUT)
+		return ret;
+	dev_warn(dev,
+		 "SiI9024A %s write timed out at stage %s (transient I2C timeout, retried %u times); enabling for compatibility\n",
+		 what, sii902x_mode_stage, retries);
+	return 0;
 }
 
 static int sii902x_verify_tpi_and_clear_events(struct device *dev,
@@ -421,7 +509,8 @@ static int sii902x_run_rom_720p_sequence(struct device *dev,
 					 var->lower_margin + var->vsync_len) >> 8;
 			break;
 		}
-		ret = sii902x_write(sequence[i].reg, value);
+		ret = sii902x_write_recovering(dev, "option-ROM step",
+					       sequence[i].reg, &value, 1);
 		if (ret) {
 			dev_err(dev,
 				"option-ROM sequence failed at step %u (%02x=%02x): %d\n",
@@ -431,7 +520,7 @@ static int sii902x_run_rom_720p_sequence(struct device *dev,
 	}
 	if (sii902x_rom_hdmi) {
 		ret = sii902x_write_avi_infoframe(
-			var, DIV_ROUND_CLOSEST(refresh_centihz, 100));
+			dev, var, DIV_ROUND_CLOSEST(refresh_centihz, 100));
 		if (ret)
 			return ret;
 		ret = sii902x_write(SII902X_SYS_CTRL_DATA,
@@ -537,40 +626,43 @@ int sm750_sii902x_get_link_status(bool *connected, bool *receiver,
 }
 
 /*
- * HPD means that DDC is available; it does not mean that a receiver is
- * connected to the TMDS pairs.  Conversely, the KC-KVM8201 exposes its TMDS
- * receiver (RSEN) without asserting HPD.  A forced mode does not need DDC, so
- * require receiver sense alone to remain asserted for 100 ms before normal
- * video is unmuted and retain HPD as diagnostic state.
+ * SiI-PR-1064-A: 0x3d bit 2 is the plugged state and is what makes the EDID
+ * readable; bit 3 is the powered-on receiver and a plugged sink may legally
+ * deassert it.  The KC-KVM8201 shows the opposite case, RSEN with HPD low.  A
+ * forced mode needs no DDC, so either bit asserted for 100 ms counts as ready;
+ * the 500 ms budget matches the transmitter's own TPLUG_DLY maximum.
  */
 static int sii902x_wait_receiver_ready(struct device *dev,
 				       unsigned char *status)
 {
-	unsigned int elapsed, stable = 0;
+	unsigned int elapsed, plugged = 0, receiver = 0;
 	unsigned char value = 0;
 	int ret;
 
-	for (elapsed = 0; elapsed < 2000; elapsed += 25) {
+	for (elapsed = 0; elapsed < SII902X_READY_BUDGET_MS;
+	     elapsed += SII902X_READY_POLL_MS) {
 		ret = sii902x_read(SII902X_INT_STATUS, &value);
 		if (ret)
 			return ret;
 
-		if (value & SII902X_RX_SENSE_STATUS) {
-			stable += 25;
-			if (stable >= 100)
-				break;
-		} else {
-			stable = 0;
-		}
-		msleep(25);
+		plugged = (value & SII902X_PLUGGED_STATUS) ?
+			plugged + SII902X_READY_POLL_MS : 0;
+		receiver = (value & SII902X_RX_SENSE_STATUS) ?
+			receiver + SII902X_READY_POLL_MS : 0;
+		if (plugged >= SII902X_READY_STABLE_MS ||
+		    receiver >= SII902X_READY_STABLE_MS)
+			break;
+		msleep(SII902X_READY_POLL_MS);
 	}
 
 	*status = value;
-	if (stable >= 100)
+	if (plugged >= SII902X_READY_STABLE_MS ||
+	    receiver >= SII902X_READY_STABLE_MS)
 		dev_dbg(dev,
-			 "SiI9024A receiver ready after %u ms: HPD=%u RSEN=1 status=%02x\n",
-			 elapsed + 25,
-			 !!(value & SII902X_PLUGGED_STATUS), value);
+			 "SiI9024A receiver ready after %u ms: HPD=%u RSEN=%u status=%02x\n",
+			 elapsed + SII902X_READY_POLL_MS,
+			 !!(value & SII902X_PLUGGED_STATUS),
+			 !!(value & SII902X_RX_SENSE_STATUS), value);
 	else
 		dev_warn(dev,
 			 "SiI9024A receiver not ready after %u ms: HPD=%u RSEN=%u status=%02x; enabling for compatibility\n",
@@ -609,7 +701,8 @@ static unsigned char sii902x_cea_vic(const struct fb_var_screeninfo *var,
 	return 0;
 }
 
-static int sii902x_write_avi_infoframe(const struct fb_var_screeninfo *var,
+static int sii902x_write_avi_infoframe(struct device *dev,
+				       const struct fb_var_screeninfo *var,
 				       unsigned int refresh)
 {
 	struct hdmi_avi_infoframe frame;
@@ -652,9 +745,10 @@ static int sii902x_write_avi_infoframe(const struct fb_var_screeninfo *var,
 	 * Keep this in one I2C transaction: writing the final 0x19 byte atomically
 	 * latches the staged output format and complete AVI InfoFrame.
 	 */
-	return sii902x_write_block(SII902X_TPI_AVI_INFOFRAME,
-				   packed + payload_offset,
-				   length - payload_offset);
+	return sii902x_write_recovering(dev, "AVI InfoFrame",
+				       SII902X_TPI_AVI_INFOFRAME,
+				       packed + payload_offset,
+				       length - payload_offset);
 }
 
 static int sii902x_init_control_bus(struct device *dev,
@@ -817,8 +911,9 @@ int sm750_sii902x_enable(struct device *dev,
 		init_count = ARRAY_SIZE(sii9024_board_init);
 	}
 	for (i = 0; i < init_count; i++) {
-		ret = sii902x_write(init_sequence[i].reg,
-				     init_sequence[i].value);
+		ret = sii902x_write_recovering(dev, "initialization register",
+					       init_sequence[i].reg,
+					       &init_sequence[i].value, 1);
 		if (ret)
 			return ret;
 	}
@@ -873,8 +968,9 @@ int sm750_sii902x_enable(struct device *dev,
 	video[8] = sii902x_falling_edge ? 0x60 : 0x70;
 	video[9] = 0x00; /* RGB input, automatic quantization range. */
 
-	ret = sii902x_write_block(SII902X_TPI_VIDEO_DATA, video,
-				  ARRAY_SIZE(video));
+	ret = sii902x_write_recovering(dev, "TPI video timing",
+				       SII902X_TPI_VIDEO_DATA, video,
+				       ARRAY_SIZE(video));
 	if (ret)
 		return ret;
 	dev_dbg(dev,
@@ -902,7 +998,7 @@ int sm750_sii902x_enable(struct device *dev,
 		if (ret)
 			return ret;
 	} else {
-		ret = sii902x_write_avi_infoframe(var, refresh);
+		ret = sii902x_write_avi_infoframe(dev, var, refresh);
 		if (ret)
 			return ret;
 	}
@@ -992,6 +1088,17 @@ int sm750_sii902x_read_edid(struct device *dev, unsigned char *edid,
 	ret = sii902x_read(SII902X_SYS_CTRL_DATA, &saved);
 	if (ret)
 		return ret;
+	/*
+	 * DDC needs the transmitter powered: adv7511 powers the chip on before
+	 * reading EDID, and upstream sii902x refuses to talk to a powered-down
+	 * part. A caller treats any error here as "no EDID".
+	 */
+	if (saved & SII902X_SYS_CTRL_PWR_DWN) {
+		dev_dbg(dev,
+			"SiI9024A is powered down (system-control=%02x); EDID not read\n",
+			saved);
+		return -ENODATA;
+	}
 	sii902x_read(0x3d, &int_status);
 	dev_dbg(dev, "DDC request: system-control=%02x interrupt-status=%02x\n",
 		 saved, int_status);

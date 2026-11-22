@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
-.PHONY: all clean check check-deps check-package check-all-kernels module-info package static vbios-re vbios-trace crc-check console-check
+.PHONY: all clean check check-deps check-package check-all-kernels module-info package static vbios-re vbios-trace crc-check console-check tools install-tools
 
 all:
 	$(MAKE) -C $(KDIR) M=$(CURDIR)/src modules
@@ -9,7 +9,7 @@ all:
 clean:
 	$(MAKE) -C $(KDIR) M=$(CURDIR)/src clean
 	$(RM) tests/check-vblank tests/test-bbdither-rgb565 \
-		tests/test-scale-optimizations
+		tests/test-scale-optimizations tools/sm750-smi
 
 # Prerequisite target, not a recipe line, so the documented command count of
 # the check target is unchanged. Fail here with an actionable message instead
@@ -28,7 +28,7 @@ check-deps:
 		exit 1; }
 
 check: check-deps all tests/check-vblank tests/test-bbdither-rgb565 \
-		tests/test-scale-optimizations
+		tests/test-scale-optimizations tools/sm750-smi
 	./tests/check-drm-module.sh src/sm750hdmidrm.ko
 	./tests/check-drm-policy.sh
 	./tests/check-drm-xorg-config.sh
@@ -46,6 +46,7 @@ check: check-deps all tests/check-vblank tests/test-bbdither-rgb565 \
 	./tests/test-bbdither-rgb565
 	./tests/test-scale-optimizations
 	python3 tests/test-staging-results.py
+	./tests/check-sm750-smi.sh
 
 check-all-kernels:
 	./tests/build-all-kernels.sh
@@ -119,3 +120,15 @@ staging-benchmark: tools/staging-pattern
 
 tools/staging-pattern: tools/staging-pattern.c
 	$(CC) -O2 -Wall -Wextra -Werror -o $@ $< -lX11
+
+# Monitoring and control utility (tools/sm750-smi.c).  It reads sysfs, the
+# DRM card node through libdrm and optional debugfs; the gate builds it from
+# synthetic trees, so no GPU and no root are needed by `make check`.
+tools: tools/sm750-smi
+
+tools/sm750-smi: tools/sm750-smi.c
+	$(CC) -O2 -Wall -Wextra -Werror $$(pkg-config --cflags libdrm) \
+		-o $@ $< $$(pkg-config --libs libdrm)
+
+install-tools: tools/sm750-smi
+	install -D -m 0755 tools/sm750-smi $(DESTDIR)/usr/local/sbin/sm750-smi

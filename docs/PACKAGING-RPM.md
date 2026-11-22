@@ -12,15 +12,21 @@ scriptlet divergences recorded in section 7.
 | Macro / field | Value |
 | --- | --- |
 | `%global dkms_name` | `sm750hdmifb` |
-| `%global dkms_version` | `0.6.2` |
+| `%global dkms_version` | `0.6.3` |
 | `%global module_name` | `sm750hdmidrm` |
-| `Name` / `Version` / `Release` | `sm750hdmifb` / `0.6.2` / `2%{?dist}` |
+| `Name` / `Version` / `Release` | `sm750hdmifb` / `0.6.3` / `1%{?dist}` |
 | `BuildArch` | `noarch` |
 
-Nothing is compiled at RPM build time: `%build` is empty. The package ships
-the DKMS source tree under `/usr/src/sm750hdmifb-0.6.2`, the modprobe /
-modules-load / Xorg assets and the Xorg helper script. DKMS compiles `src/`
-against each installed kernel, so one noarch RPM serves every architecture.
+Nothing is compiled at RPM build time: this spec's `%build` is empty, and a
+`rpm -qlp` of the package lists no ELF object. The one compiled deliverable,
+`sm750-smi`, ships from the separate, arch-dependent
+`packaging/sm750hdmifb-tools.spec`; rpm cannot express it as a subpackage of a
+noarch parent (section 10).
+
+The package ships the DKMS source tree under
+`/usr/src/sm750hdmifb-0.6.3`, the modprobe / modules-load / Xorg assets and the
+Xorg helper script. DKMS compiles `src/` against each installed kernel, so one
+noarch RPM serves every architecture.
 The `BUILD_EXCLUSIVE_KERNEL` floor in `dkms.conf` (6.17 and newer, same
 semantics as `packaging/drm-postinst:73-76`) is unchanged.
 
@@ -57,28 +63,32 @@ mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS}
 mapfile -t skip < <(sm750_dev_only_pathspecs)
 tracked=$(mktemp)
 git ls-files -z -- . "${skip[@]}" >"$tracked"
-tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.2-source.tar.gz" \
-    --transform='s|^|sm750hdmifb-0.6.2/|' --null -T "$tracked"
+tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.3-source.tar.gz" \
+    --transform='s|^|sm750hdmifb-0.6.3/|' --null -T "$tracked"
 
 rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb.spec
 ```
 
-Artifacts (131 tracked files in the tarball, 36 files in the RPM):
+Artifacts (132 tracked files in the tarball, 36 files in the module RPM):
 
 ```
-/mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-0.6.2-3.fc43.src.rpm
-/mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-3.fc43.noarch.rpm
+/mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-0.6.3-1.fc43.src.rpm
+/mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.3-1.fc43.noarch.rpm
 ```
 
 `rpmbuild -ba` exits `0`; the transcript is
 `docs/evidence/packaging/01-rpmbuild.log`. The `rm -rf "$topdir"` makes the
-result independent of earlier runs.
+result independent of earlier runs. The second package, `sm750hdmifb-tools`, is
+built by a second `rpmbuild -ba` over the same `Source0` (section 10); the gate
+runs both invocations and captures them in the same transcript.
 
 Archive-content rule: the source tarball is exactly the tracked tree minus the
 development-only directories declared once in `packaging/source-excludes.sh`
-(`docs/plan`, `docs/evidence`, `docs/images`), which is the same list
-`build-package.sh` and `tests/audit-release.sh` read, so the packager and the
-gate cannot drift apart.
+(`docs/plan`, `docs/evidence`, `docs/images`, `docs/notes`), which is the same
+list `build-package.sh` and `tests/audit-release.sh` read, so the packager and
+the gate cannot drift apart. `docs/notes/` holds research that quotes vendor
+documents whose redistribution terms are unknown, so it is tracked but never
+shipped.
 
 ## 4. Install, upgrade, erase
 
@@ -86,12 +96,16 @@ Root only by definition: the payload owns `/usr/src`, `/etc` and
 `/var/lib/dkms`.
 
 ```sh
-sudo dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-3.fc43.noarch.rpm
-sudo dkms status -m sm750hdmifb -v 0.6.2     # expected: ..., <kernel>: installed
+sudo dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.3-1.fc43.noarch.rpm
+sudo dkms status -m sm750hdmifb -v 0.6.3     # expected: ..., <kernel>: installed
 sudo modprobe sm750hdmidrm                   # requires a free DRM minor
 sudo dnf remove -y sm750hdmifb               # erase; %preun unregisters
-sudo dkms status -m sm750hdmifb -v 0.6.2     # expected: no such module
+sudo dkms status -m sm750hdmifb -v 0.6.3     # expected: no such module
 ```
+
+The utility is a separate transaction and does not touch any of these paths:
+`sudo dnf install -y .../RPMS/x86_64/sm750hdmifb-tools-0.6.3-1.fc43.x86_64.rpm`
+(section 10).
 
 These steps run as root by definition. The install and the module reload have
 been run on this host by its owner for `0.6.2-3`
@@ -110,7 +124,7 @@ reinstall steps remain `GAP-B7` in `docs/evidence/EVIDENCE-GAPS.md`.
 | - | `%postun` | not defined | no initramfs to regenerate |
 
 `dkms add` runs only on first install because re-adding a populated
-`/usr/src/sm750hdmifb-0.6.2` is an error and an exiting scriptlet aborts the
+`/usr/src/sm750hdmifb-0.6.3` is an error and an exiting scriptlet aborts the
 transaction. `%preun` (not `%postun`) removes the registration because DKMS
 needs the source tree while unregistering.
 
@@ -123,7 +137,7 @@ after the upgrade:
 ```
 sm750hdmifb/0.5.9, 7.3.3-100.fc43.x86_64, x86_64: built
 sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: built
-sm750hdmifb/0.6.2, 7.2.15-100.fc43.x86_64, x86_64: installed
+sm750hdmifb/0.6.3, 7.2.15-100.fc43.x86_64, x86_64: installed
 ```
 
 That is not cosmetic. Both `dkms.conf` files declare
@@ -177,7 +191,7 @@ sudo rm -rf /usr/src/sm750hdmifb-0.5.9
 ```
 
 Verify the purge with `sudo dkms status`: exactly one version of `sm750hdmifb`
-must remain, `0.6.2`, `installed` for every installed kernel, with no `0.5.9`
+must remain, `0.6.3`, `installed` for every installed kernel, with no `0.5.9`
 row and no `: added` line. The purge is idempotent - a second install finds
 nothing to remove.
 
@@ -294,7 +308,7 @@ warns again.
 
 `dkms.conf` sets `AUTOINSTALL=yes`, so DKMS kernel hooks build and install the
 module for a newly installed kernel; the RPM is not re-run. Confirm with
-`dkms status -m sm750hdmifb -v 0.6.2`. The floor regex that `%posttrans` uses
+`dkms status -m sm750hdmifb -v 0.6.3`. The floor regex that `%posttrans` uses
 is byte-identical to `BUILD_EXCLUSIVE_KERNEL` and
 `packaging/drm-postinst:73-76`; the test fails if any of the three drifts.
 
@@ -330,11 +344,13 @@ unedited as the historical record and is not covered by the gate.
 Expected on Fedora 43 with kernel 7.3.4-100:
 
 ```
-OK: source payload matches git ls-files (131 files)
-OK: rpmbuild -ba exit 0: sm750hdmifb-0.6.2-3.fc43.src.rpm, sm750hdmifb-0.6.2-3.fc43.noarch.rpm
-OK: dependencies: BuildRequires 4, runtime dkms, post dkms+kmod, preun dkms
+OK: source payload matches the ship list (132 files)
+OK: rpmbuild -ba exit 0: sm750hdmifb-0.6.3-1.fc43.src.rpm, sm750hdmifb-0.6.3-1.fc43.noarch.rpm, sm750hdmifb-tools-0.6.3-1.fc43.x86_64.rpm
+OK: dependencies: BuildRequires 4 (module) and 2 (tools), runtime dkms, post dkms+kmod, preun dkms
+OK: tools package: BuildRequires gcc+libdrm-devel, runtime libdrm, arch x86_64
 OK: scriptlets: add in %post, build+install+depmod in %posttrans, remove in %preun, no %postun
 OK: %files: 36 files, 4 owned directories, 2 %config(noreplace) entries
+OK: tools %files: /usr/bin/sm750-smi only, 0755, no module content; payload runs
 plant_purge_after_build: rejected
 plant_clean_directive: rejected
 plant_unconditional_hint: rejected
@@ -343,7 +359,7 @@ plant_unsafe_version: rejected (an unsafe version reached dkms remove)
 plant_dangling_link_kept: rejected (the second dangling kernel link survived)
 plant_localized_evidence: rejected
 OK: missing headers: warning on stderr, exit 0; purge, build, install, depmod sequence verified
-OK: stale purge: sm750hdmifb/0.5.9 and 0.6.0 removed, 0.6.2 and other module names untouched
+OK: stale purge: sm750hdmifb/0.5.9 and 0.6.0 removed, 0.6.3 and other module names untouched
 OK: failed removal: dkms exit 4 downgraded to the spec warning, exit 0, loop continued
 OK: broken 0.6.1 tree: deleted before the build loop, install still attempted, exit 0
 OK: unsafe status field: skipped before any path is formed, dkms root intact
@@ -351,9 +367,10 @@ OK: dangling kernel link: removed before the build loop, resolvable link kept, e
 OK: dkms.conf has no CLEAN directive; console zero-frame hint is conditional
 OK: planted controls: 7 rejected
 OK: evidence transcripts 01-06: no non-ASCII byte, captured under LC_ALL=C
-OK: dkms sandbox: sm750hdmifb/0.6.2, 7.3.4-100.fc43.x86_64, x86_64: built
-OK: built object: /mega/tmp/sm750/t6/dkms/sm750hdmifb/0.6.2/7.3.4-100.fc43.x86_64/x86_64/module/sm750hdmidrm.ko (361400 bytes, host tree untouched)
-SKIP: dnf install sm750hdmifb-0.6.2-3.fc43.noarch.rpm: needs root (writes /usr/src, /etc, /var/lib/dkms)
+OK: dkms sandbox: sm750hdmifb/0.6.3, 7.3.4-100.fc43.x86_64, x86_64: built
+OK: built object: /mega/tmp/sm750/t6/dkms/sm750hdmifb/0.6.3/7.3.4-100.fc43.x86_64/x86_64/module/sm750hdmidrm.ko (366136 bytes, host tree untouched)
+SKIP: dnf install sm750hdmifb-0.6.3-1.fc43.noarch.rpm: needs root (writes /usr/src, /etc, /var/lib/dkms)
+SKIP: dnf install sm750hdmifb-tools-0.6.3-1.fc43.x86_64.rpm: needs root (writes /usr/bin)
 SKIP: dkms status showing 'installed' in the host tree: needs root, follows the skipped dnf install
 SKIP: dkms install (even with --installtree): 'Error! You must be root to use this command.'
 SKIP: dkms remove -m sm750hdmifb -v 0.5.9 --all in the host tree: not in the sudoers allowlist (only -v 0.6.2 is); the purge runs inside the RPM %posttrans instead, and the rootless run above proves the call sequence
@@ -361,8 +378,13 @@ SKIP: modinfo of the installed module: needs root, follows the skipped dnf insta
 SKIP: dnf remove sm750hdmifb: needs root and the skipped dnf install
 SKIP: dkms status after erase (registration gone): needs root, follows the skipped dnf remove
 SKIP: closing commands recorded in docs/evidence/EVIDENCE-GAPS.md GAP-B7
-RPM/DKMS checks passed: sm750hdmifb 0.6.2, sandbox built, 7 planted controls rejected, root-only steps skipped
+RPM/DKMS checks passed: sm750hdmifb 0.6.3 (+ sm750hdmifb-tools 0.6.3/x86_64), sandbox built, 7 planted controls rejected, root-only steps skipped
 ```
+
+`OK: source payload adds 1 not-yet-tracked deliverable(s): tools/sm750-smi.c`
+precedes the ship-list line while `tools/sm750-smi.c` is still untracked; the
+line disappears on its own once the file is committed, so the gate neither
+skips the file nor needs an exemption list.
 
 Exit codes: `0` every assertion held; `1` first failed assertion (reason on
 stderr), a planted control that was not rejected, or a usage/environment error
@@ -388,13 +410,16 @@ a non-root caller even with `--dkmstree`, `--sourcetree` and `--installtree`
 all on scratch, so the refusal is captured in `05-dkms-sandbox.log` and
 reported as `SKIP`, while the host module tree is asserted absent.
 
-Companion files: `packaging/sm750hdmifb.spec`, `tests/check-rpm-dkms.sh`,
+Companion files: `packaging/sm750hdmifb.spec`,
+`packaging/sm750hdmifb-tools.spec`, `tests/check-rpm-dkms.sh`,
 `docs/evidence/packaging/01`-`07`, `docs/evidence/EVIDENCE-GAPS.md` `GAP-B7`,
-and `build-package.sh` (the Debian path this spec mirrors).
+and `build-package.sh` (the Debian path this spec mirrors, including the split
+`sm750hdmifb-tools` `.deb`).
 
 ## 6. File inventory
 
-`rpm -qlp`: 36 files, 4 owned directories - the same set the `.deb` installs.
+`rpm -qlp`: 36 files, 4 owned directories - the same set the module `.deb`
+installs. The utility is one more file in its own package (section 10).
 
 ```
 0644 /etc/modprobe.d/sm750hdmidrm.conf            (config(noreplace))
@@ -404,10 +429,10 @@ dir  /usr/lib/sm750hdmifb
 0644 /usr/share/X11/xorg.conf.d/20-sm750hdmidrm.conf
 dir  /usr/share/doc/sm750hdmifb
 0644 /usr/share/doc/sm750hdmifb/{LICENSE,README.md,RELEASE-NOTES.md,TESTING.md,copyright}
-dir  /usr/src/sm750hdmifb-0.6.2
-0644 /usr/src/sm750hdmifb-0.6.2/{LICENSE,Makefile,README.md,dkms.conf}
-dir  /usr/src/sm750hdmifb-0.6.2/src
-0644 /usr/src/sm750hdmifb-0.6.2/src/{Kconfig,Makefile,ddk750.h,ddk750_chip.c,ddk750_chip.h,
+dir  /usr/src/sm750hdmifb-0.6.3
+0644 /usr/src/sm750hdmifb-0.6.3/{LICENSE,Makefile,README.md,dkms.conf}
+dir  /usr/src/sm750hdmifb-0.6.3/src
+0644 /usr/src/sm750hdmifb-0.6.3/src/{Kconfig,Makefile,ddk750.h,ddk750_chip.c,ddk750_chip.h,
      ddk750_display.c,ddk750_display.h,ddk750_hwi2c.c,ddk750_hwi2c.h,ddk750_mode.c,
      ddk750_mode.h,ddk750_power.c,ddk750_power.h,ddk750_reg.h,ddk750_swi2c.c,
      ddk750_swi2c.h,sii902x.c,sii902x.h,sm750_dither.c,sm750_dither.h,sm750_drm.c,
@@ -417,7 +442,9 @@ dir  /usr/src/sm750hdmifb-0.6.2/src
 Deliberately **not** shipped: `DEBIAN/` (control, md5sums, postinst, prerm,
 postrm - RPM metadata and the scriptlets in section 7 replace them),
 `build-package.sh`, `tests/`, `tools/`, and every `docs/` file
-except the four installed under `/usr/share/doc/sm750hdmifb`. The two Debian
+except the four installed under `/usr/share/doc/sm750hdmifb`. `tools/` here
+means the source: the compiled binary ships from `sm750hdmifb-tools`
+(section 10), never the `.c` file. The two Debian
 conffiles map to `%config(noreplace)`; the Xorg snippet is a plain file in
 both packages.
 
@@ -459,7 +486,7 @@ warning names the remedy:
 
 ```
 warning: skipping 6.18.13-200.fc43.x86_64: matching kernel headers are absent
-warning: no kernel received the module; check the warnings above and run: dkms install -m sm750hdmifb -v 0.6.2 -k <kernel>
+warning: no kernel received the module; check the warnings above and run: dkms install -m sm750hdmifb -v 0.6.3 -k <kernel>
 ```
 
 The last line names the remedy rather than a diagnosis: it is printed whenever
@@ -469,7 +496,7 @@ before A37, and a failed build is a third. The warnings above it carry the
 specific reason.
 
 Recover without reinstalling:
-`sudo dkms install -m sm750hdmifb -v 0.6.2 -k "$(uname -r)"`. Archived:
+`sudo dkms install -m sm750hdmifb -v 0.6.3 -k "$(uname -r)"`. Archived:
 `docs/evidence/packaging/06-posttrans-missing-headers.log`.
 
 **Same message in a sandbox (test only).** The headers exist on this host
@@ -521,10 +548,126 @@ unsupported by `BUILD_EXCLUSIVE_KERNEL` and stay documented as unsupported.
 sudo dnf remove -y sm750hdmifb
 ```
 
-`%preun` runs `dkms remove -m sm750hdmifb -v 0.6.2 --all` while the source tree
+`%preun` runs `dkms remove -m sm750hdmifb -v 0.6.3 --all` while the source tree
 exists, which unregisters every kernel DKMS built the module for. Erasing is
 safe even when `%posttrans` never built anything. `dkms status -m sm750hdmifb
--v 0.6.2` must then print nothing. To drop a manual copy under `/lib/modules`
+-v 0.6.3` must then print nothing. To drop a manual copy under `/lib/modules`
 after the erase, DKMS no longer knows the module: remove
 `/lib/modules/<kernel>/updates/dkms/sm750hdmidrm.ko` and run
 `sudo depmod -a <kernel>`.
+## 10. The two packages
+
+The DKMS module ships as source and is architecture-independent; `sm750-smi`
+is a compiled ELF binary. One noarch parent cannot carry an arch-dependent
+subpackage: rpm 6.0.2 refuses the spec outright.
+
+```
+$ rpmbuild -ba packaging/sm750hdmifb.spec        # with a %package tools block
+error: line 11: Only noarch subpackages are supported: BuildArch: x86_64
+error: query of specfile packaging/sm750hdmifb.spec failed, can't parse
+```
+
+Without an explicit `BuildArch` the subpackage inherits `noarch` from
+`BuildArch: noarch` in the parent and the binary is filed as noarch, which
+would break a multi-arch repository. Removing `noarch` from the parent is the
+other escape, and it would make the module package arch-specific too, losing
+the one-RPM-serves-every-architecture property and diverging from
+`dist/sm750hdmifb_0.6.3_all.deb`. Both shapes were measured on this host
+before choosing the third: **two specs built from one `Source0`**.
+
+| | `packaging/sm750hdmifb.spec` | `packaging/sm750hdmifb-tools.spec` |
+| --- | --- | --- |
+| `Name` | `sm750hdmifb` | `sm750hdmifb-tools` |
+| `Version` / `Release` | `0.6.3` / `1%{?dist}` | `0.6.3` / `1%{?dist}` |
+| `BuildArch` | `noarch` | none; the build target, `x86_64` here |
+| `BuildRequires` | `rpm-build`, `dkms`, `make`, `gcc` | `gcc`, `libdrm-devel` |
+| `Requires` | `dkms`; post `dkms`, `kmod`; preun `dkms` | `libdrm` |
+| `%build` | empty | compiles `tools/sm750-smi.c` |
+| payload | 36 files, 4 owned directories | `/usr/bin/sm750-smi`, mode 0755 |
+
+Both specs read `Source0: sm750hdmifb-%{version}-source.tar.gz`, the same
+archive the `%prep` of section 3 produces, so the two packages always carry the
+same source revision. The tools spec declares `%global debug_package %{nil}`:
+the utility is a single 50 KB file, and the distribution default would add
+`-debuginfo` and `-debugsource` subpackages, turning this project's deliverable
+from two package names into four artifacts that the `.deb` side does not have.
+The tool's payload is exactly one file and owns no directory - `%{_bindir}` is
+owned by `filesystem` - so `rpm -qlp` prints one line:
+
+```
+/usr/bin/sm750-smi
+```
+
+and none of the module package's paths (no `/usr/src`, `/etc`, `/usr/lib` or
+`/usr/share` entry); the module package's file list is unchanged, 36 files and
+4 owned directories, with no `/usr/bin/sm750-smi`.
+
+### Building both
+
+```sh
+rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb.spec
+rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb-tools.spec
+```
+
+produces two SRPMs and two binary RPMs (0.6.3 / Fedora 43):
+
+```
+$topdir/SRPMS/sm750hdmifb-0.6.3-1.fc43.src.rpm
+$topdir/SRPMS/sm750hdmifb-tools-0.6.3-1.fc43.src.rpm
+$topdir/RPMS/noarch/sm750hdmifb-0.6.3-1.fc43.noarch.rpm
+$topdir/RPMS/x86_64/sm750hdmifb-tools-0.6.3-1.fc43.x86_64.rpm
+```
+
+`libdrm-devel` is a real `BuildRequires` of the tools package: `%build` starts
+with `pkg-config --exists libdrm` and fails with
+`sm750hdmifb-tools: pkg-config cannot find libdrm; install libdrm-devel` rather
+than compiling against a guessed path. On a host without it, the pinned
+rootless tree works without root (see `docs/ENVIRONMENT.md` section 3):
+
+```sh
+export PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig
+export PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm
+export LD_LIBRARY_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64
+```
+
+### Installing and removing
+
+```sh
+sudo dnf install -y "$topdir"/RPMS/noarch/sm750hdmifb-0.6.3-1.fc43.noarch.rpm \
+                    "$topdir"/RPMS/x86_64/sm750hdmifb-tools-0.6.3-1.fc43.x86_64.rpm
+sm750-smi --query=name,driver.version
+sudo dnf remove -y sm750hdmifb-tools     # removes /usr/bin/sm750-smi only
+```
+
+The two packages are independent: erasing `sm750hdmifb-tools` leaves the DKMS
+registration and the module alone, and erasing `sm750hdmifb` leaves the utility
+in place, reporting the driver as absent. `dnf` resolves the arch automatically
+when both come from a repository (`sudo dnf install sm750hdmifb
+sm750hdmifb-tools`), so no `.x86_64` suffix is needed there.
+
+### The Debian path
+
+`build-package.sh` produces the same split: `sm750hdmifb_0.6.3_all.deb`
+(`Architecture: all`, the module payload) and
+`sm750hdmifb-tools_0.6.3_<arch>.deb` (`Architecture:` from
+`dpkg --print-architecture`, `Depends: libdrm2`, payload `./usr/bin/sm750-smi`
+at 0755), plus the source archive. If `pkg-config --exists libdrm` fails the
+script prints
+`build-package.sh: skipping sm750hdmifb-tools: pkg-config cannot find libdrm`
+and still builds the module package and the source archive - a release is
+never half built - and `SHA256SUMS` covers exactly the artifacts that exist.
+`./build-package.sh --help` states that rule; `tests/audit-release.sh` fails if
+the tools `.deb` is missing, has a different version/release, lacks
+`Depends: libdrm2`, carries module content, or if `SHA256SUMS` does not verify.
+
+### Verification
+
+`tests/check-rpm-dkms.sh` runs both `rpmbuild` invocations and asserts the
+two-package contract: exactly two SRPMs, one `noarch` binary RPM, one RPM for
+`$(uname -m)`, identical `Version`/`Release` in both, the tools spec's
+`BuildRequires` (`gcc`, `libdrm-devel`), the tools package's runtime `libdrm`
+requirement, its `%files` as exactly `/usr/bin/sm750-smi` at `0755` with no
+owned directory and no module path, the module package without
+`/usr/bin/sm750-smi`, and a payload extracted with `rpm2cpio` that runs
+`--list-fields`. Every assertion about the DKMS lifecycle in sections 4 and 5 is
+unchanged and still runs against the module package.

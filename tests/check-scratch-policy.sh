@@ -35,6 +35,9 @@ scripts=(
 	tests/check-console-blank.sh
 	tests/check-test-pattern.sh
 	tests/check-restore-path.sh
+	tests/check-sii902x-recovery.sh
+	tests/check-sm750-smi.sh
+	tests/check-sm750-pkg.sh
 	tools/benchmark-staging.sh
 	tools/sm750-crc-cycle.sh
 )
@@ -51,7 +54,7 @@ complain() {
 }
 
 check_tree() {
-	local root=$1 script first_mktemp first_export bad got
+	local root=$1 script first_mktemp first_export bad got uncensused path
 	for script in "${scripts[@]}"; do
 		if [ ! -f "$root/$script" ]; then
 			complain "$script is missing"
@@ -85,6 +88,26 @@ check_tree() {
 	done
 	if [ -f "$root/$exempt" ] && grep -qF '${TMPDIR}' "$root/$exempt"; then
 		complain "$exempt now interpolates TMPDIR; the exemption is stale"
+	fi
+
+	# Discovery: the census cannot fall behind the tree. Every tracked script
+	# that calls mktemp must be in scripts or exempt, so a new caller cannot
+	# slip past by not being listed. Only a real checkout has the index.
+	if git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
+		uncensused=$(git -C "$root" ls-files -- '*.sh' 'build-package.sh' |
+			while IFS= read -r path; do
+				# Prose that mentions mktemp is not a caller.
+				grep -nE 'mktemp([[:space:]]|$)' "$root/$path" 2>/dev/null |
+					grep -qvE '^[0-9]+:[[:space:]]*#' || continue
+				printf '%s\n' "$path"
+			done |
+			# This gate's own mktemp calls are the subject, not a census entry.
+			grep -vxF -e "$exempt" -e tests/check-scratch-policy.sh |
+			grep -vxF -f <(printf '%s\n' "${scripts[@]}") || true)
+		while IFS= read -r path; do
+			[ -n "$path" ] || continue
+			complain "$path calls mktemp but is not in the census"
+		done <<<"$uncensused"
 	fi
 
 	# Harness census: the marker alternation must be the proof's, verbatim.
@@ -145,6 +168,22 @@ plant census-drift tools/sm750-restore-cycle.sh 'census differs' \
 # 5. A template that interpolates something else entirely.
 plant foreign-template tests/check-rpm-dkms.sh 'does not use' \
 	's|"\${TMPDIR}/sm750-rpm-tracked|"${HOME}/sm750-rpm-tracked|'
+# 6. A new tracked mktemp caller that nobody added to the census.
+if git -C "$project_dir" rev-parse --git-dir >/dev/null 2>&1; then
+	tree=$scratch/uncensused
+	for path in "${scripts[@]}" "$exempt" "$harness" "$proof"; do
+		install -D "$project_dir/$path" "$tree/$path"
+	done
+	printf '#!/bin/sh\nmktemp -d "${TMPDIR}/new-scratch.XXXXXX"\n' \
+		>"$tree/tests/new-scratch.sh"
+	git -C "$tree" -c core.fsmonitor=false init -q
+	git -C "$tree" -c core.fsmonitor=false add -A
+	if out=$(bash "$0" "$tree" 2>&1); then
+		complain "planted defect 'uncensused' was not caught"
+	elif ! grep -qF 'tests/new-scratch.sh' <<<"$out"; then
+		complain "planted defect 'uncensused' failed for the wrong reason: $out"
+	fi
+fi
 
 [ "$fail" -eq 0 ] || exit 1
-echo "Scratch policy checks passed (10 scripts, resolver before first mktemp, census pinned)"
+echo "Scratch policy checks passed (${#scripts[@]} scripts, resolver before first mktemp, census pinned)"

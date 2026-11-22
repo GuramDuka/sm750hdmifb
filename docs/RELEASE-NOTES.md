@@ -1,6 +1,29 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Release notes
 
+## 0.6.3 - SiI9024A readiness, write timeout recovery, split tools package
+
+- **A plugged but unpowered sink no longer reads as "not ready".** The SiI9024A
+  readiness wait now gates on the live HPD bit stable for 100 ms within a
+  500 ms budget, instead of requiring the powered-receiver bit for 2000 ms, so
+  a receiver that is connected but not yet powered stops failing the modeset.
+  Defect A42.
+- **A timed-out TPI write recovers instead of failing the modeset.** When a
+  bit-banged i2c write times out, the bus is cleared, the driver waits 10 ms and
+  retries, three attempts in total, before continuing on the compatibility path;
+  a transient stall no longer surfaces as `-110`. The EDID read is skipped while
+  the transmitter is powered down. Gate: `tests/check-sii902x-recovery.sh`.
+- **`sm750-smi` ships as its own package.** The monitoring utility is now
+  installed as `/usr/bin/sm750-smi` by `sm750hdmifb-tools` on both formats -
+  `sudo dnf install sm750hdmifb sm750hdmifb-tools`, or
+  `sm750hdmifb-tools_0.6.3_amd64.deb` from `build-package.sh`. It is
+  architecture-dependent and separate from the noarch DKMS module package,
+  because rpm cannot attach an arch subpackage to a noarch parent; a source
+  build still installs it to `/usr/local/sbin/sm750-smi` via
+  `make install-tools`. Run `sm750-smi` for the device block or
+  `sm750-smi --query=name,driver.version` for values only. The module package's
+  file list is unchanged. See `docs/PACKAGING-RPM.md` section 10.
+
 ## 0.6.2 - Test card, console helper, CRC ownership
 
 - **A panel with no client is never dead-black.** When the pipe is enabled with

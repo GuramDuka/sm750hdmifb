@@ -23,5 +23,6 @@ int sm750_sii902x_get_link_status(bool *connected, bool *receiver,
 bool sm750_sii902x_black_requested(void);
 int sm750_sii902x_set_black(bool enable, unsigned char *readback);
 bool sm750_sii902x_literal_rom_requested(void);
+void sm750_sii902x_set_mode_stage(const char *stage);
 
 #endif

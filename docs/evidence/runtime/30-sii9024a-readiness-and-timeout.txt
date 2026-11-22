@@ -1,0 +1,149 @@
+A42 - SiI9024A readiness gate and transient I2C timeout
+=======================================================
+
+Actor: implementation subagent (T45).
+Date: 2026-11-22 (UTC).
+Tree: /home/coder/sm750hdmifb, HEAD 9b9bc95 plus the A42 working-tree
+changes, no commit, no push.
+Host: Fedora 43, kernel 7.3.4-100.fc43.x86_64, PCB with SM750 + SiI9024A.
+Version: measured on 0.6.2; fixed in 0.6.3.
+Sources: SiI-PR-1064-A rev A (2011-09-28) and SiI-DS-1076-E.01 (2016-08),
+quoted in docs/notes/sii9024a-vendor-research.md and
+docs/notes/sii9024a-i2c-research.md (both uncommitted evidence notes).
+
+1. Measured pre-fix behaviour (0.6.2, kernel log of one monitor power cycle)
+---------------------------------------------------------------------------
+One physical monitor power cycle produced 20 distinct log lines, all within
+2.5 minutes, and every one of them cost the full ready budget. No -110
+occurred in 418 mode sets.
+
+Line form (verbatim, one line per enable attempt):
+
+  SiI9024A receiver not ready after 2000 ms: HPD=0 RSEN=0 status=a0
+  SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04
+  SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=1 status=0e
+  SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=06
+
+Census by status value:
+
+  status a0, HPD=0 RSEN=0   1   at the instant power was cut: sink absent,
+                                  HDCP/security change pending (bits 7,5)
+  status 04, HPD=1 RSEN=0  17   the bulk: plugged, receiver unpowered
+  status 06, HPD=1 RSEN=0   1   plugged plus the latched receiver event
+                                  (bit 1), HPD on, RSEN still low
+  status 0e, HPD=1 RSEN=1   1   powered and terminated receiver
+
+Why this is a defect and not sink behaviour, from the vendor register
+description of 0x3d (TPI Interrupt Status, tpi.txt:1783-1812):
+
+  bit 0  HOTPLUG_EVENT     write-1-to-clear, latched
+  bit 1  RX_SENSE_EVENT    write-1-to-clear, latched
+  bit 2  PLUGGED_STATUS    live HPD state, read-only, not clearable
+  bit 3  RX_SENSE_STATUS   live "powered receiver attached", read-only
+  bits 4-7 undocumented
+
+tpi.txt:2040-2041 tells the host to watch bit 2 for EDID availability and
+bit 3 for the monitor's powered state. tpi.txt:2050-2056 makes 0x3d[3:2]=00
+an unplug and bit 2 = 1 a completed plug whose state "has likely
+stabilized"; the plug interrupt is delayed until HPD has been high for
+TPLUG_DLY, minimum 400 / typical 480 / maximum 600 ms. A plugged sink with
+bit 3 low is a documented normal state ("EDID is readable, but the display
+is not necessarily powered up") and the documented action in it is to read
+EDID, not to wait.
+
+The 0.6.2 gate (src/sii902x.c:546-582 before the fix) required bit 3 to be
+set for 100 ms and polled for 2000 ms, so the status-04 bulk could never
+pass and spent 2 s per attempt; the status-0e sample was reported through
+the same not-ready branch whenever bit 3 did not hold across the 100 ms
+window. The 2000 ms budget has no vendor source: no vendor code waits
+seconds for a receiver (the vendor's own budgets for "the chip answers and
+is in TPI mode" are 10 ms, 100 ms and 1 s).
+
+The second half of the defect was not observed in this census, which is the
+point: on the default software bit-bang path (src/sm750_drm.c:1416 and
+:4944 pass false), sw_i2c_raise_scl() gives up after 100 waits
+(src/ddk750_swi2c.c:204-218), sw_i2c_write_byte() then returns -ETIMEDOUT
+(:292-293, :305-306), and a missing ACK - a different event - returns
+-ENXIO (:319). A -ETIMEDOUT from sm750_sw_i2c_write_block() reaches
+sm750_sii902x_enable() through sii902x_write_block() and aborts the whole
+enable, which is why GAP-B8 exists. Upstream does not fail this way:
+dw-hdmi unwedges nine clocks, sleeps 10 ms and retries once with -EAGAIN;
+the in-tree sii902x commit 2e7a66a8b5ebf1b04a866e5d7c981640f7f62934 retries
+the 0x3d status read five times and continues, because a stalled bus
+otherwise means "the display fails to initialize".
+
+2. What changed (0.6.3)
+-----------------------
+Readiness (src/sii902x.c:635-674 and the macros at :62-67):
+
+  - The wait accumulates SII902X_PLUGGED_STATUS (bit 2) and
+    SII902X_RX_SENSE_STATUS (bit 3) in two separate counters; either one
+    reaching SII902X_READY_STABLE_MS (100 ms) ends the wait.
+  - The budget is SII902X_READY_BUDGET_MS = 500 ms, matching the TPLUG_DLY
+    maximum, polled every SII902X_READY_POLL_MS = 25 ms.
+  - RSEN is diagnostics only. A powered receiver logs
+    "SiI9024A receiver ready after %u ms: HPD=%u RSEN=1 status=0e" (dev_dbg);
+    a plugged, unpowered sink logs the not-ready line with the same
+    "...; enabling for compatibility" tail and the enable continues.
+
+Writes (src/sii902x.c:299-347):
+
+  - sii902x_write_block_retrying() retries only -ETIMEDOUT, up to
+    SII902X_WRITE_ATTEMPTS = 3 attempts, running
+    sm750_sw_i2c_recover_bus() (src/ddk750_swi2c.c:574-593) and
+    usleep_range(10000, 15000) between attempts. The bus clear is skipped on
+    the hardware I2C path, which owns its own bus.
+  - A NACK (-ENXIO) is never retried and never clears the bus: the vendor
+    notes that the DDC-release write 0x1a = 0x00 is designed to be
+    unacknowledged (tpi.txt:1394-1398).
+  - sii902x_write_recovering() passes every non-timeout result through
+    unchanged; after the last attempt it logs
+    "SiI9024A %s write timed out at stage %s (transient I2C timeout,
+    retried %u times); enabling for compatibility" and returns 0.
+  - Applied to: the option-ROM step sequence, the initialization register
+    sequence, the video block write (TPI 0x00), the AVI InfoFrame write
+    (TPI 0x0c) and sii902x_apply_hotplug_workaround(). Reads are untouched.
+  - The stage name comes from sm750_sii902x_set_mode_stage()
+    (src/sii902x.c:220-223), which sm750_program_mode() calls after setting
+    sdev->mode_stage, so the existing GAP-B8 message still names the stage.
+  - The pre-existing single recover+retry for sm750_sii902x_set_black()
+    stays as it was; it was not folded into the helper.
+
+EDID precondition (src/sii902x.c:1096-1100):
+
+  - After reading system-control into saved, a set SII902X_SYS_CTRL_PWR_DWN
+    logs "SiI9024A is powered down (system-control=%02x); EDID not read"
+    once at debug level and returns -ENODATA without a DDC request.
+    sm750_connector_read_edid() already logs "monitor identity EDID
+    unavailable: %d" and returns NULL for any error, so the mode list is
+    unchanged.
+
+Version: 0.6.3 (SM750_DRM_VERSION, DRIVER_PATCHLEVEL 3, build-package.sh,
+dkms.conf, packaging/sm750hdmifb.spec Version and Release 1, docs/ci/build.yml
+artifacts).
+
+Guard: tests/check-sii902x-recovery.sh, called from tests/check-drm-policy.sh
+(the recipe count stays 17). It plants five defects and requires each to be
+rejected: readiness keyed on RX_SENSE, the retry keyed on -ENXIO, the retry
+without a bus clear, the helper applied to the EDID read, and the wrapper
+returning the timeout instead of continuing.
+
+3. NOT YET OBSERVED ON HARDWARE
+-------------------------------
+None of the post-fix behaviour has been observed on the PCB. In particular,
+the following are unverified:
+
+  - a monitor power cycle at 0.6.3 producing the status-04 bulk in 500 ms
+    per attempt instead of 2000 ms, with the "receiver ready" line for the
+    status-0e sample;
+  - a real -ETIMEDOUT retried and recovered by the bus clear, and a real
+    -ETIMEDOUT surviving three attempts and continuing through the
+    compatibility path with the new "(transient I2C timeout, retried N
+    times)" line;
+  - a NACK at the DDC-release write still not entering the retry path;
+  - the EDID skip while the transmitter is powered down (it needs an enable
+    that leaves PWR_DWN set, which the normal path does not).
+
+Until a post-fix power-cycle transcript exists, this file records the
+measured pre-fix behaviour and the code change only. A new file is the
+evidence for the post-fix run; this one must not be rewritten to claim it.

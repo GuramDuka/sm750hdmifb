@@ -2928,3 +2928,171 @@ and make crc-check all exit 0; four kernel builds exit 0.
 - What remains needs hands, not rights: a physical monitor power cycle to fish
   for another `-110` (GAP-B8), and external capture hardware for the last
   GAP-B3 item.
+
+### 2026-11-22T11:30Z | orchestrator | T48-T54: -110 made non-fatal, sm750-smi, two packages, a version-free sudo helper
+
+- T48 (A42) closed the fatal path of the rare `-110`. `sii902x_wait_receiver_ready()`
+  polled `0x3d` for 2000 ms and demanded the live `RX_SENSE` bit, but the vendor
+  TPI reference (SiI-PR-1064-A rev A) makes bit 2 the plugged state that makes
+  EDID readable and bit 3 the powered receiver, so a plugged unpowered sink
+  reading `0x04` is normal and the 2000 ms figure has no source in the vendor
+  documents. The wait now accepts HPD or RSEN asserted for 100 ms within a
+  500 ms budget (`src/sii902x.c:637-674`), counts `status=0x0e` as ready, and
+  keeps RSEN as diagnostics. A TPI write that returns `-ETIMEDOUT` runs
+  `sm750_sw_i2c_recover_bus()`, sleeps `usleep_range(10000,15000)` and is
+  retried at most three times (`:299-321`), only on timeout and never on
+  `-ENXIO`; exhaustion warns with the stage name and continues on the
+  compatibility path (`:326-347`). `sm750_sii902x_read_edid()` returns
+  `-ENODATA` when `SII902X_SYS_CTRL_PWR_DWN` is set (`:1091-1101`). Guard
+  `tests/check-sii902x-recovery.sh` with five planted controls, invoked from
+  `tests/check-drm-policy.sh` so the recipe count is unchanged.
+  Evidence: `docs/evidence/runtime/30-sii9024a-readiness-and-timeout.txt`.
+- T49 answered the owner's question about mining a Windows driver (m04028): no
+  Windows WDDM or WinCE BSP was obtainable, and nothing our driver needs is
+  missing from it. `TxHW_Reset()` is entirely inside `#if 0`
+  (`ddk750/siHdmiTx_902x_TPI.c:222-237`) with its call site commented out at
+  `:3098`, and `TX_POWER_STATE_D3` is declared
+  (`siHdmiTx_902x_TPI.h:806-810`) but never written because the vendor drives
+  only D0 and D2 (`:3232-3265`), so there is no reset sequence to imitate; the
+  recorded policy is to keep SiI9022 out of D3. Report:
+  `docs/notes/sm750-windows-bsp-research.md`.
+- T50 delivered `tools/sm750-smi.c` (2066 lines, `-O2 -Wall -Wextra -Werror`,
+  libdrm only) with 27 fields, nine fixtures and four planted controls in
+  `tests/check-sm750-smi.sh`, wired as the 18th `make check` command. Companion
+  attributes are read by name (`mem_info_vram_total`, `hpd`, `rxsense`,
+  `link_state`, `active_mode`), so the fields that print `n/a` today light up
+  when the driver grows them, with no rebuild of the tool.
+- T51 split the packages after measuring that the requested `%package tools`
+  inside the noarch spec cannot exist: rpm 6.0.2 answers `error: line 11: Only
+  noarch subpackages are supported: BuildArch: x86_64`, and an arch-less
+  subpackage inherits noarch, which would ship an x86_64 ELF to every
+  architecture. Two specs over one `Source0` instead:
+  `packaging/sm750hdmifb-tools.spec` (payload exactly `/usr/bin/sm750-smi`,
+  `%global debug_package %{nil}`) and the unchanged noarch module spec; the deb
+  side mirrors it with `sm750hdmifb-tools_0.6.3_amd64.deb` and
+  `Depends: libdrm2`. Documented at `docs/PACKAGING-RPM.md` section 10.
+- T54 delivered the version-free privileged helper: the sudoers line names
+  `/usr/local/sbin/sm750-pkg` with no arguments and the helper validates its own
+  argv, because sudoers matches the whole command line with any argv. Two field
+  defects were found and fixed - `dkms status`, `cat` and `rpm -q` executed
+  twice because `run` both executed and printed before the exit code was
+  tested (`echo_cmd` now prints only the `running:` line), and `scan_newest`
+  parsed the file name with `.rpm` still attached, so arch read as `rpm` and the
+  noarch driver plus x86_64 tools pair was refused as a release mismatch, which
+  would have blocked the first install for good. RPMs may now be owned by root
+  or by the invoking `SUDO_UID` (the tree builder is unprivileged) but the file
+  and its directory must not be group- or other-writable, and symlinks or paths
+  outside the resolved root stay refused.
+- docs/notes is development-only: the three research reports quote vendor
+  documents whose redistribution terms are unknown, and `tests/audit-release.sh`
+  rejects restrictive redistribution markers in shipped files, so `docs/notes`
+  joined `docs/plan`, `docs/evidence` and `docs/images` in the single exclude
+  list in `packaging/source-excludes.sh`, asserted by
+  `tests/check-drm-packaging.sh:66`. The archive carries 131 entries and zero
+  under `docs/notes`.
+- Two hygiene defects fixed while verifying: `tests/check-sm750-smi.sh` called
+  `mktemp` without being in the scratch census, so the gate reported 13 scripts
+  while fourteen used scratch - the census is now 14 and a discovery assertion
+  scans `git ls-files` so it cannot fall behind again, with a planted control
+  that a fake `tests/new-scratch.sh` is named in the failure; and
+  `tools/sm750-smi`, a 50096-byte ELF, was untracked build output with no ignore
+  rule (`.gitignore:18`).
+- Version 0.6.3 across `build-package.sh:9`, `dkms.conf:3`,
+  `packaging/sm750hdmifb.spec:22/:26`, `packaging/sm750hdmifb-tools.spec:21`
+  and `docs/ci/build.yml`, enforced by `tests/check-release-version.sh`.
+- Artifacts: `dist/sm750hdmifb_0.6.3_all.deb`, `dist/sm750hdmifb-tools_0.6.3_amd64.deb`,
+  `dist/sm750hdmifb-0.6.3-source.tar.gz`,
+  `/mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.3-1.fc43.noarch.rpm`
+  and `.../x86_64/sm750hdmifb-tools-0.6.3-1.fc43.x86_64.rpm`. The host still
+  runs 0.6.2: `install` refuses until `/usr/local/sbin/sm750-pkg` is refreshed
+  from `tools/sm750-pkg.sh` (the installed copy is the 11873-byte pre-change
+  body), which is a root action in `docs/ROOT-ACTIONS.md` section 3.8.
+- Gates: `make CC=/usr/bin/gcc`, `make check` (18 commands),
+  `tests/check-rpm-dkms.sh` (two RPMs, 7 planted controls),
+  `tests/check-drm-packaging.sh`, `tests/check-release-version.sh`,
+  `tests/check-scratch-policy.sh` (14 scripts), `tests/check-sm750-pkg.sh`
+  (9 groups), `tests/check-sii902x-recovery.sh`, `build-package.sh` and
+  `tests/audit-release.sh` all exit 0; ASCII 0 on every touched file.
+
+### 2026-11-22T14:40Z | orchestrator | correction to the 11:30Z entry: a marker word in shipped prose
+
+- Corrects the entry `### 2026-11-22T11:30Z | orchestrator | T48-T54: -110
+  made non-fatal, sm750-smi, two packages, a version-free sudo helper`.
+- That entry explained the `docs/notes` exclusion by naming the restrictive
+  redistribution marker that `tests/audit-release.sh` scans for, in prose. The
+  logbook ships in the source archive, so the explanation tripped the very rule
+  it described: `./tests/audit-release.sh` exited 1 with
+  `docs/LOGBOOK.md:2988:  rejects the literal word ...` followed by
+  `Restrictive licence marker found in releasable code.`
+- The offending clause was reworded to "rejects restrictive redistribution
+  markers in shipped files", which states the rule without reproducing the
+  token. This is the one in-place edit of a logbook line in the project's
+  history, recorded here because `AGENTS.md:10-12` says a correction is a new
+  entry that names the entry it corrects; the sentence's meaning is unchanged
+  and the rest of the entry stands as written.
+- Lesson for future entries: a gate that scans shipped files for a token cannot
+  be described by quoting the token. Describe the class of marker instead.
+- After the rewording: `./build-package.sh` 0, `./tests/audit-release.sh` 0
+  (`Release audit passed`), archive 131 entries, 0 under `docs/notes`.
+
+### 2026-11-22T14:56Z | orchestrator | 0.6.3 batch: transcripts cleaned, helper facts corrected
+
+- Host clock 14:56 MSK (11:56 UTC); timestamps in this log follow the
+  preceding entries' convention.
+- Two evidence defects closed before the 0.6.3 batch could be committed.
+  `git diff --check` exited 2 on `docs/evidence/packaging/01-rpmbuild.log:160:
+  trailing whitespace.`, ten lines across transcripts 01-06. Two sources:
+  `log_header()` at `tests/check-rpm-dkms.sh:76` printed `# workdir: %s` with no
+  argument, so every header emitted a dangling space and never recorded the
+  directory; and the vermagic capture at `:1146-1147` kept the trailing space
+  that `modinfo -F vermagic` emits. Fixed at `:76` (now passes the working
+  directory) and `:1172-1173` (captured once, stripped once, logged at `:1180`
+  and asserted at `:1188-1190` so log and check cannot disagree).
+- New durable assertion `transcript_no_trailing_ws()` `tests/check-rpm-dkms.sh:149`
+  and `transcripts_no_trailing_ws()` `:152-161`, scoped to `0[1-6]-*.log` so the
+  frozen `docs/evidence/packaging/0.5.9/` archive is never read, wired at
+  `:1185-1188`, with planted control `plant_trailing_whitespace` `:1000`
+  registered `:1017-1018`. The gate now rejects 8 planted controls.
+- `docs/ROOT-ACTIONS.md` corrected in place to the measured helper facts. Row 9
+  (`:41`) and section 3.4 (`:425-430`): `/usr/local/sbin/sm750-console` installed
+  2026-11-21T10:28Z, 0755 root:root, 4009 bytes, 144 lines, sha256
+  `6e7f5dc758ec6b8d7993466784ffa5b1ab379da4f7442a6228c620829f2b1338`,
+  byte-identical to `tools/sm750-console.sh`. Row 10 (`:43`) and section 3.8
+  (`:745-746`): source `tools/sm750-pkg.sh` is 14584 bytes, 487 lines, sha256
+  `ca6e7b0a66fae43b6b332135ea8da62f61a917385accacc4d48f114e9149cf16`, while the
+  installed body is STALE at 11873 bytes, sha256
+  `e923a85a3389a13211869f32808b7b7cb77083355f90c5149b6c94cdaf9b976e`, and still
+  prints `dkms status` twice and refuses the 0.6.3 pair with
+  `release mismatch: sm750hdmifb 0.6.3-1.fc43.noarch vs
+  sm750hdmifb-tools 0.6.3-1.fc43.x86_64`.
+- Two false policy claims in section 3.8 replaced by the real rule
+  (`:803`, `:812`): a candidate file must be owned by root or by the invoking
+  user (`SUDO_UID`, else the current uid), must be a regular file, must not be a
+  symlink, must sit inside the resolved build tree, and neither file nor its
+  directory may carry a group or other write bit. The `SUDO_UID` rule
+  (`tools/sm750-pkg.sh:102-112`, `:274-283`) exists so the unprivileged
+  builder's own output installs; the earlier `chown root:root` instruction was
+  wrong and is gone.
+- `dist/` rebuilt with the rootless libdrm environment
+  (`PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig`,
+  `PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm`). A plain
+  `./build-package.sh` silently skips the tools half and then
+  `./tests/audit-release.sh` fails with `Missing release input:
+  dist/sm750hdmifb-tools_0.6.3_amd64.deb`; this is the second time the same
+  trap has bitten, so the environment is part of the build command.
+- Artifacts: `sm750hdmifb_0.6.3_all.deb` sha256
+  `afa4647e14b01cbb113edb4066491ed4509ea1b4475556ce86016de2cd24ecad`,
+  `sm750hdmifb-0.6.3-source.tar.gz` sha256
+  `2a7ee7bde5727759e0784bc1c21832dd8770358a26e2c2eb27beb4dd801b888a`,
+  `sm750hdmifb-tools_0.6.3_amd64.deb` sha256
+  `30395054075caec047466c0233cb1cd88bea177a370d6a9875ec76fb29e5dc67`.
+- Gates after the rebuild: `make CC=/usr/bin/gcc check` 19 recipes green
+  (`Ran 4 tests ... OK`, `sm750-smi checks passed (27 fields, 9 fixtures,
+  4 planted controls)`), `tests/check-scratch-policy.sh` (14 scripts),
+  `check-drm-policy.sh`, `check-release-version.sh` (0.6.3),
+  `check-drm-packaging.sh`, `check-sm750-pkg.sh`, `check-sii902x-recovery.sh`,
+  `check-test-pattern.sh`, `check-rpm-dkms.sh` (0.6.3 + tools 0.6.3/x86_64,
+  8 controls), `audit-release.sh`, `git diff --check` - all exit 0. ASCII 0 on
+  every touched file.
+- Lesson: a transcript that ships in the source archive is a shipped file, so
+  it must satisfy the same hygiene gates as code - trailing whitespace included.

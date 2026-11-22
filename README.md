@@ -84,9 +84,15 @@ git clone https://github.com/GuramDuka/sm750hdmifb.git
 cd sm750hdmifb
 make check
 ./build-package.sh
-sudo apt install ./dist/sm750hdmifb_0.6.2_all.deb
+sudo apt install ./dist/sm750hdmifb_0.6.3_all.deb ./dist/sm750hdmifb-tools_0.6.3_*.deb
 sudo reboot
 ```
+
+The second package is the arch-dependent `sm750hdmifb-tools`; it installs
+`/usr/bin/sm750-smi`, which then runs unprivileged. If the libdrm development
+files are absent, `build-package.sh` prints a skip message and still builds the
+module package and the source archive - a release is never half built
+(`./build-package.sh --help`).
 
 `make check` needs `pkg-config`, the libdrm development headers (`libdrm-dev`
 on Debian and Ubuntu, `libdrm-devel` on Fedora) and `rg` from ripgrep. The
@@ -95,8 +101,10 @@ on Debian and Ubuntu, `libdrm-devel` on Fedora) and `rg` from ripgrep. The
 ### Fedora and other RPM distributions
 
 `packaging/sm750hdmifb.spec` builds the same DKMS package as a `noarch` RPM, so
-the installed file set matches the `.deb` and DKMS compiles the module against
-each installed kernel:
+the installed module file set matches the `.deb` and DKMS compiles the module
+against each installed kernel. The utility is a second, arch-dependent RPM from
+`packaging/sm750hdmifb-tools.spec`, because rpm cannot attach an arch subpackage
+to a noarch parent (`docs/PACKAGING-RPM.md` section 10):
 
 ```sh
 sudo dnf install rpm-build gcc make dkms kernel-devel libdrm-devel pkgconf-pkg-config ripgrep git tar
@@ -108,12 +116,22 @@ mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS}
 . ./packaging/source-excludes.sh
 mapfile -t skip < <(sm750_dev_only_pathspecs)
 git ls-files -z -- . "${skip[@]}" >"$work/tracked"
-tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.2-source.tar.gz" \
-    --transform='s|^|sm750hdmifb-0.6.2/|' --null -T "$work/tracked"
+tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.3-source.tar.gz" \
+    --transform='s|^|sm750hdmifb-0.6.3/|' --null -T "$work/tracked"
 
 rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb.spec
-sudo dnf install -y "$topdir"/RPMS/noarch/sm750hdmifb-0.6.2-1.fc43.noarch.rpm
+rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb-tools.spec
+sudo dnf install -y "$topdir"/RPMS/noarch/sm750hdmifb-0.6.3-1.fc43.noarch.rpm \
+    "$topdir"/RPMS/x86_64/sm750hdmifb-tools-0.6.3-1.fc43.x86_64.rpm
+sm750-smi
 sudo reboot
+```
+
+With the packages in a repository, the same two install in one step:
+
+```sh
+sudo dnf install sm750hdmifb sm750hdmifb-tools
+sm750-smi
 ```
 
 The RPM build needs no root; only `dnf install` and the reboot do. The package
@@ -231,6 +249,84 @@ sudo reboot
 
 Every option and its default is listed in
 [Module parameters](docs/PARAMETERS.md).
+
+### sm750-smi
+
+`tools/sm750-smi` is a monitoring and control utility modelled on `nvidia-smi`;
+the reporting side is read-only, and the tunable `test_pattern*` parameters are
+reported with their live values.
+It needs no root: it reads sysfs, the DRM card node through libdrm and, where
+it exists, debugfs. A value that cannot be read is printed as `n/a` with the
+reason instead of a guess, and `--strict` turns such a value into exit code 3
+for a monitoring script that must fail closed. It builds against libdrm only.
+The released packages install it as `/usr/bin/sm750-smi` - the
+`sm750hdmifb-tools` package, separate from the DKMS module package and built
+for the host architecture - while a source build installs it as
+`/usr/local/sbin/sm750-smi`. It carries a man page in `--help`:
+
+```sh
+make tools
+sudo make install-tools
+sm750-smi                                  # banner, one device block, processes
+sm750-smi --query=display.mode,vblank.count    # values only, CSV
+sm750-smi --format=json --query=memory.total
+sm750-smi --list-fields                    # fields, descriptions, data sources
+sm750-smi --loop=2                         # redraw every 2 s, Ctrl-C exits 0
+```
+
+Unprivileged run on this host, 0.6.2 module and a 1920x1080 panel:
+
+```
++-----------------------------------------------------------------------------+
+| sm750-smi - Silicon Motion SM750 monitoring                                 |
+| Driver Version: 0.6.2                SrcVersion: 760B67791A964AC81795475    |
+| PCI Bus Id: 0000:01:00.0                                                     |
++-----------------------------------------------------------------------------+
+Sun Nov 22 10:19:31 2026
+processes: 691 /proc entries were not readable; the list may be partial
+  name                         sm750hdmidrm
+  driver_version               0.6.2
+  srcversion                   760B67791A964AC81795475
+  bus_id                       0000:01:00.0
+  pci.device_id                126f:0750
+  pci.subsystem_id             126f:0750
+  pci.revision                 a1
+  memory.total                 n/a (driver attribute not present in this version)
+  memory.used                  n/a (driver attribute not present in this version)
+  memory.free                  n/a (driver attribute not present in this version)
+  display.connector            HDMI-A-1
+  display.connected            connected
+  display.mode                 1920x1080
+  display.refresh_hz           60.00
+  display.pixel_clock_khz      148500
+  display.hpd                  n/a (driver attribute not present in this version)
+  display.rxsense              n/a (driver attribute not present in this version)
+  display.link                 n/a (driver attribute not present in this version)
+  crtc.index                   0
+  vblank.count                 38571
+  crc.support                  n/a (needs root (debugfs))
+  test_pattern                 auto
+  test_pattern_period_ms       5000
+  test_pattern_anim_ms         40
+  processes.count              2
+  power.runtime_status         active
+  module_loaded                yes
+
+Processes:
+  PID      COMMAND           NODE
+  259363   check-vblank      /dev/dri/card0
+  259399   sm750-smi         /dev/dri/card0
+  (list may be partial: 691 /proc entries were not readable)
+```
+
+The `n/a` rows name their reason. The VRAM, HPD, RXSENSE and link attributes
+do not exist in 0.6.2, so `memory.*` and `display.hpd|rxsense|link` report
+`driver attribute not present in this version`; a later module that adds those
+attributes is picked up with no rebuild. `crc.support` needs root because the
+CRC control file lives in debugfs. `--sysfs-root`, `--card` and `--proc-root`
+point the tool at a synthetic tree, which is how `tests/check-sm750-smi.sh`
+exercises every field without a GPU; a missing card node prints the PCI-only
+view and exits 2.
 
 ## Ultrawide scaling
 
@@ -422,7 +518,7 @@ fault:
 |---|---|
 | `loading out-of-tree module taints kernel`, `module verification failed: signature and/or required key missing` | Expected for a DKMS module that is not signed with a key enrolled in the kernel |
 | `DMA1 IRQ was not delivered; reverting to completion polling` | The DMA1 completion interrupt is not routed on this board. The driver confirms the first transfer by polling the completion bit, disables the interrupt and keeps polling. One `drm_info` per boot (`src/sm750_drm.c:1499`) |
-| `SiI9024A receiver not ready after 2000 ms: HPD=1 RSEN=0 status=04; enabling for compatibility` | Hot-plug and DDC are present, but the sink does not report a TMDS receiver for 100 ms - normal behind a KVM switch or a passive HDMI-DVI adapter. A forced mode needs no DDC, so the transmitter is programmed anyway and the probe succeeds (`src/sii902x.c:576`) |
+| `SiI9024A receiver not ready after 500 ms: HPD=1 RSEN=0 status=04; enabling for compatibility` | Hot-plug (0x3d bit 2) is present but the sink has not reported a powered receiver (bit 3) for 100 ms - a plugged, unpowered sink, which SiI-PR-1064-A calls normal and whose EDID is still readable. Behind a KVM switch or a passive HDMI-DVI adapter the same line appears. A forced mode needs no DDC, so the transmitter is programmed anyway and the probe succeeds (`src/sii902x.c:661-671`) |
 | `pci 0000:01:00.0: CLS mismatch (64 != 32), using 64 bytes` | PCI cache-line-size negotiation by the kernel |
 
 The real failures to watch for are `DMA1 shadow upload timed out; using CPU
@@ -701,7 +797,7 @@ file by stripping it, so the deck is kept as a standalone page and only linked.
 - [Deck source](docs/deck/index.html) - the page itself: hand-written reveal-style JavaScript, an inline SVG architecture diagram, hash routing (`#/3`), a print stylesheet and a no-script fallback that stacks all ten slides
 
 Five verification targets are opt-in and deliberately outside `make check`, so
-the default gate stays the same 17 commands on machines without the analysers:
+the default gate stays the same 18 commands on machines without the analysers:
 
 ```sh
 make static       # sparse, smatch, cppcheck, coccinelle, pahole against src/
@@ -729,12 +825,13 @@ VBIOS and scanout checks are documented in
 
 | Entry point | What it covers |
 |---|---|
-| `make check` | The 17 default checks: kernel build, policy checks for the module and DRM code, packaging hygiene, shadow and staging units, vblank timer |
+| `make check` | The 18 default checks: kernel build, policy checks for the module and DRM code, packaging hygiene, shadow and staging units, the `sm750-smi` fixture gate, vblank timer |
 | `tests/build-all-kernels.sh` | The 9-combination kernel and scanout-format build matrix |
 | `tests/check-rpm-dkms.sh` | RPM payload against `git ls-files`, scriptlets, dependencies, sandbox DKMS build; no root needed |
 | `tests/check-vblank <card> <hz>` | Live vblank rate against the programmed refresh |
 | `tests/audit-release.sh` | Release tarball contents, version consistency and archive drift |
 | `tests/check-static.sh` | Opt-in static analysis gate with baseline comparison |
+| `tests/check-sm750-smi.sh` | Fixture-driven gate for `tools/sm750-smi`: 27 fields from synthetic sysfs/DRM trees, `--strict` exit codes, CSV/JSON parsing, four planted controls; no GPU or root needed |
 | `make console-check` | Opt-in console reachability: writes to the foreground VT, then requires the `sm750_scanout` window to carry content, to differ from the all-zero sentinel `0xe20eea22` and to report the `PANEL_FB_ADDRESS` offset; exits 77 (a skip) without root, card or a `KD_TEXT` foreground VT |
 | `make crc-check` | Opt-in live scanout readback: enables the CRTC CRC source `scanout`, checks that entries arrive, stay constant for a static frame, change with the content and agree with the `sm750_scanout` debugfs dump; exits 77 (a skip) without root, card or an active CRTC |
 

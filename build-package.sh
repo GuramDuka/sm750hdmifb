@@ -6,12 +6,50 @@ export TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}
 readonly project_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 readonly package=sm750hdmifb
 readonly module=sm750hdmidrm
-readonly version=0.6.2
+readonly version=0.6.3
 readonly arch=all
 readonly build_root="${project_dir}/build/package/${package}_${version}_${arch}"
 readonly dist_dir="${project_dir}/dist"
 readonly deb="${dist_dir}/${package}_${version}_${arch}.deb"
 readonly source_archive="${dist_dir}/${package}-${version}-source.tar.gz"
+readonly tools_package="${package}-tools"
+readonly tools_arch=$(dpkg --print-architecture)
+readonly tools_build_root="${project_dir}/build/package/${tools_package}_${version}_${tools_arch}"
+readonly tools_deb="${dist_dir}/${tools_package}_${version}_${tools_arch}.deb"
+
+usage() {
+	cat <<'EOF'
+Usage: build-package.sh [--help]
+
+Builds the release artifacts into dist/ as the invoking user:
+
+  sm750hdmifb_<version>_all.deb             module payload, Architecture: all
+  sm750hdmifb-tools_<version>_<arch>.deb    sm750-smi, arch of the build host
+  sm750hdmifb-<version>-source.tar.gz       tracked tree minus development files
+  SHA256SUMS                                covers every artifact above
+
+sm750hdmifb-tools compiles tools/sm750-smi.c and so needs the libdrm
+development files (pkg-config module "libdrm": Debian/Ubuntu libdrm-dev,
+Fedora libdrm-devel). When pkg-config cannot find libdrm the tools package is
+skipped with a message on stderr, a tools deb left by an earlier run is
+removed, and the module deb, the source archive and SHA256SUMS are still
+produced - a release is never half built. A rootless libdrm tree works through
+PKG_CONFIG_PATH (docs/ENVIRONMENT.md section 3).
+EOF
+}
+
+case "${1:-}" in
+'') ;;
+-h | --help)
+	usage
+	exit 0
+	;;
+*)
+	printf 'build-package.sh: unknown argument: %s\n' "$1" >&2
+	usage >&2
+	exit 2
+	;;
+esac
 
 rm -rf "${build_root}"
 install -d "${build_root}/DEBIAN" \
@@ -88,6 +126,48 @@ printf '/etc/modprobe.d/%s.conf\n/etc/modules-load.d/%s.conf\n' \
 ) >"${build_root}/DEBIAN/md5sums"
 dpkg-deb --root-owner-group --build "${build_root}" "${deb}"
 
+# sm750-smi is a second, arch-dependent package: rpm cannot attach an arch
+# subpackage to a noarch parent (docs/PACKAGING-RPM.md section 10), and the
+# same split is kept here so both formats carry the same two names.
+tools_built=0
+if pkg-config --exists libdrm 2>/dev/null; then
+	rm -rf "${tools_build_root}"
+	install -d "${tools_build_root}/DEBIAN" "${tools_build_root}/usr/bin"
+	read -r -a drm_cflags <<<"$(pkg-config --cflags libdrm)"
+	read -r -a drm_libs <<<"$(pkg-config --libs libdrm)"
+	"${CC:-cc}" -O2 -Wall -Wextra -Werror "${drm_cflags[@]}" \
+		-o "${tools_build_root}/usr/bin/sm750-smi" \
+		"${project_dir}/tools/sm750-smi.c" "${drm_libs[@]}"
+	cat >"${tools_build_root}/DEBIAN/control" <<EOF
+Package: ${tools_package}
+Version: ${version}
+Section: utils
+Priority: optional
+Architecture: ${tools_arch}
+Maintainer: kodemunkie <kodemunkie@users.noreply.github.com>
+Depends: libdrm2
+Description: Monitoring and control utility for SM750G10 HDMI cards
+ Reports and controls an SM750G10 HDMI card through sysfs, debugfs and the
+ DRM connector state: card identity, memory configuration, output mode, pixel
+ clock, panel power, I2C health and the SiI9024A receiver state. Carries the
+ loop and machine-readable output used by monitoring and the strict exit
+ status used by scripts. The driver comes from sm750hdmifb.
+EOF
+	(
+		cd "${tools_build_root}"
+		find . -path ./DEBIAN -prune -o -type f -printf '%P\0' |
+			sort -z | xargs -0 md5sum
+	) >"${tools_build_root}/DEBIAN/md5sums"
+	dpkg-deb --root-owner-group --build "${tools_build_root}" "${tools_deb}"
+	tools_built=1
+else
+	printf 'build-package.sh: skipping %s: pkg-config cannot find libdrm\n' \
+		"${tools_package}" >&2
+	printf '  install the libdrm development files: Debian/Ubuntu libdrm-dev, Fedora libdrm-devel\n' >&2
+	printf '  or point PKG_CONFIG_PATH at a libdrm tree (docs/ENVIRONMENT.md section 3)\n' >&2
+	rm -f "${tools_deb}"
+fi
+
 # Ship exactly the tracked tree minus the development-only material. Packing
 # the working tree leaked untracked planning notes into the release and made
 # the audit scan them (defect A02); the screenshots, the session plans and the
@@ -128,7 +208,13 @@ else
 		src docs tests tools packaging
 fi
 
-(cd "${dist_dir}" && sha256sum "$(basename "${deb}")" \
-	"$(basename "${source_archive}")" >SHA256SUMS)
-printf '%s\n%s\n%s\n' "${deb}" "${source_archive}" \
-	"${dist_dir}/SHA256SUMS"
+checksums=("$(basename "${deb}")" "$(basename "${source_archive}")")
+if [ "${tools_built}" -eq 1 ]; then
+	checksums+=("$(basename "${tools_deb}")")
+fi
+(cd "${dist_dir}" && printf '%s\n' "${checksums[@]}" | xargs sha256sum >SHA256SUMS)
+printf '%s\n' "${deb}" "${source_archive}"
+if [ "${tools_built}" -eq 1 ]; then
+	printf '%s\n' "${tools_deb}"
+fi
+printf '%s\n' "${dist_dir}/SHA256SUMS"

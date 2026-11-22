@@ -26,7 +26,7 @@ Three labels are used throughout:
 | AC-3 | Runtime and hardware validation ladder | `docs/TEST-STRATEGY.md` sections 5 and 9, `docs/evidence/baseline/03-connector.txt`, `docs/evidence/runtime/08-register-dump.txt` (the successful dump; `docs/evidence/builds/09-register-dump.log` is the earlier denied attempt), `docs/evidence/scanout/01-build.txt` .. `docs/evidence/scanout/06-crc-debugfs-runtime.txt`, `docs/evidence/EVIDENCE-GAPS.md` GAP-B3/B4 | `grep -n 'GAP-B[34]' docs/evidence/EVIDENCE-GAPS.md` | partly; see section 3 |
 | AC-4 | Test strategy and recorded results | `docs/TEST-STRATEGY.md`, `tests/check-scanout-crc.sh`, `docs/evidence/builds/01-make-check.log` .. `docs/evidence/builds/19-cursor-alpha-fix.log` | evidence-existence loop in section 2.4 | no |
 | AC-5 | Build integrity | `Makefile` (`check` at `Makefile:30-48`, `check-deps` at `Makefile:17-28`, `check-all-kernels` at `Makefile:50-51`), `tests/build-all-kernels.sh`, `docs/evidence/builds/01-make-check.log`, `docs/evidence/builds/02-check-all-kernels.log`, `docs/evidence/builds/03-kernel-7.2.15-100.log`, `docs/evidence/builds/04-kernel-7.3.3-100.log`, `docs/evidence/builds/05-kernel-7.3.4-100.log`, `docs/evidence/builds/06-kernel-6.17.1.log`, `docs/evidence/builds/11-warnings-scan.log` | `make check` and `./tests/build-all-kernels.sh`; section 2.5 | no |
-| AC-6 | RPM/DKMS packaging | `packaging/sm750hdmifb.spec`, `docs/PACKAGING-RPM.md`, `tests/check-rpm-dkms.sh`, `docs/evidence/packaging/01-rpmbuild.log` .. `docs/evidence/packaging/07-check-rpm-dkms.log` | `./tests/check-rpm-dkms.sh`; section 2.6 | no (build), yes (install) |
+| AC-6 | RPM/DKMS packaging and the split tools package | `packaging/sm750hdmifb.spec`, `packaging/sm750hdmifb-tools.spec`, `build-package.sh`, `docs/PACKAGING-RPM.md` (section 10), `tests/check-rpm-dkms.sh`, `tests/audit-release.sh`, `docs/evidence/packaging/01-rpmbuild.log` .. `docs/evidence/packaging/07-check-rpm-dkms.log` | `./tests/check-rpm-dkms.sh` (two RPMs, same version/release, tools payload only `/usr/bin/sm750-smi`) and `./tests/audit-release.sh` (both `.deb` files and `SHA256SUMS`); section 2.6 | no (build), yes (install) |
 | AC-7 | Deliverable index and reproduction | `docs/DELIVERABLES.md` (this file), `README.md`, `docs/ENVIRONMENT.md` | unreferenced-file check in section 2.7 | no |
 
 ## 2. Verification detail
@@ -115,7 +115,7 @@ JOBS=12 CC=/usr/bin/gcc ./tests/build-all-kernels.sh
 grep -nE '(warning|error):' docs/evidence/builds/*.log
 ```
 
-Expected: exit 0 and 17 recipe commands for `check`; the final line
+Expected: exit 0 and 18 recipe commands for `check`; the final line
 `Built 9 sm750hdmidrm kernel/format combinations`; and only the
 `pahole version differs` and `compiler differs` warnings, with none attributed
 to `src/*.c` or `src/*.h` (`docs/evidence/builds/11-warnings-scan.log`).
@@ -129,7 +129,8 @@ to `src/*.c` or `src/*.h` (`docs/evidence/builds/11-warnings-scan.log`).
 Expected: exit 0. The script rebuilds the noarch RPM from a fresh `_topdir`,
 asserts the payload against `git ls-files` (131 files in the current tree; the
 same command the script uses is `git ls-files -- . ':(exclude)docs/plan'
-':(exclude)docs/evidence' ':(exclude)docs/images' | wc -l`), the `%files` list
+':(exclude)docs/evidence' ':(exclude)docs/images' ':(exclude)docs/notes' |
+wc -l`), the `%files` list
 (36 files), the scriptlets and the dependencies, runs the `%posttrans` branch
 against shims, and reaches `dkms ... : built` in a sandbox. Root-only steps
 print `SKIP` and are listed in section 3. Recipe and rollback:
@@ -160,8 +161,8 @@ KDIR=/usr/src/kernels/7.3.4-100.fc43.x86_64 \
 Expected: exit 0 and `static gate: PASS`. The target runs sparse, smatch,
 cppcheck, coccinelle and pahole over `src/`, normalises each finding to a
 fingerprint without line numbers and fails on any fingerprint missing from
-`tests/static/baseline/`. It is deliberately outside `check`, whose 17 recipe
-commands are asserted by `tests/check-drm-module.sh`, and it exits 0 with an
+`tests/static/baseline/`. It is deliberately outside `check`, whose 18 recipe
+commands are listed at `Makefile:32-49`, and it exits 0 with an
 `analysers not installed, skipping` notice where the toolchain is absent, so
 building and packaging need nothing new. Triage of every recorded finding, the
 planted-defect control proving each analyser analysed the files, and the
@@ -273,7 +274,7 @@ pkg-config --modversion libdrm      # expected: 2.4.134
 make check KDIR=/lib/modules/7.3.3-100.fc43.x86_64/build CC=/usr/bin/gcc
 ```
 
-Expected: exit 0, 17 recipe commands (`Makefile:32-48`). The target depends on
+Expected: exit 0, 18 recipe commands (`Makefile:32-49`). The target depends on
 `check-deps` (`Makefile:17-28`), which prints an install hint instead of a raw
 `xf86drm.h` error when libdrm or ripgrep is missing. The build writes module
 objects into `src/`; `make clean` removes them.
@@ -323,10 +324,14 @@ network access only; nothing is installed.
 ./tests/audit-release.sh
 ```
 
-Expected: `dist/sm750hdmifb_0.6.0_all.deb`, `dist/sm750hdmifb-0.6.0-source.tar.gz`,
-`dist/SHA256SUMS`, and `Release audit passed: .../dist/RELEASE-AUDIT.txt`.
-Prerequisite: `dpkg-deb` on `PATH`. `make check-package` (`Makefile:71-73`) runs
-both commands and is what CI invokes.
+Expected: `dist/sm750hdmifb_0.6.3_all.deb`, `dist/sm750hdmifb-tools_0.6.3_<arch>.deb`
+(`<arch>` is `dpkg --print-architecture`, `amd64` here),
+`dist/sm750hdmifb-0.6.3-source.tar.gz`, `dist/SHA256SUMS` listing exactly those
+artifacts, and `Release audit passed: .../dist/RELEASE-AUDIT.txt`.
+Prerequisite: `dpkg-deb` on `PATH` and, for the tools package, the libdrm
+development files; without them `build-package.sh` prints a skip line and still
+produces the module package and the source archive. `make check-package`
+(`Makefile:71-73`) runs both commands and is what CI invokes.
 
 ### Step 6: `rpmbuild`
 
@@ -343,21 +348,27 @@ tracked=$work/tracked
 . ./packaging/source-excludes.sh
 mapfile -t skip < <(sm750_dev_only_pathspecs)
 git ls-files -z -- . "${skip[@]}" >"$tracked"
-tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.0-source.tar.gz" \
-    --transform='s|^|sm750hdmifb-0.6.0/|' --null -T "$tracked"
+tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.3-source.tar.gz" \
+    --transform='s|^|sm750hdmifb-0.6.3/|' --null -T "$tracked"
 
 rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb.spec
+rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb-tools.spec
 ```
 
-Expected: `RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm` and the matching
-`.src.rpm`, exit 0. Prerequisites: `rpm-build`, `git`, `tar`. The package is a
-noarch DKMS source carrier; nothing is compiled at RPM build time.
+Expected: `RPMS/noarch/sm750hdmifb-<version>-1.fc43.noarch.rpm` and
+`RPMS/x86_64/sm750hdmifb-tools-<version>-1.fc43.x86_64.rpm`, each with a matching
+`.src.rpm`, exit 0. Prerequisites: `rpm-build`, `git`, `tar`, plus `gcc` and
+`libdrm-devel` for the tools package. The module package is a noarch DKMS source
+carrier; nothing is compiled for it at RPM build time. The tools package compiles
+`tools/sm750-smi.c` and ships only `/usr/bin/sm750-smi`; the second spec exists
+because rpm rejects an arch-dependent subpackage under a noarch parent
+(`docs/PACKAGING-RPM.md` section 10).
 
 Archive-content rule: the source tarball is exactly the tracked tree minus the
 development-only directories declared once in `packaging/source-excludes.sh`
-(`docs/plan`, `docs/evidence`, `docs/images`), the same list `build-package.sh`
-and `tests/audit-release.sh` read, so `docs/` additions ship unless they are
-declared there.
+(`docs/plan`, `docs/evidence`, `docs/images`, `docs/notes`), the same list
+`build-package.sh` and `tests/audit-release.sh` read, so `docs/` additions ship
+unless they are declared there.
 
 ### Step 7: RPM/DKMS gate and sandbox
 
@@ -416,12 +427,14 @@ list.
 | `docs/ENVIRONMENT.md` | host, header trees, tool matrix, privilege state |
 | `docs/ci/build.yml` | inactive CI recipe: GitHub Actions is disabled, the file is kept outside `.github/workflows/` |
 | `docs/DELIVERABLES.md` | this index and the reproduction guide |
-| `tests/check-console-blank.sh` | T31 source-level gate: `sm750_shadow_frame_is_blank()` samples the shadow source on a coarse grid, the exact `console framebuffer is blank` line is emitted from `sm750_pipe_enable()` after `sm750_program_mode()` behind a once-per-load latch, and the guard carries no control flow; four planted defects rejected. Run by `tests/check-drm-policy.sh`, so it stays inside the 17-command `make check` |
+| `tests/check-console-blank.sh` | T31 source-level gate: `sm750_shadow_frame_is_blank()` samples the shadow source on a coarse grid, the exact `console framebuffer is blank` line is emitted from `sm750_pipe_enable()` after `sm750_program_mode()` behind a once-per-load latch, and the guard carries no control flow; four planted defects rejected. Run by `tests/check-drm-policy.sh`, so it stays inside the default `make check` |
 | `tests/check-console-scanout.sh` | T31 root-only runtime check (`make console-check`, opt-in): on a `KD_TEXT` foreground VT it writes to `/dev/tty0` and requires a non-blank `sm750_scanout` window, a `crc32` other than the all-zero sentinel `0xe20eea22` and an `offset` equal to `PANEL_FB_ADDRESS`; exits 77 with one `SKIP:` line, naming `KD_GRAPHICS` when that is the cause |
 | `tests/check-restore-path.sh` | T32 source-level gate (part of `make check` through `tests/check-drm-policy.sh`): the display and mode transition waits compare through `DISPLAY_CTRL_TIMING \| DISPLAY_CTRL_PLANE` and re-poke per poll, the mode budget is `max(20 ms, 2 vertical periods)`, `sm750_pipe_disable()` keeps and reports the display-off result, and the `sm750_pipe_enable()` fail path stays terminal and dumps four registers. Rejects four planted defects; 223 lines |
 | `tests/check-test-pattern.sh` | T37 source-level gate (part of `make check` through `tests/check-drm-policy.sh`): the `test_pattern` / `test_pattern_period_ms` parameters and their documented defaults, the bounded painter with its pitch-padded row copy and both pixel encodings, the card elements, the exact paint message and the call ordering in `sm750_pipe_enable()`, and the rotation's four cancel sites and per-tick silence. Rejects nine planted defects |
 | `tools/sm750-crc-cycle.sh` | single root entry point for the CRC/readback check: reloads the locally built module after a vermagic guard, waits for scanout geometry, runs `tests/check-scanout-crc.sh` and prints the transcript; `--diag` adds an strace of `crc/data`, `--dump` prints the crc file set |
 | `tools/sm750-restore-cycle.sh` | T32 root-only stress harness for the restore path: reloads the module after a vermagic guard, repeats the client-exit restore trigger with `build/scanout-pattern` plus an optional `modetest` mode change, and fails on any new `did not latch` / `panel did not acknowledge` / `failed to enable HDMI mode` line. Exit 0 clean, 1 environment, 2 no scanout readback, 3 failure seen; 208 lines. Not yet run on the card |
+| `tests/check-sm750-smi.sh` | Fixture-driven gate for `tools/sm750-smi`: rebuilds the tool, asserts all 27 fields are listed and queryable, drives nine synthetic sysfs/DRM trees (full data, absent debugfs, non-root reason, absent driver attributes, disconnected connector, zero modes, truncated and malformed attributes, missing card node), checks `--strict` exit 0/3, parses CSV and JSON, and rejects four planted controls. No GPU and no root needed; the 18th recipe command of `make check` |
+| `tools/sm750-smi.c` | the `sm750-smi` monitoring and control utility: 27 fields from sysfs, libdrm and optional debugfs, `--query`, `--format=table|csv|csv,noheader|json`, `--list-fields`, `--loop`, `--strict`, `--sysfs-root`/`--card`/`--proc-root` for fixtures, man page in `--help`; built by `make tools`, installed by `make install-tools` as `/usr/local/sbin/sm750-smi`, and shipped by the `sm750hdmifb-tools` package as `/usr/bin/sm750-smi` (`packaging/sm750hdmifb-tools.spec`, `build-package.sh`) |
 | `tools/sm750-console.sh` | T37 console helper, installed as `/usr/local/sbin/sm750-console` (root only): `show` prints the active tty, `KDGETMODE` of `/dev/tty0` decoded as `KD_TEXT`/`KD_GRAPHICS`/`KD_KDWANTED`, the `vtconsole` bind state, `PANEL_FB_ADDRESS` and the `sm750_scanout` offset/nonzero/crc32; `text [N]` runs `chvt` (default 2) and prints the same status; `graphics` runs `chvt 1`. Usage errors exit 2 |
 
 ### 5.3 Specification archive
@@ -558,6 +571,7 @@ list.
 | `docs/images/desktop-2048x1080-scanout.png` | the 2048x1080 compressed scanout |
 | `docs/images/desktop-2560x1080-physical.jpg` | the panel after monitor stretch |
 | `docs/plan/20261117-sm750-driver-prod/plan.yaml` | plan, acceptance criteria and task record |
+| `docs/notes/sii9024a-vendor-research.md`, `docs/notes/sii9024a-i2c-research.md`, `docs/notes/sm750-windows-bsp-research.md` | tracked development-only research: the SiI9024A register and TPI behaviour behind A42, the SiI9024A I2C/DDC behaviour, and the SM750 paths of the Windows BSP. Excluded from the source archive by `packaging/source-excludes.sh`, because the notes quote vendor documents whose redistribution terms are unknown |
 
 ## 6. Source-of-truth order
 
@@ -565,7 +579,7 @@ When two documents disagree, the archived evidence wins, then the source, then
 the prose. The resolved conflicts are listed in `docs/TEST-STRATEGY.md`
 section 10. Two values that are easy to get wrong:
 
-- The `check` target has 17 recipe commands at `Makefile:32-48`; the
+- The `check` target has 18 recipe commands at `Makefile:32-49`; the
   prerequisite list at `Makefile:30-31` continues on a tab-indented line that is
   not a command.
 - The header matrix is 7.2.15-100, 7.3.3-100 and 7.3.4-100 plus the extracted

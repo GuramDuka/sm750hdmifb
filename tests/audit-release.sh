@@ -11,11 +11,23 @@ package=sm750hdmifb
 module=$project_dir/src/sm750hdmidrm.ko
 deb=$dist_dir/${package}_${version}_all.deb
 source_archive=$dist_dir/${package}-${version}-source.tar.gz
+# The utility is a second, arch-dependent package (docs/PACKAGING-RPM.md
+# section 10); a release without it is incomplete.
+tools_package=${package}-tools
+tools_arch=$(dpkg --print-architecture)
+tools_deb=$dist_dir/${tools_package}_${version}_${tools_arch}.deb
+checksums=$dist_dir/SHA256SUMS
 report=$dist_dir/RELEASE-AUDIT.txt
 
-for required in "$module" "$deb" "$source_archive" "$project_dir/LICENSE"; do
+for required in "$module" "$deb" "$tools_deb" "$source_archive" "$checksums" \
+	"$project_dir/LICENSE"; do
 	[[ -s $required ]] || {
 		echo "Missing release input: $required" >&2
+		if [[ $required == "$tools_deb" || $required == "$checksums" ]]; then
+			echo "The libdrm development files were absent when build-package.sh ran, so it skipped $tools_package." >&2
+			echo "Install them (Debian/Ubuntu libdrm-dev, Fedora libdrm-devel) or point PKG_CONFIG_PATH at a libdrm tree" >&2
+			echo "(docs/ENVIRONMENT.md section 3), rebuild, then audit again." >&2
+		fi
 		exit 1
 	}
 done
@@ -28,7 +40,7 @@ ci_recipe=$project_dir/docs/ci/build.yml
 	echo "Missing CI recipe: $ci_recipe" >&2
 	exit 1
 }
-stale_artifacts=$(rg -o 'sm750hdmifb[-_][0-9]+\.[0-9]+\.[0-9]+' \
+stale_artifacts=$(rg -o 'sm750hdmifb(-tools)?[-_][0-9]+\.[0-9]+\.[0-9]+' \
 	"$ci_recipe" |
 	grep -vF -- "-$version" | grep -vF -- "_$version" || true)
 if [[ -n $stale_artifacts ]]; then
@@ -48,6 +60,62 @@ source_root=$tmpdir/src/${package}-${version}
 	echo "Source archive does not contain $package-$version." >&2
 	exit 1
 }
+dpkg-deb -e "$tools_deb" "$tmpdir/tools-control"
+dpkg-deb -x "$tools_deb" "$tmpdir/tools"
+
+# Two packages with one version: the module package is noarch (Architecture:
+# all) and must stay free of the utility; the tools package is the arch of the
+# build host and carries exactly /usr/bin/sm750-smi.
+[[ $(sed -n 's/^Package: //p' "$tmpdir/control/control") == "$package" ]] || {
+	echo "Module package name is not $package." >&2
+	exit 1
+}
+[[ $(sed -n 's/^Architecture: //p' "$tmpdir/control/control") == all ]] || {
+	echo "The module package is no longer Architecture: all." >&2
+	exit 1
+}
+[[ $(sed -n 's/^Package: //p' "$tmpdir/tools-control/control") == "$tools_package" ]] || {
+	echo "Tools package name is not $tools_package." >&2
+	exit 1
+}
+[[ $(sed -n 's/^Version: //p' "$tmpdir/tools-control/control") == "$version" ]] || {
+	echo "Tools package version differs from $version." >&2
+	exit 1
+}
+[[ $(sed -n 's/^Architecture: //p' "$tmpdir/tools-control/control") == "$tools_arch" ]] || {
+	echo "Tools package is not Architecture: $tools_arch." >&2
+	exit 1
+}
+grep -Eq '^Depends:.*libdrm2' "$tmpdir/tools-control/control" || {
+	echo "Tools package does not depend on libdrm2." >&2
+	exit 1
+}
+(cd "$tmpdir/tools" && find . -type f -printf '%P\n' | sort) \
+	>"$tmpdir/tools-files"
+if ! diff -u <(printf 'usr/bin/sm750-smi\n') "$tmpdir/tools-files"; then
+	echo "Tools package payload is not exactly usr/bin/sm750-smi." >&2
+	exit 1
+fi
+[[ $(stat -c %a "$tmpdir/tools/usr/bin/sm750-smi") == 755 ]] || {
+	echo "Packaged sm750-smi is not mode 0755." >&2
+	exit 1
+}
+[[ $(head -c 4 "$tmpdir/tools/usr/bin/sm750-smi" | od -An -tx1 | tr -d ' \n') == 7f454c46 ]] || {
+	echo "Packaged sm750-smi is not an ELF binary." >&2
+	exit 1
+}
+"$tmpdir/tools/usr/bin/sm750-smi" --list-fields >"$tmpdir/tools-fields" || {
+	echo "Packaged sm750-smi cannot list its fields." >&2
+	exit 1
+}
+[[ -s $tmpdir/tools-fields ]] || {
+	echo "Packaged sm750-smi prints no field." >&2
+	exit 1
+}
+if find "$tmpdir/deb" -name sm750-smi | grep . >/dev/null; then
+	echo "The module package ships sm750-smi; the split is broken." >&2
+	exit 1
+fi
 
 for forbidden in .audit-source .package-build xorg-sm750shadow xorg-sm750.strace; do
 	if find "$tmpdir" -name "*$forbidden*" | grep . >/dev/null; then
@@ -91,6 +159,7 @@ fi
 release_text=(
 	"$source_root"
 	"$tmpdir/deb"
+	"$tmpdir/tools"
 )
 
 # Keep this generic: adding a real local username or machine ID to the audit
@@ -119,6 +188,22 @@ fi
 	exit 1
 }
 (cd "$tmpdir/deb" && md5sum -c --quiet "$tmpdir/control/md5sums")
+[[ -s $tmpdir/tools-control/md5sums ]] || {
+	echo "Tools package has no md5sums control member." >&2
+	exit 1
+}
+(cd "$tmpdir/tools" && md5sum -c --quiet "$tmpdir/tools-control/md5sums")
+
+# SHA256SUMS must cover every artifact and name nothing that is not in dist/.
+artifact_names=( "$(basename "$deb")" "$(basename "$tools_deb")" \
+	"$(basename "$source_archive")" )
+printf '%s\n' "${artifact_names[@]}" | sort >"$tmpdir/expected-checksums"
+awk '{ print $NF }' "$checksums" | sort >"$tmpdir/listed-checksums"
+if ! diff -u "$tmpdir/expected-checksums" "$tmpdir/listed-checksums"; then
+	echo "SHA256SUMS does not list exactly the release artifacts." >&2
+	exit 1
+fi
+(cd "$dist_dir" && sha256sum -c --quiet SHA256SUMS)
 
 mkdir -p "$dist_dir"
 {
@@ -140,12 +225,20 @@ mkdir -p "$dist_dir"
 	echo "DEBIAN PACKAGE CONTENTS"
 	dpkg-deb -c "$deb"
 	echo
+	echo "TOOLS PACKAGE CONTROL"
+	cat "$tmpdir/tools-control/control"
+	echo
+	echo "TOOLS PACKAGE CONTENTS"
+	dpkg-deb -c "$tools_deb"
+	echo
 	echo "SOURCE ARCHIVE CONTENTS"
 	tar -tzf "$source_archive"
 	echo
 	echo "CHECKSUMS"
 	(cd "$dist_dir" && sha256sum "$(basename "$deb")" \
-		"$(basename "$source_archive")")
+		"$(basename "$tools_deb")" "$(basename "$source_archive")")
+	echo
+	cat "$checksums"
 } >"$report"
 
 echo "Release audit passed: $report"

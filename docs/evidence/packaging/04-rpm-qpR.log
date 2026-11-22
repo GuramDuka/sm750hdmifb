@@ -1,8 +1,8 @@
-# utc: 2026-11-21T15:54:17Z
+# utc: 2026-11-22T11:50:41Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
-# command: rpm -qpR /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-3.fc43.noarch.rpm; rpmspec -q --buildrequires; requires
-# workdir: 
+# command: rpm -qpR /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.3-1.fc43.noarch.rpm; rpmspec -q --buildrequires; requires
+# workdir: /home/coder/sm750hdmifb
 
 --- output ---
 --- rpm -qpR (binary) ---
@@ -10,7 +10,7 @@
 /bin/sh
 /bin/sh
 /usr/bin/bash
-config(sm750hdmifb) = 0.6.2-3.fc43
+config(sm750hdmifb) = 0.6.3-1.fc43
 dkms
 dkms
 dkms
@@ -39,3 +39,29 @@ dkms
 dkms
 dkms
 kmod
+--- sm750hdmifb-tools: rpm -qpR (binary) ---
+libc.so.6()(64bit)
+libc.so.6(GLIBC_2.14)(64bit)
+libc.so.6(GLIBC_2.2.5)(64bit)
+libc.so.6(GLIBC_2.3.4)(64bit)
+libc.so.6(GLIBC_2.33)(64bit)
+libc.so.6(GLIBC_2.34)(64bit)
+libc.so.6(GLIBC_2.38)(64bit)
+libc.so.6(GLIBC_2.4)(64bit)
+libdrm
+libdrm.so.2()(64bit)
+rpmlib(CompressedFileNames) <= 3.0.4-1
+rpmlib(FileDigests) <= 4.6.0-1
+rpmlib(PayloadFilesHavePrefix) <= 4.0-1
+rpmlib(PayloadIsZstd) <= 5.4.18-1
+rtld(GNU_HASH)
+--- sm750hdmifb-tools: rpm -qpR (srpm) ---
+gcc
+libdrm-devel
+rpmlib(CompressedFileNames) <= 3.0.4-1
+rpmlib(FileDigests) <= 4.6.0-1
+--- sm750hdmifb-tools: rpmspec -q --buildrequires ---
+gcc
+libdrm-devel
+--- sm750hdmifb-tools: rpmspec -q --requires ---
+libdrm

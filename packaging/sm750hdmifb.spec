@@ -8,18 +8,23 @@
 # one deliberate difference is the maintainer-script layer, documented at the
 # %posttrans section below.
 #
+# sm750-smi is deliberately NOT in this spec. rpm 6.0.2 rejects an
+# arch-dependent subpackage of a noarch package, and a subpackage without
+# BuildArch inherits noarch, so the compiled utility ships from
+# packaging/sm750hdmifb-tools.spec instead (docs/PACKAGING-RPM.md section 10).
+#
 # Reproduction (never uses rpmdev-setuptree and never writes to $HOME):
 #   docs/PACKAGING-RPM.md
 # Verification (rootless, exits non-zero on regression):
 #   tests/check-rpm-dkms.sh
 
 %global dkms_name     sm750hdmifb
-%global dkms_version  0.6.2
+%global dkms_version  0.6.3
 %global module_name   sm750hdmidrm
 
 Name:           sm750hdmifb
-Version:        0.6.2
-Release:        3%{?dist}
+Version:        0.6.3
+Release:        1%{?dist}
 Summary:        DKMS source for the SM750G10 SiI9024A HDMI DRM-KMS driver
 License:        GPL-2.0-only
 URL:            https://github.com/KodeMunkie/sm750hdmifb
@@ -352,6 +357,19 @@ exit 0
 %doc README.md LICENSE docs/RELEASE-NOTES.md docs/TESTING.md packaging/copyright
 
 %changelog
+* Sun Nov 22 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.3-1
+- Release 0.6.3: the SiI9024A readiness wait gates on the live HPD bit stable
+  for 100 ms with a 500 ms budget instead of requiring the powered-receiver
+  bit for 2000 ms, so a plugged but unpowered sink no longer reads as "not
+  ready"; a TPI write that times out on the bit-banged bus clears the bus,
+  waits 10 ms and retries, three attempts in total, before continuing on the
+  compatibility path, so a transient stall no longer fails the modeset with
+  -110; the EDID read is skipped while the transmitter is powered down; defect
+  A42, gate tests/check-sii902x-recovery.sh.
+- sm750-smi is not in this package: rpm cannot attach an arch-dependent
+  subpackage to a noarch parent, so the utility is packaging/
+  sm750hdmifb-tools.spec (sm750hdmifb-tools) from the same source archive.
+  The file list of this package is unchanged.
 * Sat Nov 21 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.2-3
 - The stale purge in %posttrans now also clears a dangling DKMS active-version
   link. 0.6.2-2 moved the purge ahead of the build loop, but a host whose

@@ -75,12 +75,12 @@ typedef struct drm_atomic_state sm750_atomic_commit;
 #define SM750_DRM_NAME "sm750hdmidrm"
 /* Keep in step with the package version in build-package.sh and dkms.conf;
  * tests/check-release-version.sh fails when the three disagree. */
-#define SM750_DRM_VERSION "0.6.2"
+#define SM750_DRM_VERSION "0.6.3"
 /* modetest reports these as the driver version, so they must track the release
  * number above; tests/check-release-version.sh fails when they drift. */
 #define DRIVER_MAJOR 0
 #define DRIVER_MINOR 6
-#define DRIVER_PATCHLEVEL 2
+#define DRIVER_PATCHLEVEL 3
 #define SM750_DRM_MAX_WIDTH 2560
 #define SM750_DRM_PHYSICAL_MAX_WIDTH 2048
 #define SM750_DRM_PLL PRIMARY_PLL
@@ -1413,6 +1413,8 @@ static int sm750_program_mode(struct sm750_drm_device *sdev,
 
 	sm750_mode_to_fb_var(&var, &output_mode, cpp * 8);
 	sdev->mode_stage = SM750_MODE_STAGE_SII_BEGIN;
+	sm750_sii902x_set_mode_stage(
+		sm750_mode_stage_name(sdev->mode_stage));
 	ret = sm750_sii902x_begin_mode(&sdev->pdev->dev, false,
 				       sii9024_scl, sii9024_sda);
 	if (ret)
@@ -1454,6 +1456,8 @@ static int sm750_program_mode(struct sm750_drm_device *sdev,
 	if (ret)
 		return ret;
 	sdev->mode_stage = SM750_MODE_STAGE_SII_ENABLE;
+	sm750_sii902x_set_mode_stage(
+		sm750_mode_stage_name(sdev->mode_stage));
 	ret = sm750_sii902x_enable(&sdev->pdev->dev, &var, false,
 				   sii9024_scl, sii9024_sda);
 	if (!ret)

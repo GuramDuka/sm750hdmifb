@@ -20,6 +20,14 @@ date. GitHub Actions is now disabled and the recipe moved to
 [docs/ci/build.yml](ci/build.yml); see
 [ENVIRONMENT.md](ENVIRONMENT.md) section 1.3. The rows are left as observed.
 
+Path note (2026-11-22, after the audit date): the `make check` recipe has 18
+commands from this date, because `tests/check-sm750-smi.sh` - the `sm750-smi`
+gate - joined it. Every count and every `Makefile` line range quoted below
+describes the recipe as it was on the audit date and predates 0.6.0; neither
+the counts nor the ranges point at the current recipe. They are left as
+observed, and the current count and recipe are recorded in
+[TEST-STRATEGY.md](TEST-STRATEGY.md) section S15 and its closing note.
+
 Severity rubric used below:
 
 | Severity | Meaning |

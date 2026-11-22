@@ -20,9 +20,12 @@ artefact, with the read-only command that proves it, is in section 5.
 
 Row 8 is different: it is **proposed, not performed**. It needs a root run that
 no agent may make, and it is what closes the readback half of GAP-B3. The exact
-commands are in section 7. Row 9 is also **proposed**: it installs the console
-helper added in T37 and needs both a root install and one sudoers line, so the
-host owner has to carry it out. Related operational hazard: an erase followed by
+commands are in section 7. Row 9 was installed by the host owner on
+2026-11-21T10:28Z; the console helper is section 3.4. Row 10's helper is
+installed, but the installed body is stale: the file in `/usr/local/sbin` is the
+11873-byte revision, not the current source, and section 3.8 carries the
+one-line refresh. Its single allowlist line replaces the per-version
+`dnf install` entries. Related operational hazard: an erase followed by
 a reboot leaves the card with no driver; the recovery runbook is in `README.md`,
 section "If the card stops working after removing the package".
 
@@ -36,7 +39,8 @@ section "If the card stops working after removing the package".
 | 6 | 2026-11-18T12:07Z | reinstall the VBIOS helper with the v3 body: 1725 B, sha256 `07fe5499de1b320fc593f5e33db8f865bb867a40da3d35a956ee4511eeaa3a7e`, `EXPECT=49152`, exit 2 on size mismatch, exit 3 on a bad `55aa` signature, success prints `signature 55aa, checksum ok` | GAP-B1 CLOSED (capture byte-identical to the 48 KiB image) |
 | 7 | 2026-11-18T12:08Z | install the `/dev/tty0` ACL rule (`99-sm750-coder-tty0-acl.rules`, 762 B, sha256 `248d76743dd1fa5aca03e55432e53bf02647900038b330439033f569117f7c4b`) and its tmpfiles companion (`sm750-tty0-acl.conf`, 299 B, sha256 `3072aa4ecfd3f67d3c85be6076574d8d1b5afb47e5f4910df15d7f11c3f14538`) | GAP-B3 (IGT VT subset) unblocked: `/dev/tty0` is `crw-rw----+` with `user:coder:rw-` |
 | 8 | proposed | rebuild the module from the working tree, reload it, then run `tests/check-scanout-crc.sh` once as root and store the transcript (section 7) | GAP-B3 readback/CRC half; GAP-B8 if the `-110` recurs during the run |
-| 9 | proposed | install the console helper `/usr/local/sbin/sm750-console` (139-line source `tools/sm750-console.sh`, sha256 `e3955655c5c0c8942e733189f3e0342481fbcc6e7c8e433c259eb0b340244c21`) and add one NOPASSWD line for it (section 3.4) | the one-command `KD_TEXT` route for a panel that looks dead (A34); no GAP |
+| 9 | 2026-11-21T10:28Z | install the console helper `/usr/local/sbin/sm750-console` (144-line source `tools/sm750-console.sh`, sha256 `6e7f5dc758ec6b8d7993466784ffa5b1ab379da4f7442a6228c620829f2b1338`; the installed copy is byte-identical) and add one NOPASSWD line for it (section 3.4) | the one-command `KD_TEXT` route for a panel that looks dead (A34); no GAP |
+| 10 | 2026-11-22T08:41Z | install `/usr/local/sbin/sm750-pkg` and one NOPASSWD line `/etc/sudoers.d/30-sm750-pkg` (section 3.8); source is 487 lines, sha256 `ca6e7b0a66fae43b6b332135ea8da62f61a917385accacc4d48f114e9149cf16`, but the installed body is stale, refresh required (11873 bytes, sha256 `e923a85a3389a13211869f32808b7b7cb77083355f90c5149b6c94cdaf9b976e`) | replaces the per-version `dnf install` allowlist entries; privileged install, remove, status and reload work for any version without the owner |
 
 Sections below are ordered by subject, not by date: allowlist, recovery recipe,
 helpers, udev rule, installed state and re-verification, gap map.
@@ -419,20 +423,21 @@ SM750 VGA BIOS (CRT)`, `Copyright 2000/2010, Silicon Motion Inc.`, and
 `0x815d..0xbfff` all `0xcc`. The ROM enable bit was restored after the run;
 `sm750-lspci` reports `Expansion ROM at c7400000 [disabled] [size=64K]`.
 
-### 3.4 `/usr/local/sbin/sm750-console` (proposed, not installed)
+### 3.4 `/usr/local/sbin/sm750-console` (installed 2026-11-21T10:28Z)
 
-Mode `0755 root:root`, 3877 bytes, 139 lines, sha256
-`e3955655c5c0c8942e733189f3e0342481fbcc6e7c8e433c259eb0b340244c21`. Source
-`tools/sm750-console.sh`; staged at `/mega/tmp/sm750/sm750-console`. Closes no
-GAP: it is the operational route for A34, the panel that looks dead because no
-client paints it. It needs root because `chvt` needs `CAP_SYS_TTY_CONFIG` and
-the debugfs files it reads are mode 0700.
+Installed `0755 root:root`, 4009 bytes, 144 lines, sha256
+`6e7f5dc758ec6b8d7993466784ffa5b1ab379da4f7442a6228c620829f2b1338`, mtime
+2026-11-21 13:28 local (MSK). The installed file is byte-identical to its source
+`tools/sm750-console.sh` and to the staged copy `/mega/tmp/sm750/sm750-console`.
+It closes no GAP: it is the operational route for A34, the panel that looks
+dead because no client paints it. It needs root because `chvt` needs
+`CAP_SYS_TTY_CONFIG` and the debugfs files it reads are mode 0700.
 
-Install (host owner, root):
+Reinstall (host owner, root), from the repository root:
 
 ```sh
 sudo install -m 0755 -o root -g root \
-    /mega/tmp/sm750/sm750-console \
+    tools/sm750-console.sh \
     /usr/local/sbin/sm750-console
 ```
 
@@ -547,8 +552,13 @@ show_status() {
 		}
 		say "scanout offset:   $(dump_field offset)"
 		say "scanout nonzero:  $(dump_field nonzero)"
-		say "scanout crc32:    $(dump_field crc32)"
-		say "(crc32 0xe20eea22 is 262144 zero bytes: nothing has painted the window)"
+		crc=$(dump_field crc32)
+		say "scanout crc32:    $crc"
+		if [ "$crc" = "0xe20eea22" ]; then
+			say "(crc32 0xe20eea22 is 262144 zero bytes: nothing has painted the window)"
+		else
+			say "(crc32 0xe20eea22 is 262144 zero bytes; this frame is not it)"
+		fi
 	else
 		say "scanout:          unavailable ($card/sm750_scanout is not readable)"
 	fi
@@ -587,11 +597,9 @@ graphics)
 esac
 ```
 
-```
-
-The body above is the file as staged. When the script changes, replace both
-this section and the staged copy; the grant is on the path, so the sudoers line
-does not change.
+The block above is the file as installed, byte-for-byte. When the script
+changes, replace this block from `tools/sm750-console.sh` and refresh the staged
+copy; the grant is on the path, so the sudoers line does not change.
 
 ### 3.5 Installing the 0.6.2 package
 
@@ -736,6 +744,86 @@ The version must read `0.6.2` and `dkms status` must show one row per installed
 kernel with `installed`, not `built`. Neither the `rm` lines nor the 0.6.2-3
 `dnf install` are in the allowlist yet (section 1), so both ask for a password.
 Nothing in this section has been run on this host.
+
+### 3.8 `/usr/local/sbin/sm750-pkg` (version-independent package helper)
+
+Source `tools/sm750-pkg.sh`: 14584 bytes, 487 lines, sha256
+`ca6e7b0a66fae43b6b332135ea8da62f61a917385accacc4d48f114e9149cf16`; self-test
+`tests/check-sm750-pkg.sh`. It replaces the
+per-version `dnf install` allowlist entries (section 1 names
+`.../sm750hdmifb-0.6.0-...` and `.../sm750hdmifb-0.6.2-...`): one allowlisted
+command, four subcommands, and the version and the file names are chosen by the
+helper from the local build tree, never by the caller.
+
+The installed copy is stale. `/usr/local/sbin/sm750-pkg` is `0755 root:root`,
+11873 bytes, sha256
+`e923a85a3389a13211869f32808b7b7cb77083355f90c5149b6c94cdaf9b976e`, mtime
+2026-11-22 11:41 local (MSK). That body is the pre-change revision: it prints
+the `dkms status` block twice and refuses the 0.6.3 pair with `release
+mismatch: sm750hdmifb 0.6.3-1.fc43.noarch vs sm750hdmifb-tools
+0.6.3-1.fc43.x86_64`. It is not the revision in the tree, and it must be
+refreshed.
+
+Refresh (host owner, root), from the repository root:
+
+```sh
+sudo install -m 0755 -o root -g root tools/sm750-pkg.sh /usr/local/sbin/sm750-pkg
+```
+
+The full install, if the allowlist line is missing too (as root or with your
+own sudo):
+
+```sh
+sudo install -m 0755 -o root -g root tools/sm750-pkg.sh /usr/local/sbin/sm750-pkg
+printf '%s\n' 'coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-pkg' > /etc/sudoers.d/30-sm750-pkg
+chmod 0440 /etc/sudoers.d/30-sm750-pkg
+visudo -c
+```
+
+Verify, unprivileged:
+
+```sh
+sudo -n /usr/local/sbin/sm750-pkg status
+```
+
+`status` exits 0, changes nothing, and prints `dkms status`, the loaded module
+version, its `lsmod` line, the PCI device from sysfs, and the newest built RPM
+pair with the version that `install` would use.
+
+What this grants and what it does not. The allowlist line names one file and
+matches it with any argument list, so the helper's own argv check is the whole
+boundary: exactly one of `install`, `remove`, `status`, `reload`, anything else
+exits 2 with the usage block. No path and no package name from the caller
+reaches `dnf`. `install` searches only
+`/mega/tmp/sm750/t6/rpmbuild/RPMS` (`noarch` and any arch subdirectory) for the
+newest `sm750hdmifb` and `sm750hdmifb-tools` RPMs, requires the same version and
+release, refuses a symlinked file or directory, refuses any path that resolves
+outside that root, requires each RPM to be a regular file owned by root or by
+the invoking user (`SUDO_UID`, else the current uid), requires no group or
+other write bit on the file, requires its directory to be a non-symlink with no
+group or other write bit either, then runs one
+`dnf install` transaction on exactly those two files. `remove` runs `dnf remove`
+for the two package names only and tolerates a package that is not installed.
+`reload` runs `modprobe -r` and `modprobe` for `sm750hdmidrm` only. There is no
+shell, no `eval`, no root shell and no arbitrary `dnf` invocation, so the blast
+radius is installing or removing this driver's own packages from the local
+build tree. Because `rpmbuild` runs as `coder`, the built files are owned by
+uid 1005; the `SUDO_UID` rule (`tools/sm750-pkg.sh:102-112`, `:274-283`) exists
+so the builder's own output installs with no `chown` step, while a file planted
+by another local account is refused.
+
+The installed stale body's two defects, both fixed in the tree revision:
+`run` executed a command and then printed it before testing the exit code, so
+`dkms status`, `cat` and `rpm -q` ran twice (`echo_cmd()`,
+`tools/sm750-pkg.sh:83-92`, prints the line and the caller runs the command
+once); and `scan_newest` parsed the file name with `.rpm` still attached,
+reading the arch as `rpm` and the release as `1.fc43.noarch`, so the noarch plus
+x86_64 pair was refused as a release mismatch (`tools/sm750-pkg.sh:148-207`).
+
+`dnf` on this host is dnf5 5.2.18, which rejects the literal
+`--nogpgcheck=false` ("unexpected value for named argument"); the helper passes
+`--setopt=gpgcheck=True`, the same policy in a spelling dnf5 accepts, and
+`status` prints the exact command it would run (`install would run: ...`).
 
 ## 4. udev ACL rule
 

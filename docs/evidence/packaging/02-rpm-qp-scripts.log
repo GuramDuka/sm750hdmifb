@@ -1,13 +1,13 @@
-# utc: 2026-11-21T15:54:18Z
+# utc: 2026-11-22T11:50:42Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
-# command: rpm -qp --scripts /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-3.fc43.noarch.rpm
-# workdir: 
+# command: rpm -qp --scripts /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.3-1.fc43.noarch.rpm
+# workdir: /home/coder/sm750hdmifb
 
 --- output ---
 postinstall scriptlet (using /bin/sh):
 # --rpm_safe_upgrade semantics: register with DKMS only on first install
-# ($1 == 1). On an upgrade ($1 == 2) /usr/src/sm750hdmifb-0.6.2 is already
+# ($1 == 1). On an upgrade ($1 == 2) /usr/src/sm750hdmifb-0.6.3 is already
 # registered, and a second "dkms add" on a populated tree is an error that
 # would abort the transaction. The same guard keeps "rpm -U --replacepkgs"
 # from re-adding.
@@ -16,8 +16,8 @@ postinstall scriptlet (using /bin/sh):
 # transaction, which for a driver package is worse than an unregistered tree
 # (the %posttrans build then warns and the admin can run dkms add by hand).
 if [ "$1" -eq 1 ]; then
-	dkms add -m sm750hdmifb -v 0.6.2 >/dev/null || \
-		echo "warning: dkms add sm750hdmifb/0.6.2 failed; run it manually" >&2
+	dkms add -m sm750hdmifb -v 0.6.3 >/dev/null || \
+		echo "warning: dkms add sm750hdmifb/0.6.3 failed; run it manually" >&2
 fi
 exit 0
 preuninstall scriptlet (using /bin/sh):
@@ -25,11 +25,11 @@ preuninstall scriptlet (using /bin/sh):
 # is erased ($1 == 0). On an upgrade ($1 == 1) the new version still needs the
 # DKMS registration, so removing it here would uninstall the module mid-upgrade.
 #
-# %preun, not %postun: dkms needs /usr/src/sm750hdmifb-0.6.2 to still exist
+# %preun, not %postun: dkms needs /usr/src/sm750hdmifb-0.6.3 to still exist
 # when it removes the registration.
 if [ "$1" -eq 0 ]; then
-	dkms remove -m sm750hdmifb -v 0.6.2 --all || \
-		echo "warning: dkms remove sm750hdmifb/0.6.2 failed; run it manually" >&2
+	dkms remove -m sm750hdmifb -v 0.6.3 --all || \
+		echo "warning: dkms remove sm750hdmifb/0.6.3 failed; run it manually" >&2
 fi
 exit 0
 posttrans scriptlet (using /bin/sh):
@@ -75,7 +75,7 @@ dkms_root=${SM750_RPM_DKMS_ROOT:-/var/lib/dkms}
 #
 # Bounded by construction: only a status line whose module name is exactly
 # sm750hdmifb is considered ("<name>/" is matched, so a module named
-# "sm750hdmifb-something" is never touched), 0.6.2 itself is never
+# "sm750hdmifb-something" is never touched), 0.6.3 itself is never
 # removed, each distinct version is removed at most once, and a version that is
 # not a plain release token (empty, ".", "..", containing "/" or any byte
 # outside [0-9A-Za-z._-]) is skipped before it can reach a path. A failed
@@ -105,7 +105,7 @@ dkms status 2>/dev/null | while IFS= read -r status_line; do
 	[ "$stale_name" = "sm750hdmifb" ] || continue
 	[ -n "$stale_version" ] || continue
 	# This is the version being installed: never remove it.
-	if [ "$stale_version" = "0.6.2" ]; then
+	if [ "$stale_version" = "0.6.3" ]; then
 		continue
 	fi
 	# "name/version" without a registered source tree parses as "name/";
@@ -173,11 +173,11 @@ for kernel_dir in "$modules_root"/*; do
 		echo "warning: skipping $kernel_version: matching kernel headers are absent" >&2
 		continue
 	fi
-	dkms build -m sm750hdmifb -v 0.6.2 -k "$kernel_version" || {
+	dkms build -m sm750hdmifb -v 0.6.3 -k "$kernel_version" || {
 		echo "warning: dkms build failed for $kernel_version; run it manually" >&2
 		continue
 	}
-	dkms install -m sm750hdmifb -v 0.6.2 -k "$kernel_version" --force || {
+	dkms install -m sm750hdmifb -v 0.6.3 -k "$kernel_version" --force || {
 		echo "warning: dkms install failed for $kernel_version; run it manually" >&2
 		continue
 	}
@@ -186,10 +186,10 @@ for kernel_dir in "$modules_root"/*; do
 	built_count=$((built_count + 1))
 done
 if [ "$built_count" -eq 0 ]; then
-	echo "warning: no kernel received the module; check the warnings above and run: dkms install -m sm750hdmifb -v 0.6.2 -k <kernel>" >&2
+	echo "warning: no kernel received the module; check the warnings above and run: dkms install -m sm750hdmifb -v 0.6.3 -k <kernel>" >&2
 fi
 exit 0
 
 # No %postun scriptlet is defined on purpose. dkms remove must run while
-# /usr/src/sm750hdmifb-0.6.2 is still present (%preun), and no initramfs
+# /usr/src/sm750hdmifb-0.6.3 is still present (%preun), and no initramfs
 # rebuild is required after an erase.

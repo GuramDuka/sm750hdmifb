@@ -18,6 +18,11 @@
 # touching a link that resolves (A40). Also asserts that dkms.conf carries no
 # directive dkms 3.4.4 reports as deprecated (A38), and that the console helper
 # prints its zero-frame hint only for the zero-frame crc32 (A39).
+# Also builds packaging/sm750hdmifb-tools.spec from the same source archive and
+# asserts the two-package split: the module package stays noarch with its file
+# list unchanged, the tools package is arch-dependent, carries exactly
+# /usr/bin/sm750-smi at 0755, shares version-release with the module package and
+# ships a binary that runs (docs/PACKAGING-RPM.md section 10).
 # Root-only install assertions are skipped with a printed
 # reason (docs/evidence/EVIDENCE-GAPS.md, GAP-B7).
 #
@@ -37,7 +42,7 @@ project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 spec=$project_dir/packaging/sm750hdmifb.spec
 name=sm750hdmifb
 module=sm750hdmidrm
-version=0.6.2
+version=0.6.3
 kernel=$(uname -r)
 arch=$(uname -m)
 cc=/usr/bin/gcc
@@ -45,6 +50,13 @@ work=${SM750_RPM_WORK:-/mega/tmp/sm750/t6}
 topdir=$work/rpmbuild
 dkms_root=$work/dkms
 evidence=${SM750_RPM_EVIDENCE:-$project_dir/docs/evidence/packaging}
+# The utility ships from a second spec: rpm 6.0.2 rejects an arch-dependent
+# subpackage of a noarch package ("Only noarch subpackages are supported") and an
+# arch-less subpackage inherits noarch, which would put an x86_64 ELF on every
+# architecture. Both specs build from the same source archive
+# (docs/PACKAGING-RPM.md section 10).
+tools_name=$name-tools
+tools_spec=$project_dir/packaging/sm750hdmifb-tools.spec
 
 fail() {
 	printf 'FAIL: %s\n' "$*" >&2
@@ -61,20 +73,44 @@ log_header() {
 	printf '# running kernel: %s\n' "$kernel"
 	printf '# uid: %s\n' "$(id -u)"
 	printf '# command: %s\n' "$*"
-	printf '# workdir: %s\n\n--- output ---\n'
+	printf '# workdir: %s\n\n--- output ---\n' "$PWD"
 }
 
 [ "$(id -u)" -eq 0 ] &&
 	fail "run unprivileged: this test must never touch the system package database"
 [ -f "$spec" ] || fail "missing $spec"
+[ -f "$tools_spec" ] || fail "missing $tools_spec"
 [ -x "$cc" ] || fail "missing $cc"
+# tools/sm750-smi links libdrm, so the tools spec declares BuildRequires:
+# libdrm-devel. A host without it uses the rootless libdrm tree from
+# docs/ENVIRONMENT.md section 3 and builds with --nodeps; that deviation is
+# stated in the captured log, and a real build never takes it.
+build_opts=()
+libdrm_note="libdrm: pkg-config finds libdrm (PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-unset}); BuildRequires satisfied"
+if ! pkg-config --exists libdrm; then
+	rootless_libdrm=${SM750_LIBDRM_ROOT:-/mega/tmp/sm750/t3/libdrm}
+	[ -d "$rootless_libdrm/usr/lib64/pkgconfig" ] ||
+		fail "libdrm development files not found (pkg-config libdrm); see docs/ENVIRONMENT.md section 3"
+	export PKG_CONFIG_PATH=$rootless_libdrm/usr/lib64/pkgconfig
+	export PKG_CONFIG_SYSROOT_DIR=$rootless_libdrm
+	export LD_LIBRARY_PATH=$rootless_libdrm/usr/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+	pkg-config --exists libdrm ||
+		fail "libdrm still not found under $rootless_libdrm"
+	libdrm_note="libdrm: rootless tree $rootless_libdrm (docs/ENVIRONMENT.md section 3)"
+fi
+if ! rpm -q libdrm-devel >/dev/null 2>&1; then
+	build_opts+=(--nodeps)
+	libdrm_note="$libdrm_note
+# SANDBOX ONLY: rpmbuild --nodeps, because libdrm-devel is not in the rpmdb.
+# A release build installs the declared BuildRequires and passes no --nodeps."
+fi
 [ -e "$HOME/rpmbuild" ] &&
 	fail "unexpected $HOME/rpmbuild: this test must not write to \$HOME"
 git -C "$project_dir" rev-parse --git-dir >/dev/null 2>&1 ||
 	fail "the tracked-only source tarball needs a git checkout"
 
-# ASCII-only constraint for the spec and the test itself.
-for file in "$spec" "$0"; do
+# ASCII-only constraint for the specs and the test itself.
+for file in "$spec" "$tools_spec" "$0"; do
 	LC_ALL=C grep -nP '[^\x00-\x7F]' "$file" &&
 		fail "non-ASCII byte in $file"
 done
@@ -105,6 +141,26 @@ transcripts_ascii() { # evidence dir: 0 when every produced transcript is ASCII
 	return "$status"
 }
 
+# Trailing whitespace in a transcript is a defect twice over: it fails
+# `git diff --check` on the committed tree, and a header that ends in a space
+# usually means a printf lost its argument (the workdir bug). Scope matches the
+# ASCII gate: only the six transcripts this script writes, so the frozen
+# 0.5.9/ archive is never touched.
+transcript_no_trailing_ws() { # one transcript: 0 when no line ends in space/tab
+	! LC_ALL=C grep -qP '[ \t]+$' "$1"
+}
+transcripts_no_trailing_ws() { # evidence dir: 0 when 01-06 carry none
+	local file status=0
+	for file in "$1"/0[1-6]-*.log; do
+		[ -f "$file" ] || continue
+		transcript_no_trailing_ws "$file" && continue
+		printf '%s:\n' "$file" >&2
+		LC_ALL=C grep -nP '[ \t]+$' "$file" >&2 || true
+		status=1
+	done
+	return "$status"
+}
+
 mkdir -p "$evidence"
 rm -rf -- "$topdir" "$dkms_root" "$work/payload" "$work/posttrans"
 mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS}
@@ -120,43 +176,105 @@ tracked_list=$(mktemp "${TMPDIR}/sm750-rpm-tracked.XXXXXX")
 trap 'rm -f -- "$tracked_list"' EXIT
 git -C "$project_dir" ls-files -z -- . "${exclude_pathspecs[@]}" \
 	>"$tracked_list"
+# A deliverable written in the same change that runs this gate is present but
+# not yet in the git index (the release owner commits after the gates), so the
+# tracked-tree tarball cannot carry it. Include exactly these paths by name,
+# never a directory or a glob, and print it: once they are tracked this block
+# does nothing, and the "archive is the tracked tree" assertion below covers
+# both the committed and the pending state.
+pending_sources=()
+for pending in tools/sm750-smi.c; do
+	git -C "$project_dir" ls-files --error-unmatch "$pending" \
+		>/dev/null 2>&1 && continue
+	[ -f "$project_dir/$pending" ] || fail "missing $pending"
+	pending_sources+=("$pending")
+done
+if [ "${#pending_sources[@]}" -gt 0 ]; then
+	printf '%s\0' "${pending_sources[@]}" >>"$tracked_list"
+	note "source payload adds ${#pending_sources[@]} not-yet-tracked deliverable(s): ${pending_sources[*]}"
+fi
 tar -C "$project_dir" -czf "$source_archive" \
 	--transform="s|^|$name-$version/|" --null -T "$tracked_list"
 tar -tzf "$source_archive" | sed 's|/$||' | sort >"$work/tarball.list"
 git -C "$project_dir" ls-files -- . "${exclude_pathspecs[@]}" |
 	sed "s|^|$name-$version/|" | sort >"$work/tracked.list"
+if [ "${#pending_sources[@]}" -gt 0 ]; then
+	printf '%s\n' "${pending_sources[@]}" |
+		sed "s|^|$name-$version/|" >>"$work/tracked.list"
+	sort -o "$work/tracked.list" "$work/tracked.list"
+fi
 diff -u "$work/tracked.list" "$work/tarball.list" ||
 	fail "source archive is not the tracked tree"
-note "source payload matches git ls-files ($(wc -l <"$work/tracked.list") files)"
+note "source payload matches the ship list ($(wc -l <"$work/tracked.list") files)"
 
 # --- build ------------------------------------------------------------------
 {
-	log_header "rpmbuild -ba --define '_topdir $topdir' $spec"
-	rpmbuild -ba --define "_topdir $topdir" "$spec"
+	log_header "rpmbuild -ba ${build_opts[*]:-} --define '_topdir $topdir' $spec"
+	printf '%s\n' "$libdrm_note"
+	rpmbuild -ba "${build_opts[@]}" --define "_topdir $topdir" "$spec"
 } >"$evidence/01-rpmbuild.log" 2>&1 || {
 	tail -n 40 "$evidence/01-rpmbuild.log" >&2
-	fail "rpmbuild -ba failed (see $evidence/01-rpmbuild.log)"
+	fail "rpmbuild -ba failed for $name (see $evidence/01-rpmbuild.log)"
+}
+{
+	log_header "rpmbuild -ba ${build_opts[*]:-} --define '_topdir $topdir' $tools_spec"
+	rpmbuild -ba "${build_opts[@]}" --define "_topdir $topdir" "$tools_spec"
+} >>"$evidence/01-rpmbuild.log" 2>&1 || {
+	tail -n 40 "$evidence/01-rpmbuild.log" >&2
+	fail "rpmbuild -ba failed for $tools_name (see $evidence/01-rpmbuild.log)"
 }
 srpm=$(find "$topdir/SRPMS" -name "$name-$version-*.src.rpm" | head -n 1)
 rpm_file=$(find "$topdir/RPMS/noarch" -name "$name-$version-*.noarch.rpm" |
 	head -n 1)
+tools_srpm=$(find "$topdir/SRPMS" -name "$tools_name-$version-*.src.rpm" |
+	head -n 1)
+tools_rpm=$(find "$topdir/RPMS/$arch" -name "$tools_name-$version-*.rpm" |
+	head -n 1)
 [ -n "$srpm" ] || fail "no SRPM produced"
 [ -n "$rpm_file" ] || fail "no noarch RPM produced"
-[ "$(find "$topdir/SRPMS" -name '*.src.rpm' | wc -l)" -eq 1 ] ||
-	fail "expected exactly one SRPM"
+[ -n "$tools_srpm" ] || fail "no $tools_name SRPM produced"
+[ -n "$tools_rpm" ] || fail "no $tools_name $arch RPM produced"
+# One source and one binary RPM per package name, and nothing else: a stray
+# third artifact would mean a spec started building something it does not ship.
+[ "$(find "$topdir/SRPMS" -name '*.src.rpm' | wc -l)" -eq 2 ] ||
+	fail "expected exactly two SRPMs (module and tools)"
 [ "$(find "$topdir/RPMS/noarch" -name '*.rpm' | wc -l)" -eq 1 ] ||
-	fail "expected exactly one noarch RPM"
-note "rpmbuild -ba exit 0: $(basename "$srpm"), $(basename "$rpm_file")"
+	fail "expected exactly one noarch RPM (the module package)"
+[ "$(find "$topdir/RPMS/$arch" -name '*.rpm' | wc -l)" -eq 1 ] ||
+	fail "expected exactly one $arch RPM (the tools package)"
+[ "$(find "$topdir/RPMS" -name '*.rpm' | wc -l)" -eq 2 ] ||
+	fail "expected exactly two binary RPMs"
+note "rpmbuild -ba exit 0: $(basename "$srpm"), $(basename "$rpm_file"), $(basename "$tools_rpm")"
 
 # --- metadata ---------------------------------------------------------------
 buildrequires=$(rpmspec -q --buildrequires "$spec")
 printf '%s\n' "$buildrequires" | sort |
 	diff -u <(printf 'dkms\ngcc\nmake\nrpm-build\n') - ||
 	fail "BuildRequires are not exactly rpm-build, dkms, make, gcc"
+tools_buildrequires=$(rpmspec -q --buildrequires "$tools_spec")
+printf '%s\n' "$tools_buildrequires" | sort |
+	diff -u <(printf 'gcc\nlibdrm-devel\n') - ||
+	fail "tools BuildRequires are not exactly gcc, libdrm-devel"
+# The utility links libdrm; the module package must not grow that dependency.
+rpm -qpR "$tools_rpm" | grep -q '^libdrm' ||
+	fail "the tools package does not require libdrm"
+[ "$(rpm -qpR "$rpm_file" | grep -c '^libdrm' || true)" -eq 0 ] ||
+	fail "the module package must not require libdrm"
 [ "$(rpmspec -q --qf '%{VERSION}' "$spec")" = "$version" ] ||
 	fail "spec Version is not $version"
 [ "$(rpm -qp --qf '%{ARCH}' "$rpm_file")" = noarch ] ||
 	fail "built package is not noarch"
+[ "$(rpm -qp --qf '%{ARCH}' "$tools_rpm")" = "$arch" ] ||
+	fail "the tools package is not $arch"
+[ "$(rpm -qp --qf '%{NAME}' "$tools_rpm")" = "$tools_name" ] ||
+	fail "unexpected tools package name"
+# The two packages are one release: a version or release skew between them would
+# let dnf install a utility that talks to a different driver generation.
+[ "$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$tools_rpm")" = \
+	"$(rpm -qp --qf '%{VERSION}-%{RELEASE}' "$rpm_file")" ] ||
+	fail "the module and tools packages do not share version-release"
+[ "$(rpmspec -q --qf '%{VERSION}' "$tools_spec")" = "$version" ] ||
+	fail "tools spec Version is not $version"
 [ "$(rpm -qp --qf '%{LICENSE}' "$rpm_file")" = GPL-2.0-only ] ||
 	fail "unexpected License tag"
 for tag in 'Requires: *dkms' 'Requires\(post\): *dkms' \
@@ -179,8 +297,17 @@ done
 	printf '%s\n' "$buildrequires"
 	printf '%s\n' '--- rpmspec -q --requires ---'
 	rpmspec -q --requires "$spec"
+	printf '%s\n' "--- $tools_name: rpm -qpR (binary) ---"
+	rpm -qpR "$tools_rpm"
+	printf '%s\n' "--- $tools_name: rpm -qpR (srpm) ---"
+	rpm -qpR "$tools_srpm"
+	printf '%s\n' "--- $tools_name: rpmspec -q --buildrequires ---"
+	printf '%s\n' "$tools_buildrequires"
+	printf '%s\n' "--- $tools_name: rpmspec -q --requires ---"
+	rpmspec -q --requires "$tools_spec"
 } >"$evidence/04-rpm-qpR.log" 2>&1
-note "dependencies: BuildRequires 4, runtime dkms, post dkms+kmod, preun dkms"
+note "dependencies: BuildRequires 4 (module) and 2 (tools), runtime dkms, post dkms+kmod, preun dkms"
+note "tools package: BuildRequires gcc+libdrm-devel, runtime libdrm, arch $arch"
 
 # --- scriptlets -------------------------------------------------------------
 postin=$(rpm -qp --qf '%{POSTIN}' "$rpm_file")
@@ -406,8 +533,48 @@ diff -u "$work/expected-conffiles.txt" "$work/actual-conffiles.txt" ||
 	rpm -qpc "$rpm_file"
 	printf '%s\n' '--- expected ship list (docs/PACKAGING-RPM.md) ---'
 	cat "$work/expected-files.txt"
+	printf '\n%s\n' "=== $tools_name: rpm -qlp / -qplv / -qpR ==="
+	rpm -qlp "$tools_rpm"
+	printf '%s\n' '--- mode-qualified listing ---'
+	rpm -qp --qf '[%{FILENAMES}\t%{FILEMODES:perms}\n]' "$tools_rpm"
+	printf '%s\n' '--- verbose ---'
+	rpm -qplv "$tools_rpm"
+	printf '%s\n' '--- dependencies ---'
+	rpm -qpR "$tools_rpm"
 } >"$evidence/03-rpm-qlp.log" 2>&1
 note "%files: 36 files, 4 owned directories, 2 %config(noreplace) entries"
+
+# The tools package owns exactly one path, and the module package owns none of
+# it: the split is the point of the second spec.
+tools_files=$work/tools-files.txt
+rpm -qp --qf '[%{FILENAMES}\t%{FILEMODES:perms}\n]' "$tools_rpm" \
+	>"$work/tools-filemodes.txt"
+awk -F '\t' '$2 !~ /^d/ { print $1 }' "$work/tools-filemodes.txt" |
+	sort >"$tools_files"
+diff -u <(printf '/usr/bin/sm750-smi\n') "$tools_files" ||
+	fail "%files of $tools_name is not exactly /usr/bin/sm750-smi"
+[ "$(awk -F '\t' '$2 ~ /^d/' "$work/tools-filemodes.txt" | wc -l)" -eq 0 ] ||
+	fail "%files of $tools_name must not own a directory"
+awk -F '\t' '$1 == "/usr/bin/sm750-smi" && $2 != "-rwxr-xr-x" { bad = 1 }
+	END { exit bad }' "$work/tools-filemodes.txt" ||
+	fail "sm750-smi is not 0755"
+if rpm -qpl "$rpm_file" | grep -Fxq '/usr/bin/sm750-smi'; then
+	fail "the module package must not ship /usr/bin/sm750-smi"
+fi
+if rpm -qpl "$tools_rpm" | grep -Eq '^/(usr/src|etc|usr/lib/sm750hdmifb|usr/share)/'; then
+	fail "$tools_name must not carry module payload"
+fi
+# A packaged binary that cannot run is not a deliverable: exec the payload copy.
+tools_payload=$work/tools-payload
+rm -rf -- "$tools_payload"
+mkdir -p "$tools_payload"
+(cd "$tools_payload" && rpm2cpio "$tools_rpm" | cpio -idm --quiet)
+[ -x "$tools_payload/usr/bin/sm750-smi" ] ||
+	fail "the packaged sm750-smi is not executable"
+"$tools_payload/usr/bin/sm750-smi" --list-fields >"$work/tools-fields.txt" ||
+	fail "the packaged sm750-smi cannot list its fields"
+[ -s "$work/tools-fields.txt" ] || fail "the packaged sm750-smi prints no field"
+note "tools %files: /usr/bin/sm750-smi only, 0755, no module content; payload runs"
 
 # --- missing-headers behaviour, rootless ------------------------------------
 # The %posttrans body is extracted from the built RPM and run against synthetic
@@ -498,13 +665,13 @@ printf '%s\n' "$mixed_output" | grep -F 'no kernel received the module' >/dev/nu
 	fail "%posttrans warned despite one usable kernel"
 # The purge is first on purpose (A37): it sees the canned listing (empty here)
 # before the build loop runs.
-expected_calls=$'dkms status\ndkms build -m sm750hdmifb -v 0.6.2 -k 7.3.4-100.fc43.x86_64\ndkms install -m sm750hdmifb -v 0.6.2 -k 7.3.4-100.fc43.x86_64 --force\ndepmod -a 7.3.4-100.fc43.x86_64'
+expected_calls=$'dkms status\ndkms build -m sm750hdmifb -v 0.6.3 -k 7.3.4-100.fc43.x86_64\ndkms install -m sm750hdmifb -v 0.6.3 -k 7.3.4-100.fc43.x86_64 --force\ndepmod -a 7.3.4-100.fc43.x86_64'
 [ "$(cat "$sandbox/calls.log")" = "$expected_calls" ] ||
 	fail "unexpected dkms/depmod call sequence: $(tr '\n' '|' <"$sandbox/calls.log")"
 mixed_calls=$(cat "$sandbox/calls.log")
 
 # Stale-registration purge, rootless: the canned listing is the host state
-# before this task (two 0.5.9 kernels, 0.6.0 installed, 0.6.2 added by %post,
+# before this task (two 0.5.9 kernels, 0.6.0 installed, 0.6.3 added by %post,
 # plus rows that must not be touched). Dropping the purge from %posttrans
 # leaves calls.log at "dkms status" and fails the equality below.
 cat >"$sandbox/status-stale.txt" <<'EOF'
@@ -513,8 +680,8 @@ sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: built
 sm750hdmifb/0.6.0, 7.2.15-100.fc43.x86_64, x86_64: installed
 sm750hdmifb/0.6.0, 7.3.3-100.fc43.x86_64, x86_64: installed
 sm750hdmifb/0.6.0: added
-sm750hdmifb/0.6.2, 7.3.4-100.fc43.x86_64, x86_64: installed
-sm750hdmifb/0.6.2: added
+sm750hdmifb/0.6.3, 7.3.4-100.fc43.x86_64, x86_64: installed
+sm750hdmifb/0.6.3: added
 sm750hdmifb-ng/0.9.0, 7.3.4-100.fc43.x86_64, x86_64: built
 othermodule/1.0, 7.3.4-100.fc43.x86_64, x86_64: installed
 EOF
@@ -532,7 +699,7 @@ printf '%s\n' "$purge_output" |
 	grep -F 'removing stale DKMS registration: sm750hdmifb/0.6.0' >/dev/null ||
 	fail "the purge did not announce the removal of 0.6.0"
 printf '%s\n' "$purge_output" |
-	grep -F 'removing stale DKMS registration: sm750hdmifb/0.6.2' >/dev/null &&
+	grep -F 'removing stale DKMS registration: sm750hdmifb/0.6.3' >/dev/null &&
 	fail "the purge tried to remove the version being installed"
 expected_purge=$'dkms status\ndkms remove -m sm750hdmifb -v 0.5.9 --all\ndkms remove -m sm750hdmifb -v 0.6.0 --all'
 [ "$(cat "$sandbox/calls.log")" = "$expected_purge" ] ||
@@ -571,7 +738,7 @@ cont_line=$(grep -nF 'dkms remove -m sm750hdmifb -v 0.6.0 --all' \
 	fail "the loop aborted after the failed removal; 0.6.0 was never attempted"
 [ "$cont_line" -gt "$fail_line" ] ||
 	fail "the loop removed 0.6.0 before the failed 0.5.9 removal"
-grep -F 'dkms remove -m sm750hdmifb -v 0.6.2' "$sandbox/calls.log" >/dev/null &&
+grep -F 'dkms remove -m sm750hdmifb -v 0.6.3' "$sandbox/calls.log" >/dev/null &&
 	fail "the failing-removal run tried to remove the version being installed"
 expected_failpurge=$'dkms status\ndkms remove -m sm750hdmifb -v 0.5.9 --all\ndkms remove -m sm750hdmifb -v 0.6.0 --all'
 [ "$(cat "$sandbox/calls.log")" = "$expected_failpurge" ] ||
@@ -612,12 +779,12 @@ EOF
 		{ echo "the purge deleted another module's tree"; return 1; }
 	printf '%s\n' "$out" | grep -F 'dkms install failed' >/dev/null &&
 		{ echo "dkms install failed"; return 1; }
-	grep -F 'dkms install -m sm750hdmifb -v 0.6.2 -k 7.3.4-100.fc43.x86_64 --force' \
+	grep -F 'dkms install -m sm750hdmifb -v 0.6.3 -k 7.3.4-100.fc43.x86_64 --force' \
 		"$root/calls.log" >/dev/null ||
 		{ echo "dkms install was not attempted"; return 1; }
 	remove_line=$(grep -nF 'dkms remove -m sm750hdmifb -v 0.6.1 --all' \
 		"$root/calls.log" | cut -d: -f1)
-	install_line=$(grep -nF 'dkms install -m sm750hdmifb -v 0.6.2' \
+	install_line=$(grep -nF 'dkms install -m sm750hdmifb -v 0.6.3' \
 		"$root/calls.log" | cut -d: -f1)
 	[ -n "$remove_line" ] && [ -n "$install_line" ] &&
 		[ "$remove_line" -lt "$install_line" ] ||
@@ -827,6 +994,12 @@ plant_localized_evidence() {
 	printf '\320\227\320\260\320\277\320\270\321\201\320\260\320\275: %s\n' \
 		'/mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/x.noarch.rpm' >>"$1"
 }
+# T46: a captured line ended in a space, which makes `git diff --check` reject
+# the committed tree. The plant appends one trailing space, written as an octal
+# escape so this script stays ASCII.
+plant_trailing_whitespace() {
+	printf 'sm750hdmifb/%s, %s: built\040\n' "$version" "$kernel" >>"$1"
+}
 plant purge_after_build "$sandbox/posttrans.sh" \
 	plant_purge_after_build purge_before_build
 plant clean_directive "$project_dir/dkms.conf" \
@@ -841,6 +1014,8 @@ plant_functional dangling_link_kept "$sandbox/posttrans.sh" \
 	plant_no_link_purge dangling_link_scenario
 plant localized_evidence "$evidence/01-rpmbuild.log" \
 	plant_localized_evidence transcript_ascii
+plant trailing_whitespace "$evidence/01-rpmbuild.log" \
+	plant_trailing_whitespace transcript_no_trailing_ws
 
 {
 	log_header "sh posttrans.sh with SM750_RPM_MODULES_ROOT (rootless)"
@@ -872,7 +1047,7 @@ plant localized_evidence "$evidence/01-rpmbuild.log" \
 	printf 'purge line: %s, build loop line: %s\n' "$purge_line" "$build_loop_line"
 	printf '%s\n' '--- broken 0.6.1 registration (A37), dkms root in the sandbox ---'
 	printf '%s\n' 'state: /var/lib/dkms/sm750hdmifb/0.6.1 registered for the running'
-	printf '%s\n' 'kernel with no source/dkms.conf, so dkms install 0.6.2 aborts while'
+	printf '%s\n' 'kernel with no source/dkms.conf, so dkms install 0.6.3 aborts while'
 	printf '%s\n' 'uninstalling 0.6.1 (SHIM_FAIL_REMOVE=0.6.1). The purge must delete'
 	printf '%s\n' 'the tree and the install must still be attempted.'
 	printf '%s\n' "$broken_transcript"
@@ -896,7 +1071,7 @@ plant localized_evidence "$evidence/01-rpmbuild.log" \
 	printf 'rejected:%s\ntotal: %s\n' "$control_lines" "$controls"
 } >"$evidence/06-posttrans-missing-headers.log" 2>&1
 note "missing headers: warning on stderr, exit 0; purge, build, install, depmod sequence verified"
-note "stale purge: sm750hdmifb/0.5.9 and 0.6.0 removed, 0.6.2 and other module names untouched"
+note "stale purge: sm750hdmifb/0.5.9 and 0.6.0 removed, 0.6.3 and other module names untouched"
 note "failed removal: dkms exit 4 downgraded to the spec warning, exit 0, loop continued"
 note "broken 0.6.1 tree: deleted before the build loop, install still attempted, exit 0"
 note "unsafe status field: skipped before any path is formed, dkms root intact"
@@ -991,18 +1166,26 @@ built_ko=$(find "$dkms_root" -path "*/$module.ko" -type f | head -n 1)
 host_ko=/lib/modules/$kernel/updates/dkms/$module.ko
 [ ! -e "$host_ko" ] ||
 	fail "the sandbox run leaked a module into $host_ko; builds must stay rootless"
+# modinfo appends a trailing space to vermagic; strip it once here so the log
+# and the assertion below cannot disagree, and so the transcript passes
+# `git diff --check`.
+built_vermagic=$(modinfo -F vermagic "$built_ko" 2>/dev/null |
+	sed 's/[[:space:]]*$//' || true)
 {
 	printf '\n--- built object (sandbox tree, install is root-only) ---\n'
 	ls -l "$built_ko"
 	printf '%s\n' '--- host module tree (must be absent) ---'
 	[ -e "$host_ko" ] && ls -l "$host_ko" || printf 'absent: %s\n' "$host_ko"
 	printf '%s\n' '--- vermagic ---'
-	modinfo -F vermagic "$built_ko" 2>/dev/null || true
+	printf '%s\n' "$built_vermagic"
 } >>"$evidence/05-dkms-sandbox.log" 2>&1
 transcripts_ascii "$evidence" ||
 	fail "non-ASCII bytes in the transcripts under $evidence (listed above): every captured command must run under LC_ALL=C"
 note "evidence transcripts 01-06: no non-ASCII byte, captured under LC_ALL=C"
-printf '%s\n' "$(modinfo -F vermagic "$built_ko" 2>/dev/null)" |
+transcripts_no_trailing_ws "$evidence" ||
+	fail "trailing whitespace in the transcripts under $evidence (listed above): a captured header or tool output ended a line with a space"
+note "evidence transcripts 01-06: no trailing whitespace"
+printf '%s\n' "$built_vermagic" |
 	grep -F "$kernel" >/dev/null ||
 	fail "built module vermagic does not target $kernel"
 note "dkms sandbox: $dkms_status"
@@ -1010,6 +1193,7 @@ note "built object: $built_ko ($(stat -c %s "$built_ko") bytes, host tree untouc
 
 # --- root-only steps: reported, never executed -----------------------------
 skip "dnf install $(basename "$rpm_file"): needs root (writes /usr/src, /etc, /var/lib/dkms)"
+skip "dnf install $(basename "$tools_rpm"): needs root (writes /usr/bin)"
 skip "dkms status showing 'installed' in the host tree: needs root, follows the skipped dnf install"
 skip "dkms install (even with --installtree): 'Error! You must be root to use this command.'"
 skip "dkms remove -m sm750hdmifb -v 0.5.9 --all in the host tree: not in the sudoers allowlist (only -v 0.6.2 is); the purge runs inside the RPM %posttrans instead, and the rootless run above proves the call sequence"
@@ -1020,5 +1204,5 @@ skip "closing commands recorded in docs/evidence/EVIDENCE-GAPS.md GAP-B7"
 
 [ ! -e "$HOME/rpmbuild" ] ||
 	fail "test wrote $HOME/rpmbuild; explicit _topdir was not honoured"
-printf 'RPM/DKMS checks passed: %s %s, sandbox built, %s planted controls rejected, root-only steps skipped\n' \
-	"$name" "$version" "$controls"
+printf 'RPM/DKMS checks passed: %s %s (+ %s %s/%s), sandbox built, %s planted controls rejected, root-only steps skipped\n' \
+	"$name" "$version" "$tools_name" "$version" "$arch" "$controls"

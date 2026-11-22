@@ -52,6 +52,15 @@ test "$spec_version" = "$version" || {
 	echo "RPM spec Version is '$spec_version', expected '$version'" >&2
 	exit 1
 }
+# The tools spec is a second package in the same release and must not drift.
+tools_spec=$project_dir/packaging/sm750hdmifb-tools.spec
+tools_spec_version=$(sed -n \
+	's/^Version:[[:space:]]*\([^[:space:]]*\)$/\1/p' "$tools_spec")
+test -n "$tools_spec_version"
+test "$tools_spec_version" = "$version" || {
+	echo "Tools RPM spec Version is '$tools_spec_version', expected '$version'" >&2
+	exit 1
+}
 grep -F 's/@VERSION@/${version}/g' "$builder" >/dev/null
 for script in packaging/drm-postinst packaging/drm-prerm; do
 	grep -F 'version=@VERSION@' "$project_dir/$script" >/dev/null
@@ -64,14 +73,16 @@ done
 artifact_count=0
 while IFS= read -r artifact; do
 	case "$artifact" in
-		sm750hdmifb-"$version"|sm750hdmifb_"$version"_all.deb) ;;
+		sm750hdmifb-"$version"|sm750hdmifb_"$version"_all.deb|\
+			sm750hdmifb-tools-"$version"|\
+			sm750hdmifb-tools_"$version"_*.deb) ;;
 		*)
 			echo "CI recipe references stale release artifact: $artifact" >&2
 			exit 1
 			;;
 	esac
 	artifact_count=$((artifact_count + 1))
-done < <(rg -o 'sm750hdmifb(-[0-9]+\.[0-9]+\.[0-9]+|_[0-9]+\.[0-9]+\.[0-9]+_all\.deb)' "$ci_recipe")
+done < <(rg -o 'sm750hdmifb(-tools)?(-[0-9]+\.[0-9]+\.[0-9]+|_[0-9]+\.[0-9]+\.[0-9]+_[a-z0-9]+\.deb)' "$ci_recipe")
 
 test "$artifact_count" -gt 0
 echo "Release version consistency checks passed: $version"

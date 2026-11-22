@@ -15,6 +15,7 @@ modules.order
 /tests/test-bbdither-rgb565
 /tests/test-scale-optimizations
 /tools/staging-pattern
+/tools/sm750-smi
 __pycache__/
 
 # Editor and desktop files

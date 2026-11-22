@@ -82,7 +82,7 @@ exports `TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}`), never to `/tmp`.
 
 | ID | Suite | Role | Status |
 | --- | --- | --- | --- |
-| S1 | In-repo `make check` (17 recipe commands) | Primary software regression gate | PASS |
+| S1 | In-repo `make check` (18 recipe commands since 2026-11-22; the archived captures record 17) | Primary software regression gate | PASS |
 | S2 | In-repo build matrix (`tests/build-all-kernels.sh`) | Kernel-range and scanout-format gate | PASS |
 | S3 | Package build and release audit | Release-artifact gate | PASS |
 | S4 | `modetest` (libdrm) | Minimal KMS enumeration and modeset client | PASS (pre-fix baseline) |
@@ -95,6 +95,8 @@ exports `TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}`), never to `/tmp`.
 | S11 | In-repo `tests/check-restore-path.sh` (via `make check`) | Source-level restore-path gate: masked transition compare with re-poke, mode-derived budget, kept display-off result, terminal fail path | PASS (source gate) plus PASS on hardware 2026-11-20: 30 restore cycles, 20 mode changes, 95 enable events, zero fault lines |
 | S12 | In-repo `tests/check-test-pattern.sh` (via `make check`) | Source-level test-card gate: the three writable parameters and their defaults and clamps, the bounded painter, the rectangle writer used by both the full card and the animation tick, the pitch-padded row copy, both pixel encodings, the card elements, the disc's motion and reflection, the exact paint message and call ordering, the rotation's cancel sites and tick silence, and the CRC-ownership rules (an armed scanout CRC source owns the window; a userspace master's black frame is a picture) | PASS (source gate); eighteen planted defects rejected. Bars and the 5 s palette jump observed on the panel 2026-11-20; the animated disc is not yet observed |
 | S13 | In-repo `tests/check-rpm-dkms.sh` (outside `make check`) | Evidence-hygiene gate on the packaging transcripts: every captured command runs under `LC_ALL=C LANG=C`, and after the last transcript is written the run fails on any non-ASCII byte in `docs/evidence/packaging/0[1-6]-*.log`, printing the file and its line numbers | PASS; `plant_localized_evidence` (one injected Russian `rpmbuild` line) rejected. 01-06 regenerated ASCII-clean at 0.6.2; the frozen `0.5.9/` archive predates the fix and is not covered |
+| S14 | In-repo `tests/check-sii902x-recovery.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level A42 gate: the readiness wait accumulates the plugged bit (and accepts a stable powered receiver) inside a 500 ms budget, a timed-out TPI write is retried after a software bus clear with only `-ETIMEDOUT` recoverable, the retrying write covers the option-ROM step, the initialization register, the video block, the AVI InfoFrame and the HPD workaround but never a read, a final timeout warns with the stage name and does not fail the enable, and the EDID read is skipped while the transmitter is powered down | PASS (source gate); five planted defects rejected (readiness keyed on `RX_SENSE`, retry on `-ENXIO`, retry with no bus clear, the helper used on the EDID read, the wrapper returning the timeout). Post-fix power-cycle behaviour is not yet observed on hardware |
+| S15 | In-repo `tests/check-sm750-smi.sh` (via `make check`) | Fixture-driven gate for the `sm750-smi` monitoring tool: all 27 fields resolved from synthetic sysfs/DRM trees, nine fixture shapes, `--strict` exit codes, CSV and JSON parsed by `python3`, four planted controls rejected; no GPU and no root needed | PASS (2026-11-22) |
 
 ### S1: in-repo `make check`
 
@@ -501,7 +503,40 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   rejected 0.5.9 revision: regenerating it would fabricate a run that did not
   happen, so it is left unedited and the gate does not read it.
 
-## 3. `make check`: the 17 recipe commands
+### S15: sm750-smi monitoring-tool gate
+
+- Command: `./tests/check-sm750-smi.sh` (also the 18th recipe command of
+  `make check`, `Makefile:49`). It takes no arguments and needs neither the
+  card nor root. Scratch trees go under `${TMPDIR:-/mega/tmp/sm750/tmp}`.
+- Holds: the tool is rebuilt from `tools/sm750-smi.c`; `--list-fields` lists
+  the 27 supported fields exactly once and every one of them is queryable;
+  nine synthetic trees under `--sysfs-root`/`--card`/`--proc-root` cover the
+  full data set, an absent debugfs, a chmod-000 debugfs control (reason
+  `needs root (debugfs)`), absent driver attributes (reason `driver attribute
+  not present in this version`), a disconnected connector, an empty modes
+  list, a 5000-byte `modes` file whose first line must still be read, and a
+  malformed attribute (`12x4`, `abc`); `--strict` exits 0 when every field
+  resolves and 3 with the reasons on stderr when one does not; a missing card
+  node prints the PCI-only view and exits 2; CSV and JSON are parsed by
+  `python3` rather than string-compared, and `--no-color` plus a non-tty
+  never emit an ESC byte.
+- Planted controls: a field listed in `--list-fields` with no getter (the
+  table self-check exits 1), a hardcoded `0.6.2` driver version (fixture
+  carries `9.9.9`), a field that prints `0` instead of `n/a` when the
+  attribute is absent, and an ESC byte emitted under `--no-color`. Each is
+  copied, patched and compiled into its own binary, and each must fail the
+  gate for the stated reason; the script prints the observed failure.
+- Status: PASS, `sm750-smi checks passed (27 fields, 9 fixtures, 4 planted
+  controls)`. The real-run view is in the README.
+
+## 3. `make check`: the recipe commands
+
+Since 2026-11-22 the recipe has 18 commands: `./tests/check-sm750-smi.sh`
+(`Makefile:49`) is appended after `python3 tests/test-staging-results.py`.
+The captures below, in section 4 and in
+`docs/evidence/baseline/13-make-check-count.txt` record 17 and stay as they
+were written.
+
 
 Exact environment for this run:
 
@@ -522,7 +557,7 @@ commands below are `Makefile:32-48` and their observed results in
 | # | Command (Makefile line) | Observed result in `01-make-check.log` | Verdict |
 | --- | --- | --- | --- |
 | 1 | `./tests/check-drm-module.sh src/sm750hdmidrm.ko` (:32) | `SKIP` for the live probe (uid 1005, `/dev/dri/card0`); metadata checks passed | PASS (probe GAP) |
-| 2 | `./tests/check-drm-policy.sh` (:33) | `DRM mode policy checks passed` (the CRC uapi gate it now calls prints `CRC uapi gate and negative controls passed` first) | PASS |
+| 2 | `./tests/check-drm-policy.sh` (:33) | `DRM mode policy checks passed` (the CRC uapi gate it now calls prints `CRC uapi gate and negative controls passed` first, and the A42 gate prints `Sii902x readiness and I2C recovery checks passed`) | PASS |
 | 3 | `./tests/check-drm-xorg-config.sh` (:34) | `DRM Xorg isolation checks passed` | PASS |
 | 4 | `./tests/check-drm-packaging.sh` (:35) | `Unified DRM package checks passed` | PASS |
 | 5 | `./tests/check-release-version.sh` (:36) | `Release version consistency checks passed: 0.5.9` | PASS |
