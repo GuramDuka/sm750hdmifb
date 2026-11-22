@@ -3236,3 +3236,24 @@ of work, best practice, icons and images, linked to the documentation.
 - Gates: check-release-version (0.6.4), check-drm-packaging, check-scratch
   (15 scripts), check-sm750-smi (libdrm env), make check (all pass),
   check-drm-policy, audit-release, `git diff --check`.
+
+### 2026-11-22T19:05Z | orchestrator | T55 added to the plan; the 26 gates enumerated
+- User asked (m05116): "добавить в план T55, а что за 26 гейтов?" - T55 was
+  added as task T55 (pending, gem-implementer) and decision 74/75 in
+  docs/plan/20261117-sm750-driver-prod/plan.yaml: run the in-tree drm
+  kselftests (tools/testing/selftests/drm) against the installed 0.6.4
+  module on kernel 7.3.4-100 and wrap gate runs in a dmesg oops detector
+  (BUG/WARNING/Oops/lockdep), formalizing the non-panic criterion.
+  Syzkaller and a KASAN/lockdep debug kernel are recorded as future work
+  pending owner-provided root.
+- The "26 gates" answered: 26 tests/check-*.sh scripts exist in tests/;
+  `make check` runs 18 recipe commands (Makefile:30-50, the first prerequisite
+  line is not a command); the rest are either called from
+  tests/check-drm-policy.sh (check-crc-uapi, check-console-blank,
+  check-test-pattern, check-restore-path, check-scratch-policy,
+  check-sii902x-recovery, check-sysfs-attributes) or opt-in targets
+  (check-rpm-dkms.sh via check-package, check-static.sh via make static,
+  check-console-scanout.sh via make console-check, build-all-kernels.sh via
+  check-all-kernels).
+- Plan verified with yaml.safe_load: status completed, 75 decisions, 25 tasks
+  (T55 pending); ASCII clean; `git diff --check` clean.
