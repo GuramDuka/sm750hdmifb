@@ -1,7 +1,7 @@
-# utc: 2026-11-22T12:55:47Z
+# utc: 2026-11-22T14:10:12Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
-# command: rpm -qlp / -qplv / -qpc /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.4-1.fc43.noarch.rpm
+# command: rpm -qlp / -qplv / -qpc /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.4-2.fc43.noarch.rpm
 # workdir: /home/coder/sm750hdmifb
 
 --- output ---
@@ -100,7 +100,7 @@ drwxr-xr-x    2 root     root                        0 Nov 22 03:00 /usr/lib/sm7
 drwxr-xr-x    2 root     root                        0 Nov 22 03:00 /usr/share/doc/sm750hdmifb
 -rw-r--r--    1 root     root                    17984 Nov 17 18:40 /usr/share/doc/sm750hdmifb/LICENSE
 -rw-r--r--    1 root     root                    49609 Nov 22 03:00 /usr/share/doc/sm750hdmifb/README.md
--rw-r--r--    1 root     root                    16034 Nov 22 03:00 /usr/share/doc/sm750hdmifb/RELEASE-NOTES.md
+-rw-r--r--    1 root     root                    16651 Nov 22 03:00 /usr/share/doc/sm750hdmifb/RELEASE-NOTES.md
 -rw-r--r--    1 root     root                     4173 Nov 18 22:07 /usr/share/doc/sm750hdmifb/TESTING.md
 -rw-r--r--    1 root     root                      686 Nov 17 18:40 /usr/share/doc/sm750hdmifb/copyright
 drwxr-xr-x    2 root     root                        0 Nov 22 03:00 /usr/src/sm750hdmifb-0.6.4

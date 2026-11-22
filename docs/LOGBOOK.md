@@ -3171,3 +3171,34 @@ and make crc-check all exit 0; four kernel builds exit 0.
   `2c226e53a0aecdd143a63a7ac1649e6b50af218f1d5a7f07eb951140451ed3ae`.
   Meanwhile `sudo cp tools/sm750-smi /usr/bin/sm750-smi` is not needed; the
   corrected RPM will land with the next release bump.
+
+### 2026-11-22T17:20Z | orchestrator | 0.6.4-2 rebuild, owner install observed, doc example sweep
+- Rebuilt the tools RPM with the banner fix (in-tree sm750-smi sha256
+  `245313b66d2f5d8db4040df74438190301401a1f79d0d3b6c9828ba63fad9f8b`); because
+  sm750-pkg refuses a release-mismatched noarch+x86_64 pair, both specs moved
+  to Release 2%%{?dist} with changelog entries (module payload unchanged from
+  0.6.4-1).
+- Owner install observed (`sudo -n /usr/local/sbin/sm750-pkg install`):
+  sm750hdmifb-0.6.4-2.fc43.noarch + sm750hdmifb-tools-0.6.4-2.fc43.x86_64;
+  dkms status: sm750hdmifb/0.6.4 installed on 7.2.15-100, 7.3.3-100,
+  7.3.4-100; /sys/module/sm750hdmidrm/version = 0.6.4.
+- Full sm750-smi output verified under sudo and as user: banner rows 1-5 all
+  79 columns, whole output max row 79, all 27 fields live (memory.total
+  16777216, memory.used 3147008, display.mode 1024x768@60.00, hpd 1, rxsense
+  1, link connected, crc.support 1, test_pattern auto/5000/40), zero n/a
+  lines, --strict rc 0, json/csv well-formed. Installed binary sha256
+  `2e165b855fd00ac3abeeb0a6a0c74b1e592855b156e1ae70073446718a1576ad`.
+- Docs example sweep: PACKAGING-RPM.md and DELIVERABLES.md 0.6.3 examples -> 0.6.4
+  (python literal substitution only; a sed with `|` in the pattern garbled the
+  file once and was recovered by git checkout - recorded as a lesson).
+  DELIVERABLES payload figure 136 -> 138 (matches the gate and the archive);
+  SKIP-line count seven -> nine. TEST-STRATEGY already says 18 recipe
+  commands since 2026-11-22; Makefile has 19 tab lines but the first is a
+  continuation of the `check:` prerequisites, so 18 recipe commands is
+  correct.
+- Gates green: check-release-version (0.6.4), check-drm-packaging,
+  check-rpm-dkms (8 planted controls), build-package.sh (libdrm env),
+  audit-release. Artifacts: deb
+  `1c58a44318539c6173c79f8f9df6f4b601cc1da88557791806bf5f8380160776`, source
+  `38b97f03ecd19d0ae108698ea92158e192c9faf932253be3d9a2991fc6c9c46e`, tools
+  deb `6758fbca31aad2095f203f97a25258773b2f4a6c44d17652b01a2e0f41406ce5`.

@@ -1,4 +1,4 @@
-# utc: 2026-11-22T12:55:42Z
+# utc: 2026-11-22T14:10:07Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
 # command: rpmbuild -ba --nodeps --define '_topdir /mega/tmp/sm750/t6/rpmbuild' /home/coder/sm750hdmifb/packaging/sm750hdmifb.spec
@@ -11,8 +11,8 @@ libdrm: rootless tree /mega/tmp/sm750/t3/libdrm (docs/ENVIRONMENT.md section 3)
 Building target platforms: noarch
 Building for target noarch
 setting SOURCE_DATE_EPOCH=1795305600
-Executing(%mkbuilddir): /bin/sh -e /var/tmp/rpm-tmp.qCXNXy
-Executing(%prep): /bin/sh -e /var/tmp/rpm-tmp.vBLuDN
+Executing(%mkbuilddir): /bin/sh -e /var/tmp/rpm-tmp.PrSJZ0
+Executing(%prep): /bin/sh -e /var/tmp/rpm-tmp.kcfnHl
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.4-build
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.4-build
@@ -25,7 +25,7 @@ Executing(%prep): /bin/sh -e /var/tmp/rpm-tmp.vBLuDN
 + RPM_EC=0
 ++ jobs -p
 + exit 0
-Executing(%build): /bin/sh -e /var/tmp/rpm-tmp.xifewt
+Executing(%build): /bin/sh -e /var/tmp/rpm-tmp.QiK6pM
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.4-build
 + CFLAGS='-O2 -flto=auto -ffat-lto-objects -fexceptions -g -grecord-gcc-switches -pipe -Wall -Werror=format-security -Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3 -Wp,-D_GLIBCXX_ASSERTIONS -specs=/usr/lib/rpm/redhat/redhat-hardened-cc1 -fstack-protector-strong -specs=/usr/lib/rpm/redhat/redhat-annobin-cc1  -m64 -march=x86-64 -mtune=generic -fasynchronous-unwind-tables -fstack-clash-protection -fcf-protection -mtls-dialect=gnu2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer  '
@@ -52,7 +52,7 @@ Executing(%build): /bin/sh -e /var/tmp/rpm-tmp.xifewt
 + RPM_EC=0
 ++ jobs -p
 + exit 0
-Executing(%install): /bin/sh -e /var/tmp/rpm-tmp.wzQhKY
+Executing(%install): /bin/sh -e /var/tmp/rpm-tmp.uMFWKd
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.4-build
 + '[' /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.4-build/BUILDROOT '!=' / ']'
@@ -115,8 +115,8 @@ Scanned 13 directories and 31 files,
                processed 0 inodes,
                0 modified (0 replaced + 0 rewritten),
                0 unsupported format, 0 errors
-Processing files: sm750hdmifb-0.6.4-1.fc43.noarch
-Executing(%doc): /bin/sh -e /var/tmp/rpm-tmp.cdcv1X
+Processing files: sm750hdmifb-0.6.4-2.fc43.noarch
+Executing(%doc): /bin/sh -e /var/tmp/rpm-tmp.UxuaxS
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.4-build
 + cd sm750hdmifb-0.6.4
@@ -133,7 +133,7 @@ Executing(%doc): /bin/sh -e /var/tmp/rpm-tmp.cdcv1X
 + RPM_EC=0
 ++ jobs -p
 + exit 0
-Provides: config(sm750hdmifb) = 0.6.4-1.fc43 sm750hdmi-dkms = 0.6.4-1.fc43 sm750hdmidrm-rgb565-dither-dkms = 0.6.4-1.fc43 sm750hdmidrm-xrgb8888-dkms = 0.6.4-1.fc43 sm750hdmifb = 0.6.4-1.fc43
+Provides: config(sm750hdmifb) = 0.6.4-2.fc43 sm750hdmi-dkms = 0.6.4-2.fc43 sm750hdmidrm-rgb565-dither-dkms = 0.6.4-2.fc43 sm750hdmidrm-xrgb8888-dkms = 0.6.4-2.fc43 sm750hdmifb = 0.6.4-2.fc43
 Requires(interp): /bin/sh /bin/sh /bin/sh
 Requires(rpmlib): rpmlib(CompressedFileNames) <= 3.0.4-1 rpmlib(FileDigests) <= 4.6.0-1 rpmlib(PayloadFilesHavePrefix) <= 4.0-1
 Requires(post): /bin/sh dkms kmod
@@ -142,9 +142,9 @@ Requires(posttrans): /bin/sh
 Requires: /usr/bin/bash
 Obsoletes: sm750hdmi-dkms < 0.6.4 sm750hdmidrm-rgb565-dither-dkms < 0.6.4 sm750hdmidrm-xrgb8888-dkms < 0.6.4
 Checking for unpackaged file(s): /usr/lib/rpm/check-files /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.4-build/BUILDROOT
-Wrote: /mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-0.6.4-1.fc43.src.rpm
-Wrote: /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.4-1.fc43.noarch.rpm
-Executing(rmbuild): /bin/sh -e /var/tmp/rpm-tmp.kgJ2Rl
+Wrote: /mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-0.6.4-2.fc43.src.rpm
+Wrote: /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.4-2.fc43.noarch.rpm
+Executing(rmbuild): /bin/sh -e /var/tmp/rpm-tmp.gwK0uN
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.4-build
 + test -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.4-build
@@ -153,7 +153,7 @@ Executing(rmbuild): /bin/sh -e /var/tmp/rpm-tmp.kgJ2Rl
 + RPM_EC=0
 ++ jobs -p
 + exit 0
-# utc: 2026-11-22T12:55:44Z
+# utc: 2026-11-22T14:10:09Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
 # command: rpmbuild -ba --nodeps --define '_topdir /mega/tmp/sm750/t6/rpmbuild' /home/coder/sm750hdmifb/packaging/sm750hdmifb-tools.spec
@@ -161,8 +161,8 @@ Executing(rmbuild): /bin/sh -e /var/tmp/rpm-tmp.kgJ2Rl
 
 --- output ---
 setting SOURCE_DATE_EPOCH=1795305600
-Executing(%mkbuilddir): /bin/sh -e /var/tmp/rpm-tmp.CWnJzi
-Executing(%prep): /bin/sh -e /var/tmp/rpm-tmp.78efRY
+Executing(%mkbuilddir): /bin/sh -e /var/tmp/rpm-tmp.WxcCpX
+Executing(%prep): /bin/sh -e /var/tmp/rpm-tmp.V4YbRe
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.4-build
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.4-build
@@ -175,7 +175,7 @@ Executing(%prep): /bin/sh -e /var/tmp/rpm-tmp.78efRY
 + RPM_EC=0
 ++ jobs -p
 + exit 0
-Executing(%build): /bin/sh -e /var/tmp/rpm-tmp.sIK9P0
+Executing(%build): /bin/sh -e /var/tmp/rpm-tmp.JvbMwT
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.4-build
 + CFLAGS='-O2 -flto=auto -ffat-lto-objects -fexceptions -g -grecord-gcc-switches -pipe -Wall -Werror=format-security -Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3 -Wp,-D_GLIBCXX_ASSERTIONS -specs=/usr/lib/rpm/redhat/redhat-hardened-cc1 -fstack-protector-strong -specs=/usr/lib/rpm/redhat/redhat-annobin-cc1  -m64 -march=x86-64 -mtune=generic -fasynchronous-unwind-tables -fstack-clash-protection -fcf-protection -mtls-dialect=gnu2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer  '
@@ -206,7 +206,7 @@ Executing(%build): /bin/sh -e /var/tmp/rpm-tmp.sIK9P0
 + RPM_EC=0
 ++ jobs -p
 + exit 0
-Executing(%install): /bin/sh -e /var/tmp/rpm-tmp.VduRnQ
+Executing(%install): /bin/sh -e /var/tmp/rpm-tmp.H2GbkR
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.4-build
 + '[' /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.4-build/BUILDROOT '!=' / ']'
@@ -259,14 +259,14 @@ Scanned 3 directories and 1 files,
                0 modified (0 replaced + 0 rewritten),
                0 unsupported format, 0 errors
 Reading /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.4-build/SPECPARTS/rpm-debuginfo.specpart
-Processing files: sm750hdmifb-tools-0.6.4-1.fc43.x86_64
-Provides: sm750hdmifb-tools = 0.6.4-1.fc43 sm750hdmifb-tools(x86-64) = 0.6.4-1.fc43
+Processing files: sm750hdmifb-tools-0.6.4-2.fc43.x86_64
+Provides: sm750hdmifb-tools = 0.6.4-2.fc43 sm750hdmifb-tools(x86-64) = 0.6.4-2.fc43
 Requires(rpmlib): rpmlib(CompressedFileNames) <= 3.0.4-1 rpmlib(FileDigests) <= 4.6.0-1 rpmlib(PayloadFilesHavePrefix) <= 4.0-1
 Requires: libc.so.6()(64bit) libc.so.6(GLIBC_2.14)(64bit) libc.so.6(GLIBC_2.2.5)(64bit) libc.so.6(GLIBC_2.3.4)(64bit) libc.so.6(GLIBC_2.33)(64bit) libc.so.6(GLIBC_2.34)(64bit) libc.so.6(GLIBC_2.38)(64bit) libc.so.6(GLIBC_2.4)(64bit) libdrm.so.2()(64bit) rtld(GNU_HASH)
 Checking for unpackaged file(s): /usr/lib/rpm/check-files /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.4-build/BUILDROOT
-Wrote: /mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-tools-0.6.4-1.fc43.src.rpm
-Wrote: /mega/tmp/sm750/t6/rpmbuild/RPMS/x86_64/sm750hdmifb-tools-0.6.4-1.fc43.x86_64.rpm
-Executing(rmbuild): /bin/sh -e /var/tmp/rpm-tmp.RlBxDf
+Wrote: /mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-tools-0.6.4-2.fc43.src.rpm
+Wrote: /mega/tmp/sm750/t6/rpmbuild/RPMS/x86_64/sm750hdmifb-tools-0.6.4-2.fc43.x86_64.rpm
+Executing(rmbuild): /bin/sh -e /var/tmp/rpm-tmp.141yMU
 + umask 022
 + cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.4-build
 + test -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.4-build

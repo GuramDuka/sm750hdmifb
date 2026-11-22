@@ -24,7 +24,7 @@
 
 Name:           sm750hdmifb
 Version:        0.6.4
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        DKMS source for the SM750G10 SiI9024A HDMI DRM-KMS driver
 License:        GPL-2.0-only
 URL:            https://github.com/KodeMunkie/sm750hdmifb
@@ -357,7 +357,22 @@ exit 0
 %doc README.md LICENSE docs/RELEASE-NOTES.md docs/TESTING.md packaging/copyright
 
 %changelog
-* Sun Nov 22 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.3-1
+* Sun Nov 22 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.4-2
+- Rebuild so this package carries the same release number as
+  sm750hdmifb-tools 0.6.4-2, which fixes the sm750-smi banner alignment. The
+  module payload is unchanged from 0.6.4-1; sm750-pkg refuses a mismatched
+  release pair, so both halves move together.
+* Sun Nov 22 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.4-1
+- Release 0.6.4: the driver publishes twelve monitoring attributes on the
+  device node (/sys/class/drm/cardN/device): mem_info_vram_total,
+  vram_total_bytes, vram_used_bytes, active_mode, active_mode_refresh_hz,
+  active_mode_pixel_clock_khz, hpd, rxsense, link_state, active_crtc,
+  vblank_count, crc_supported; the attribute group attaches before
+  drm_dev_register and every show handler is sysfs_emit with a driver-data
+  null guard; gate tests/check-sysfs-attributes.sh. The SiI9024A DDC grant
+  waits up to 2000 ms in 200 ms polls with one bus clear and one retry per
+  mode set, and the grant switch is released on every exit path; gate
+  tests/check-sii902x-recovery.sh now rejects nine planted controls.
 - Release 0.6.3: the SiI9024A readiness wait gates on the live HPD bit stable
   for 100 ms with a 500 ms budget instead of requiring the powered-receiver
   bit for 2000 ms, so a plugged but unpowered sink no longer reads as "not

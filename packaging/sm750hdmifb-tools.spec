@@ -19,7 +19,7 @@
 
 Name:           sm750hdmifb-tools
 Version:        0.6.4
-Release:        1%{?dist}
+Release:        2%{?dist}
 Summary:        Monitoring and control utility for SM750G10 HDMI cards
 License:        GPL-2.0-only
 URL:            https://github.com/KodeMunkie/sm750hdmifb
@@ -71,6 +71,9 @@ install -m 0755 tools/sm750-smi "%{buildroot}%{_bindir}/sm750-smi"
 %{_bindir}/sm750-smi
 
 %changelog
+* Sun Nov 22 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.4-2
+- Banner rows of sm750-smi pad to exactly 79 columns; the Driver Version and
+  PCI Bus Id rows printed 80 against the 79-column border.
 * Sun Nov 22 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.3-1
 - Split sm750-smi out of the noarch module package into an arch package;
   rpm cannot place an arch-dependent subpackage under a noarch parent.

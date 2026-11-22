@@ -241,3 +241,16 @@ The transcript is section 8 of `docs/evidence/runtime/28-dangling-kernel-link.tx
 
 The offline validation matrix and hardware verification steps are documented
 in [Testing and recovery](TESTING.md).
+
+## 0.6.4
+
+- The driver publishes twelve monitoring attributes on the device node
+  (/sys/class/drm/cardN/device): mem_info_vram_total, vram_total_bytes,
+  vram_used_bytes, active_mode, active_mode_refresh_hz,
+  active_mode_pixel_clock_khz, hpd, rxsense, link_state, active_crtc,
+  vblank_count, crc_supported. sm750-smi reads them, so memory, display and
+  link fields report live values instead of n/a.
+- The SiI9024A DDC grant waits up to 2000 ms in 200 ms polls with one bus
+  clear and one retry per mode set; the grant switch is released on every
+  exit path.
+- sm750-smi banner rows pad to exactly 79 columns.

@@ -1,7 +1,7 @@
-# utc: 2026-11-22T12:55:47Z
+# utc: 2026-11-22T14:10:12Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
-# command: rpm -qp --scripts /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.4-1.fc43.noarch.rpm
+# command: rpm -qp --scripts /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.4-2.fc43.noarch.rpm
 # workdir: /home/coder/sm750hdmifb
 
 --- output ---

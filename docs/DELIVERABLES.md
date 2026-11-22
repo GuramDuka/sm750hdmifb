@@ -127,7 +127,7 @@ to `src/*.c` or `src/*.h` (`docs/evidence/builds/11-warnings-scan.log`).
 ```
 
 Expected: exit 0. The script rebuilds the noarch RPM from a fresh `_topdir`,
-asserts the payload against `git ls-files` (136 payload files in the current
+asserts the payload against `git ls-files` (138 payload files in the current
 tree; the same command the script uses is `git ls-files -- . ':(exclude)docs/plan'
 ':(exclude)docs/evidence' ':(exclude)docs/images' ':(exclude)docs/notes' |
 wc -l`), the `%files` list
@@ -324,9 +324,9 @@ network access only; nothing is installed.
 ./tests/audit-release.sh
 ```
 
-Expected: `dist/sm750hdmifb_0.6.3_all.deb`, `dist/sm750hdmifb-tools_0.6.3_<arch>.deb`
+Expected: `dist/sm750hdmifb_0.6.4_all.deb`, `dist/sm750hdmifb-tools_0.6.4_<arch>.deb`
 (`<arch>` is `dpkg --print-architecture`, `amd64` here),
-`dist/sm750hdmifb-0.6.3-source.tar.gz`, `dist/SHA256SUMS` listing exactly those
+`dist/sm750hdmifb-0.6.4-source.tar.gz`, `dist/SHA256SUMS` listing exactly those
 artifacts, and `Release audit passed: .../dist/RELEASE-AUDIT.txt`.
 Prerequisite: `dpkg-deb` on `PATH` and, for the tools package, the libdrm
 development files; without them `build-package.sh` prints a skip line and still
@@ -348,8 +348,8 @@ tracked=$work/tracked
 . ./packaging/source-excludes.sh
 mapfile -t skip < <(sm750_dev_only_pathspecs)
 git ls-files -z -- . "${skip[@]}" >"$tracked"
-tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.3-source.tar.gz" \
-    --transform='s|^|sm750hdmifb-0.6.3/|' --null -T "$tracked"
+tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.4-source.tar.gz" \
+    --transform='s|^|sm750hdmifb-0.6.4/|' --null -T "$tracked"
 
 rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb.spec
 rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb-tools.spec
@@ -376,7 +376,7 @@ unless they are declared there.
 ./tests/check-rpm-dkms.sh
 ```
 
-Expected: exit 0 with the `OK:` assertions and seven `SKIP:` lines for the
+Expected: exit 0 with the `OK:` assertions and nine `SKIP:` lines for the
 root-only steps. Work directory and evidence directory default to
 `/mega/tmp/sm750/t6` and `docs/evidence/packaging/`; override with
 `SM750_RPM_WORK` and `SM750_RPM_EVIDENCE`. A sandbox `dkms` run needs a header
