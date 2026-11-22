@@ -1542,7 +1542,7 @@ static void print_banner(struct smi_ctx *c, int pretty)
 	printf("| %-75s |\n", SMI_TOOL_NAME " - Silicon Motion SM750 monitoring");
 	printf("| Driver Version: %-20s SrcVersion: %-26.26s |\n", version,
 	       srcversion);
-	printf("| PCI Bus Id: %-64.64s |\n", busid);
+	printf("| PCI Bus Id: %-63.63s |\n", busid);
 	printf("+-----------------------------------------------------------------------------+\n");
 	if (pretty && use_color)
 		printf("\033[0m");

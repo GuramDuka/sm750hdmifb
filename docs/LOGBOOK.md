@@ -3132,3 +3132,30 @@ and make crc-check all exit 0; four kernel builds exit 0.
   docs/ci/build.yml). `tests/check-sii902x-recovery.sh` self-test reports nine
   negative controls rejected; `tests/check-sysfs-attributes.sh` twelve
   attributes and five controls.
+
+
+### 2026-11-22T16:30Z | orchestrator | owner installed 0.6.4; banner alignment fixed in sm750-smi
+- Owner installed 0.6.4-1 (module RPM + tools RPM) through the refreshed
+  `sm750-pkg install`. The %posttrans purge behaved exactly as designed: the
+  stale 0.6.2 registration was removed, the `Error! sm750hdmifb/0.6.2 is
+  broken! Missing ... /var/lib/dkms/sm750hdmifb/0.6.2/source` noise was the
+  expected first attempt on a tree whose source dir was already gone, the
+  escalation then removed the broken registration tree and three dangling
+  kernel links (7.2.15-100, 7.3.3-100, 7.3.4-100), skipped 6.18.13-200 with
+  `matching kernel headers are absent`, and 0.6.4 was built, signed and
+  installed for all three kernels with `Original modules exist`. Both RPMs
+  landed: `sm750hdmifb-0.6.4-1.fc43.noarch`, `sm750hdmifb-tools-0.6.4-1.fc43.x86_64`.
+  The loaded module still reports 0.6.2 until a reload:
+  `sudo sm750-pkg reload` (reboot works too).
+- Cosmetic defect fixed while verifying: the sm750-smi banner was not
+  rectangular - the Driver Version row printed 80 columns against a 79-column
+  border because the version field was padded to 21. Both rows now pad to fit
+  79 (`tools/sm750-smi.c:1543`, `:1545`); measured: all five banner rows 79
+  columns. Gates re-run: check-sm750-smi (27 fields, 9 fixtures, 4 controls),
+  build-package, audit-release. Artifacts rebuilt:
+  `sm750hdmifb_0.6.4_all.deb` sha256
+  `85f0c22434253813445d775e02f780f4b25427abd4887f1558e8b31ebd24dc98`,
+  `sm750hdmifb-0.6.4-source.tar.gz` sha256
+  `46551a9aa21277e1e0af2152bc7dadeaa94fc7fcb10da4e46af73066bfb9ed44`,
+  `sm750hdmifb-tools_0.6.4_amd64.deb` sha256
+  `8c536e163e4baedda584c907d35bc44e20438a8830c603ba427ec9c5ac88cbec`.
