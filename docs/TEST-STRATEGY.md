@@ -95,8 +95,9 @@ exports `TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}`), never to `/tmp`.
 | S11 | In-repo `tests/check-restore-path.sh` (via `make check`) | Source-level restore-path gate: masked transition compare with re-poke, mode-derived budget, kept display-off result, terminal fail path | PASS (source gate) plus PASS on hardware 2026-11-20: 30 restore cycles, 20 mode changes, 95 enable events, zero fault lines |
 | S12 | In-repo `tests/check-test-pattern.sh` (via `make check`) | Source-level test-card gate: the three writable parameters and their defaults and clamps, the bounded painter, the rectangle writer used by both the full card and the animation tick, the pitch-padded row copy, both pixel encodings, the card elements, the disc's motion and reflection, the exact paint message and call ordering, the rotation's cancel sites and tick silence, and the CRC-ownership rules (an armed scanout CRC source owns the window; a userspace master's black frame is a picture) | PASS (source gate); eighteen planted defects rejected. Bars and the 5 s palette jump observed on the panel 2026-11-20; the animated disc is not yet observed |
 | S13 | In-repo `tests/check-rpm-dkms.sh` (outside `make check`) | Evidence-hygiene gate on the packaging transcripts: every captured command runs under `LC_ALL=C LANG=C`, and after the last transcript is written the run fails on any non-ASCII byte in `docs/evidence/packaging/0[1-6]-*.log`, printing the file and its line numbers | PASS; `plant_localized_evidence` (one injected Russian `rpmbuild` line) rejected. 01-06 regenerated ASCII-clean at 0.6.2; the frozen `0.5.9/` archive predates the fix and is not covered |
-| S14 | In-repo `tests/check-sii902x-recovery.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level A42 gate: the readiness wait accumulates the plugged bit (and accepts a stable powered receiver) inside a 500 ms budget, a timed-out TPI write is retried after a software bus clear with only `-ETIMEDOUT` recoverable, the retrying write covers the option-ROM step, the initialization register, the video block, the AVI InfoFrame and the HPD workaround but never a read, a final timeout warns with the stage name and does not fail the enable, and the EDID read is skipped while the transmitter is powered down | PASS (source gate); five planted defects rejected (readiness keyed on `RX_SENSE`, retry on `-ENXIO`, retry with no bus clear, the helper used on the EDID read, the wrapper returning the timeout). Post-fix power-cycle behaviour is not yet observed on hardware |
+| S14 | In-repo `tests/check-sii902x-recovery.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level A42 gate: the readiness wait accumulates the plugged bit (and accepts a stable powered receiver) inside a 500 ms budget, a timed-out TPI write is retried after a software bus clear with only `-ETIMEDOUT` recoverable, the retrying write covers the option-ROM step, the initialization register, the video block, the AVI InfoFrame and the HPD workaround but never a read, a final timeout warns with the stage name and does not fail the enable, and the EDID read is skipped while the transmitter is powered down | PASS (source gate); nine planted defects rejected (readiness keyed on `RX_SENSE`, retry on `-ENXIO`, retry with no bus clear, the helper used on the EDID read, the wrapper returning the timeout, a literal DDC poll interval, a raised grant budget, a third grant attempt, no per-mode-set bus clear). T53 added the DDC grant budget (200 ms poll, 2000 ms budget, one retry after a bus clear) and the per-mode-set software bus clear. Post-fix power-cycle behaviour is not yet observed on hardware |
 | S15 | In-repo `tests/check-sm750-smi.sh` (via `make check`) | Fixture-driven gate for the `sm750-smi` monitoring tool: all 27 fields resolved from synthetic sysfs/DRM trees, nine fixture shapes, `--strict` exit codes, CSV and JSON parsed by `python3`, four planted controls rejected; no GPU and no root needed | PASS (2026-11-22) |
+| S16 | In-repo `tests/check-sysfs-attributes.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the twelve monitoring attributes `sm750-smi` reads from `/sys/class/drm/cardN/device/`: one `DEVICE_ATTR_RO()` and one array entry per name, the group registered on `&pdev->dev` before `drm_dev_register()`, every show function using `dev_get_drvdata()` with a NULL guard and `sysfs_emit()` and neither sleeping nor taking a lock other than the mode lock, `clear_events = false` on the link-status read, and `vblank_count` reading DRM core's counter | PASS (2026-11-22); five planted defects rejected (renamed attribute, `clear_events` true, `msleep` in a show function, group on the DRM class device, spin lock in a show function) |
 
 ### S1: in-repo `make check`
 
@@ -528,6 +529,36 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   gate for the stated reason; the script prints the observed failure.
 - Status: PASS, `sm750-smi checks passed (27 fields, 9 fixtures, 4 planted
   controls)`. The real-run view is in the README.
+
+### S16: sysfs attribute gate
+
+- Command: `./tests/check-sysfs-attributes.sh` (called by
+  `tests/check-drm-policy.sh`, which `make check` runs). It takes an optional
+  source file and needs neither the card nor root. Scratch trees go under
+  `${TMPDIR:-/mega/tmp/sm750/tmp}`.
+- Holds: for each of the twelve names `sm750-smi` reads there is one
+  `DEVICE_ATTR_RO()` and one `&dev_attr_*.attr` array entry; the block between
+  the `BEGIN sysfs monitoring attributes` and `END sysfs monitoring attributes`
+  markers lists exactly twelve attributes; `device_add_group()` appears once and
+  is `devm_device_add_group(&pdev->dev, ...)` before
+  `drm_dev_register()`; every `<name>_show()` takes its state from
+  `dev_get_drvdata(dev)` behind an `if (!sdev)` guard, emits through
+  `sysfs_emit()`, contains no sleep helper, and takes no lock other than
+  `&sdev->mode_lock` with matched unlock count; the link-status call passes
+  `clear_events = false` and `link_state_show()` carries all four state
+  strings; `vblank_count_show()` reads `drm_crtc_vblank_count()` and the source
+  keeps no second counter; `active_crtc_show()` defaults to `-1`;
+  `crc_supported_show()` reports `SM750_CRC_SUPPORTED`, which is `1` only
+  inside the `KERNEL_VERSION(7, 0, 0)` range that registers
+  `.get_crc_sources` and has a `0` fallback.
+- Planted controls: an attribute renamed so the tool cannot find it, the
+  link-status call flipped to `clear_events = true`, `msleep()` inserted into a
+  show function, the group registered on `&sdev->drm.dev` instead of
+  `&pdev->dev`, and a spin lock taken in a show function. Each mutates a
+  temporary copy and must exit non-zero naming the defect.
+- Status: PASS, `Sysfs attribute checks passed (12 attributes, 5 planted
+  controls)`. The live attribute values are in
+  `docs/evidence/runtime/31-sysfs-attributes.txt`.
 
 ## 3. `make check`: the recipe commands
 

@@ -18,7 +18,7 @@
 #   tests/check-rpm-dkms.sh
 
 Name:           sm750hdmifb-tools
-Version:        0.6.3
+Version:        0.6.4
 Release:        1%{?dist}
 Summary:        Monitoring and control utility for SM750G10 HDMI cards
 License:        GPL-2.0-only

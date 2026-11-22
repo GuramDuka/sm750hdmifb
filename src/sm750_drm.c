@@ -20,6 +20,7 @@
 #include <linux/seq_file.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
+#include <linux/sysfs.h>
 #include <linux/uaccess.h>
 #include <linux/version.h>
 #include <linux/wait.h>
@@ -75,12 +76,12 @@ typedef struct drm_atomic_state sm750_atomic_commit;
 #define SM750_DRM_NAME "sm750hdmidrm"
 /* Keep in step with the package version in build-package.sh and dkms.conf;
  * tests/check-release-version.sh fails when the three disagree. */
-#define SM750_DRM_VERSION "0.6.3"
+#define SM750_DRM_VERSION "0.6.4"
 /* modetest reports these as the driver version, so they must track the release
  * number above; tests/check-release-version.sh fails when they drift. */
 #define DRIVER_MAJOR 0
 #define DRIVER_MINOR 6
-#define DRIVER_PATCHLEVEL 3
+#define DRIVER_PATCHLEVEL 4
 #define SM750_DRM_MAX_WIDTH 2560
 #define SM750_DRM_PHYSICAL_MAX_WIDTH 2048
 #define SM750_DRM_PLL PRIMARY_PLL
@@ -4695,6 +4696,283 @@ static void sm750_destroy_shadow_workqueue(void *data)
 	sdev->shadow_workqueue = NULL;
 }
 
+/*
+ * Monitoring attributes for tools/sm750-smi, published on the PCI device so
+ * they appear as /sys/class/drm/cardN/device/<name>.  The tool falls back to
+ * libdrm, debugfs or n/a when an attribute is absent, so an older module
+ * still works.
+ *
+ * hpd, rxsense and link_state read the SiI9024A interrupt status over the
+ * bit-banged i2c bus: two register reads, roughly a millisecond, and they
+ * never clear the latched event bits (clear_events is false).  They are for a
+ * monitoring poll, not for a tight loop.
+ *
+ * tests/check-sysfs-attributes.sh checks the block between the two marker
+ * lines; keep the markers and the DEVICE_ATTR_RO names in step with it.
+ */
+/* BEGIN sysfs monitoring attributes */
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
+/* sm750_crtc_funcs registers .get_crc_sources on this kernel range. */
+#define SM750_CRC_SUPPORTED 1
+#else
+#define SM750_CRC_SUPPORTED 0
+#endif
+
+static ssize_t mem_info_vram_total_show(struct device *dev,
+					struct device_attribute *attr,
+					char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+
+	if (!sdev)
+		return -ENODEV;
+	return sysfs_emit(buf, "%u\n", sdev->vram_size);
+}
+static DEVICE_ATTR_RO(mem_info_vram_total);
+
+static ssize_t vram_total_bytes_show(struct device *dev,
+				     struct device_attribute *attr, char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+
+	if (!sdev)
+		return -ENODEV;
+	return sysfs_emit(buf, "%u\n", sdev->vram_size);
+}
+static DEVICE_ATTR_RO(vram_total_bytes);
+
+/*
+ * Driver-reserved VRAM, not total TTM usage: the shadow front buffer and the
+ * backbuffer are only owned by the driver on the shadow path (the direct path
+ * scans a userspace GEM framebuffer), plus the hardware cursor buffer and the
+ * DMA1 test buffer.  An exact VRAM-manager figure is not available on the
+ * shadow path, which has no vram_mm helper at all.
+ */
+static ssize_t vram_used_bytes_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+	u64 used = 0;
+
+	if (!sdev)
+		return -ENODEV;
+	mutex_lock(&sdev->mode_lock);
+	if (sdev->shadow_scanout && READ_ONCE(sdev->pipe.crtc.enabled))
+		used += READ_ONCE(sdev->scanout_frame_size);
+	if (READ_ONCE(sdev->backbuffer_ready))
+		used += READ_ONCE(sdev->scanout_frame_size);
+	if (READ_ONCE(sdev->hardware_cursor))
+		used += SM750_DRM_CURSOR_SIZE;
+	if (READ_ONCE(sdev->shadow_dma_enabled))
+		used += SM750_DRM_DMA_TEST_SIZE;
+	mutex_unlock(&sdev->mode_lock);
+	/*
+	 * The 256-byte DMA test buffer is carved below cursor_offset without
+	 * shrinking the managed range, so the sum can nominally exceed
+	 * vram_size by that much; clamp so free-memory arithmetic stays sane.
+	 */
+	return sysfs_emit(buf, "%llu\n", min_t(u64, used, sdev->vram_size));
+}
+static DEVICE_ATTR_RO(vram_used_bytes);
+
+static ssize_t active_mode_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+	struct drm_crtc *crtc;
+	u32 width = 0;
+	u32 height = 0;
+
+	if (!sdev)
+		return -ENODEV;
+	crtc = &sdev->pipe.crtc;
+	mutex_lock(&sdev->mode_lock);
+	if (READ_ONCE(crtc->enabled)) {
+		width = crtc->mode.hdisplay;
+		height = crtc->mode.vdisplay;
+	}
+	mutex_unlock(&sdev->mode_lock);
+	if (!width || !height)
+		return sysfs_emit(buf, "\n");
+	return sysfs_emit(buf, "%ux%u\n", width, height);
+}
+static DEVICE_ATTR_RO(active_mode);
+
+static ssize_t active_mode_refresh_hz_show(struct device *dev,
+					   struct device_attribute *attr,
+					   char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+	struct drm_crtc *crtc;
+	int refresh = 0;
+
+	if (!sdev)
+		return -ENODEV;
+	crtc = &sdev->pipe.crtc;
+	mutex_lock(&sdev->mode_lock);
+	if (READ_ONCE(crtc->enabled) && crtc->mode.hdisplay)
+		refresh = drm_mode_vrefresh(&crtc->mode);
+	mutex_unlock(&sdev->mode_lock);
+	if (refresh <= 0)
+		return sysfs_emit(buf, "\n");
+	/* drm_mode_vrefresh() is integral; two decimals keep strtod() happy. */
+	return sysfs_emit(buf, "%d.00\n", refresh);
+}
+static DEVICE_ATTR_RO(active_mode_refresh_hz);
+
+static ssize_t active_mode_pixel_clock_khz_show(struct device *dev,
+						struct device_attribute *attr,
+						char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+	struct drm_crtc *crtc;
+	unsigned int clock = 0;
+
+	if (!sdev)
+		return -ENODEV;
+	crtc = &sdev->pipe.crtc;
+	mutex_lock(&sdev->mode_lock);
+	if (READ_ONCE(crtc->enabled) && crtc->mode.hdisplay)
+		clock = crtc->mode.clock;
+	mutex_unlock(&sdev->mode_lock);
+	if (!clock)
+		return sysfs_emit(buf, "\n");
+	return sysfs_emit(buf, "%u\n", clock);
+}
+static DEVICE_ATTR_RO(active_mode_pixel_clock_khz);
+
+static int sm750_sysfs_link_status(struct device *dev,
+				   struct sm750_drm_device *sdev,
+				   bool *hpd, bool *rxsense)
+{
+	bool event = false;
+	int ret;
+
+	mutex_lock(&sdev->mode_lock);
+	ret = sm750_sii902x_get_link_status(hpd, rxsense, &event, false);
+	mutex_unlock(&sdev->mode_lock);
+	if (ret)
+		dev_dbg_once(dev, "link status read failed: %d\n", ret);
+	return ret;
+}
+
+static ssize_t hpd_show(struct device *dev, struct device_attribute *attr,
+			char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+	bool hpd = false;
+	bool rxsense = false;
+
+	if (!sdev)
+		return -ENODEV;
+	if (sm750_sysfs_link_status(dev, sdev, &hpd, &rxsense))
+		return sysfs_emit(buf, "-1\n");
+	return sysfs_emit(buf, "%u\n", hpd ? 1U : 0U);
+}
+static DEVICE_ATTR_RO(hpd);
+
+static ssize_t rxsense_show(struct device *dev, struct device_attribute *attr,
+			    char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+	bool hpd = false;
+	bool rxsense = false;
+
+	if (!sdev)
+		return -ENODEV;
+	if (sm750_sysfs_link_status(dev, sdev, &hpd, &rxsense))
+		return sysfs_emit(buf, "-1\n");
+	return sysfs_emit(buf, "%u\n", rxsense ? 1U : 0U);
+}
+static DEVICE_ATTR_RO(rxsense);
+
+static ssize_t link_state_show(struct device *dev,
+			       struct device_attribute *attr, char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+	bool hpd = false;
+	bool rxsense = false;
+
+	if (!sdev)
+		return -ENODEV;
+	if (sm750_sysfs_link_status(dev, sdev, &hpd, &rxsense))
+		return sysfs_emit(buf, "unknown\n");
+	if (hpd && rxsense)
+		return sysfs_emit(buf, "connected\n");
+	if (rxsense)
+		return sysfs_emit(buf, "receiver-only\n");
+	if (hpd)
+		return sysfs_emit(buf, "hpd-only\n");
+	return sysfs_emit(buf, "disconnected\n");
+}
+static DEVICE_ATTR_RO(link_state);
+
+static ssize_t active_crtc_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+	struct drm_crtc *crtc;
+	int index = -1;
+
+	if (!sdev)
+		return -ENODEV;
+	crtc = &sdev->pipe.crtc;
+	mutex_lock(&sdev->mode_lock);
+	if (READ_ONCE(crtc->enabled))
+		index = drm_crtc_index(crtc);
+	mutex_unlock(&sdev->mode_lock);
+	return sysfs_emit(buf, "%d\n", index);
+}
+static DEVICE_ATTR_RO(active_crtc);
+
+/* The vblank timer calls drm_crtc_handle_vblank(); this is that counter. */
+static ssize_t vblank_count_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+	u64 count;
+
+	if (!sdev)
+		return -ENODEV;
+	count = drm_crtc_vblank_count(&sdev->pipe.crtc);
+	return sysfs_emit(buf, "%llu\n", count);
+}
+static DEVICE_ATTR_RO(vblank_count);
+
+static ssize_t crc_supported_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+
+	if (!sdev)
+		return -ENODEV;
+	return sysfs_emit(buf, "%d\n", SM750_CRC_SUPPORTED);
+}
+static DEVICE_ATTR_RO(crc_supported);
+
+static struct attribute *sm750_attrs[] = {
+	&dev_attr_mem_info_vram_total.attr,
+	&dev_attr_vram_total_bytes.attr,
+	&dev_attr_vram_used_bytes.attr,
+	&dev_attr_active_mode.attr,
+	&dev_attr_active_mode_refresh_hz.attr,
+	&dev_attr_active_mode_pixel_clock_khz.attr,
+	&dev_attr_hpd.attr,
+	&dev_attr_rxsense.attr,
+	&dev_attr_link_state.attr,
+	&dev_attr_active_crtc.attr,
+	&dev_attr_vblank_count.attr,
+	&dev_attr_crc_supported.attr,
+	NULL,
+};
+
+static const struct attribute_group sm750_attr_group = {
+	.attrs = sm750_attrs,
+};
+
+/* END sysfs monitoring attributes */
+
 static int sm750_pci_probe(struct pci_dev *pdev,
 			   const struct pci_device_id *id)
 {
@@ -4952,6 +5230,13 @@ static int sm750_pci_probe(struct pci_dev *pdev,
 		return ret;
 
 	pci_set_drvdata(pdev, sdev);
+	/*
+	 * pdev->dev is the /sys/class/drm/cardN/device node, which is where
+	 * tools/sm750-smi looks; the group must not go on the DRM class device.
+	 */
+	ret = devm_device_add_group(&pdev->dev, &sm750_attr_group);
+	if (ret)
+		return ret;
 	ret = drm_dev_register(&sdev->drm, 0);
 	if (ret)
 		return ret;

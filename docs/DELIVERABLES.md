@@ -127,8 +127,8 @@ to `src/*.c` or `src/*.h` (`docs/evidence/builds/11-warnings-scan.log`).
 ```
 
 Expected: exit 0. The script rebuilds the noarch RPM from a fresh `_topdir`,
-asserts the payload against `git ls-files` (131 files in the current tree; the
-same command the script uses is `git ls-files -- . ':(exclude)docs/plan'
+asserts the payload against `git ls-files` (136 payload files in the current
+tree; the same command the script uses is `git ls-files -- . ':(exclude)docs/plan'
 ':(exclude)docs/evidence' ':(exclude)docs/images' ':(exclude)docs/notes' |
 wc -l`), the `%files` list
 (36 files), the scriptlets and the dependencies, runs the `%posttrans` branch
@@ -435,6 +435,7 @@ list.
 | `tools/sm750-restore-cycle.sh` | T32 root-only stress harness for the restore path: reloads the module after a vermagic guard, repeats the client-exit restore trigger with `build/scanout-pattern` plus an optional `modetest` mode change, and fails on any new `did not latch` / `panel did not acknowledge` / `failed to enable HDMI mode` line. Exit 0 clean, 1 environment, 2 no scanout readback, 3 failure seen; 208 lines. Not yet run on the card |
 | `tests/check-sm750-smi.sh` | Fixture-driven gate for `tools/sm750-smi`: rebuilds the tool, asserts all 27 fields are listed and queryable, drives nine synthetic sysfs/DRM trees (full data, absent debugfs, non-root reason, absent driver attributes, disconnected connector, zero modes, truncated and malformed attributes, missing card node), checks `--strict` exit 0/3, parses CSV and JSON, and rejects four planted controls. No GPU and no root needed; the 18th recipe command of `make check` |
 | `tools/sm750-smi.c` | the `sm750-smi` monitoring and control utility: 27 fields from sysfs, libdrm and optional debugfs, `--query`, `--format=table|csv|csv,noheader|json`, `--list-fields`, `--loop`, `--strict`, `--sysfs-root`/`--card`/`--proc-root` for fixtures, man page in `--help`; built by `make tools`, installed by `make install-tools` as `/usr/local/sbin/sm750-smi`, and shipped by the `sm750hdmifb-tools` package as `/usr/bin/sm750-smi` (`packaging/sm750hdmifb-tools.spec`, `build-package.sh`) |
+| `tests/check-sysfs-attributes.sh` | T52 source-level gate (part of `make check` through `tests/check-drm-policy.sh`): the twelve monitoring attributes `sm750-smi` reads from `/sys/class/drm/cardN/device/` exist as `DEVICE_ATTR_RO()` plus array entries and are published by `sm750_attr_group` on `&pdev->dev` before `drm_dev_register()`; every show function uses `dev_get_drvdata()` behind a NULL guard and `sysfs_emit()`, sleeps nowhere and takes no lock other than the mode lock; the link-status read passes `clear_events = false`; `vblank_count` reads DRM core's counter and `crc_supported` follows the kernel range that registers `.get_crc_sources`. Rejects five planted defects |
 | `tools/sm750-console.sh` | T37 console helper, installed as `/usr/local/sbin/sm750-console` (root only): `show` prints the active tty, `KDGETMODE` of `/dev/tty0` decoded as `KD_TEXT`/`KD_GRAPHICS`/`KD_KDWANTED`, the `vtconsole` bind state, `PANEL_FB_ADDRESS` and the `sm750_scanout` offset/nonzero/crc32; `text [N]` runs `chvt` (default 2) and prints the same status; `graphics` runs `chvt 1`. Usage errors exit 2 |
 
 ### 5.3 Specification archive

@@ -65,6 +65,14 @@
 /* A timeout means the sink powered up mid-transfer: clear and repeat. */
 #define SII902X_WRITE_ATTEMPTS		3
 #define SII902X_RECOVER_DELAY_US	10000
+/*
+ * The vendor GetDDC_Access() polls 50 x 200 ms (10 s). A mode set runs under
+ * mode_lock, so the total is capped at 2000 ms instead: 10 s of polling would
+ * stall every other atomic commit. One bus clear and one repeat, never more.
+ */
+#define SII902X_DDC_GRANT_POLL_MS	200
+#define SII902X_DDC_GRANT_BUDGET_MS	2000
+#define SII902X_DDC_GRANT_ATTEMPTS	2
 
 static bool sii902x_use_hardware_i2c;
 static bool sii902x_force_dvi;
@@ -863,6 +871,24 @@ int sm750_sii902x_begin_mode(struct device *dev, bool use_hardware_i2c,
 			    unsigned char scl_gpio, unsigned char sda_gpio)
 {
 	unsigned char chipid[3];
+	long bus_ret;
+
+	/*
+	 * The vendor swI2CInit() clocks a possibly stranded slave nine times
+	 * unconditionally; apply that per mode set. Nine clocks cost
+	 * microseconds and unwedge a bus left mid-transaction by an earlier
+	 * cycle, far cheaper than a failed EDID read.
+	 */
+	if (!use_hardware_i2c) {
+		bus_ret = sm750_sw_i2c_recover_bus();
+		if (bus_ret)
+			dev_warn(dev,
+				 "SiI9024A pre-mode bus clear failed: %ld; continuing\n",
+				 bus_ret);
+		else
+			dev_dbg(dev,
+				"SiI9024A pre-mode bus clear: lines idle\n");
+	}
 
 	return sii902x_begin_control(dev, use_hardware_i2c, scl_gpio,
 				      sda_gpio, chipid);
@@ -1077,7 +1103,7 @@ int sm750_sii902x_read_edid(struct device *dev, unsigned char *edid,
 			   unsigned int length)
 {
 	unsigned char saved, value, checksum, int_status = 0xff;
-	unsigned int blocks_read = 1, extension_count, i;
+	unsigned int blocks_read = 1, extension_count, i, attempt;
 	bool cta = false, hdmi = false;
 	int ret, last_read_ret = 0, release_ret = -ETIMEDOUT;
 
@@ -1103,25 +1129,42 @@ int sm750_sii902x_read_edid(struct device *dev, unsigned char *edid,
 	dev_dbg(dev, "DDC request: system-control=%02x interrupt-status=%02x\n",
 		 saved, int_status);
 
-	/* Request, wait for grant, then explicitly lock host ownership. */
-	value = saved | SII902X_SYS_CTRL_DDC_REQUEST;
-	ret = sii902x_write(SII902X_SYS_CTRL_DATA, value);
-	if (ret)
-		return ret;
-	for (i = 0; i < 50; i++) {
-		ret = sii902x_read(SII902X_SYS_CTRL_DATA, &value);
-		last_read_ret = ret;
+	/*
+	 * Request, wait for grant, then explicitly lock host ownership. A
+	 * timeout means the bus may be wedged: clear it once and repeat the
+	 * whole request once. Every exit after the request goes through the
+	 * release path, so the DDC switch is never left closed.
+	 */
+	for (attempt = 1; attempt <= SII902X_DDC_GRANT_ATTEMPTS; attempt++) {
+		value = saved | SII902X_SYS_CTRL_DDC_REQUEST;
+		ret = sii902x_write(SII902X_SYS_CTRL_DATA, value);
+		if (ret)
+			break;
+		for (i = 0;
+		     i < SII902X_DDC_GRANT_BUDGET_MS /
+			 SII902X_DDC_GRANT_POLL_MS; i++) {
+			ret = sii902x_read(SII902X_SYS_CTRL_DATA, &value);
+			last_read_ret = ret;
+			if (!ret && (value & SII902X_SYS_CTRL_DDC_GRANT))
+				break;
+			msleep(SII902X_DDC_GRANT_POLL_MS);
+		}
 		if (!ret && (value & SII902X_SYS_CTRL_DDC_GRANT))
 			break;
-		msleep(20);
-	}
-	if (i == 50) {
 		dev_err(dev,
 			"DDC grant timeout: last-read=%d system-control=%02x\n",
 			last_read_ret, value);
 		ret = -ETIMEDOUT;
-		goto release;
+		if (attempt == SII902X_DDC_GRANT_ATTEMPTS ||
+		    sii902x_use_hardware_i2c)
+			break;
+		dev_warn(dev,
+			 "SiI9024A DDC grant timed out (attempt %u of %u); clearing the bus and retrying\n",
+			 attempt, SII902X_DDC_GRANT_ATTEMPTS);
+		sm750_sw_i2c_recover_bus();
 	}
+	if (ret)
+		goto release;
 	dev_dbg(dev, "DDC granted: system-control=%02x\n", value);
 
 	/* Preserve all unrelated system-control bits while closing the switch. */

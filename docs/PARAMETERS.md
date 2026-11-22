@@ -86,3 +86,32 @@ make \
 ```
 
 `SM750_DRM_SCANOUT_DEFAULT` also accepts `xrgb8888` and `rgb565`.
+
+## Sysfs attributes
+
+These are not module parameters and are not writable. Since 0.6.4 the driver
+publishes twelve read-only monitoring attributes on the PCI device, so they
+appear as `/sys/class/drm/cardN/device/<name>`. They exist for
+`tools/sm750-smi`; the tool keeps its libdrm, debugfs and `n/a` fallbacks, so
+an older module still works. Format is what `sysfs_emit()` writes, one value
+per file.
+
+| Attribute | Format | Meaning |
+|---|---|---|
+| `mem_info_vram_total` | decimal bytes | Total VRAM. Same value as `vram_total_bytes`; the tool tries both names. |
+| `vram_total_bytes` | decimal bytes | Total VRAM. |
+| `vram_used_bytes` | decimal bytes | VRAM the driver reserves: the shadow front buffer, the staged backbuffer, the hardware cursor buffer and the DMA1 test buffer. Not total TTM usage; an exact VRAM-manager figure is not available on the shadow path. |
+| `active_mode` | `WxH`, or empty | Active pipe's `hdisplay`x`vdisplay`. Empty when no pipe is enabled, which makes the tool fall back to the connector's modes list. |
+| `active_mode_refresh_hz` | `NN.NN`, or empty | `drm_mode_vrefresh()` of the active mode, two decimals. |
+| `active_mode_pixel_clock_khz` | decimal kHz, or empty | `mode->clock` of the active mode. |
+| `hpd` | `0`, `1` or `-1` | SiI9024A hot-plug-detect bit. `-1` when the transmitter read fails. |
+| `rxsense` | `0`, `1` or `-1` | SiI9024A receiver-sense bit. `-1` when the transmitter read fails. |
+| `link_state` | `connected`, `receiver-only`, `hpd-only`, `disconnected`, or `unknown` | Derived from the same two bits. `unknown` when the read fails. |
+| `active_crtc` | decimal index, or `-1` | Index of the enabled CRTC. `-1` when no pipe is enabled. |
+| `vblank_count` | decimal | DRM core's vblank counter for the pipe, the one `drm_crtc_handle_vblank()` advances. |
+| `crc_supported` | `0` or `1` | `1` only on kernels where the driver registers `.get_crc_sources` (`7.0.0` and later). |
+
+`hpd`, `rxsense` and `link_state` read the transmitter's interrupt status over
+the bit-banged i2c bus: two register reads, roughly a millisecond. They never
+clear the latched event bits, so a monitoring read cannot consume a link event,
+but they are not suitable for a tight polling loop.

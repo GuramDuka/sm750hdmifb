@@ -249,8 +249,15 @@ test "$stage_count" -ge 6 || {
 ./tests/check-scratch-policy.sh
 # A42: the SiI9024A readiness gate watches HPD (0x3d bit 2) with a 500 ms
 # budget and accepts a powered receiver, a timed-out TPI write is retried after
-# a bus clear without failing the enable, and the EDID read is skipped while
-# the transmitter is powered down. Source-level, with its own five
-# planted-defect controls.
+# a bus clear without failing the enable, the EDID read is skipped while the
+# transmitter is powered down, the DDC grant wait polls every 200 ms inside a
+# 2000 ms budget with one retry, and every mode set clears the software bus
+# first. Source-level, with its own nine planted-defect controls.
 ./tests/check-sii902x-recovery.sh
+# T52: the twelve monitoring attributes sm750-smi reads from
+# /sys/class/drm/cardN/device/ (names, group on the PCI device before
+# drm_dev_register, sysfs_emit and no sleep in a show function, clear_events
+# false on the link-status read). Source-level, with its own five
+# planted-defect controls.
+./tests/check-sysfs-attributes.sh "$source_file"
 echo "DRM mode policy checks passed"

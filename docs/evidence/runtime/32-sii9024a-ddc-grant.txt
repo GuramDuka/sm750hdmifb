@@ -1,0 +1,261 @@
+T53 - SiI9024A DDC grant timing and per-mode-set bus clear
+===========================================================
+
+Actor: implementation subagent (T53).
+Date: 2026-11-22 (UTC).
+Tree: /home/coder/sm750hdmifb, HEAD ddd8500, version 0.6.3, working tree
+changes in src/sii902x.c and tests/check-sii902x-recovery.sh, no commit.
+Host: Fedora 43, kernel 7.3.4-100.fc43.x86_64, PCB with SM750 + SiI9024A.
+Scope: source change only. No module was built, loaded or exercised for this
+transcript; the build below is the compile-and-gate run of `make check`, which
+builds the module but does not load it.
+
+1. Defect 1: the DDC grant budget was 20x too short
+----------------------------------------------------
+Before (HEAD ddd8500, src/sii902x.c:1106-1125):
+
+  /* Request, wait for grant, then explicitly lock host ownership. */
+  value = saved | SII902X_SYS_CTRL_DDC_REQUEST;
+  ret = sii902x_write(SII902X_SYS_CTRL_DATA, value);
+  if (ret)
+          return ret;
+  for (i = 0; i < 50; i++) {
+          ret = sii902x_read(SII902X_SYS_CTRL_DATA, &value);
+          last_read_ret = ret;
+          if (!ret && (value & SII902X_SYS_CTRL_DDC_GRANT))
+                  break;
+          msleep(20);
+  }
+  if (i == 50) {
+          dev_err(dev,
+                  "DDC grant timeout: last-read=%d system-control=%02x\n",
+                  last_read_ret, value);
+          ret = -ETIMEDOUT;
+          goto release;
+  }
+
+That is 50 reads spaced 20 ms apart: a 1000 ms ceiling, and the last read
+happens at t=980 ms. The vendor reference GetDDC_Access() in the DDK drop
+polls 50 times at 200 ms, so a sink that grants after 300-800 ms is polled
+15-40 times here, and every poll is a software bit-bang transaction that can
+itself time out.
+
+2. Defect 1: the change
+-----------------------
+Constants (src/sii902x.c:69-75):
+
+  /*
+   * The vendor GetDDC_Access() polls 50 x 200 ms (10 s). A mode set runs under
+   * mode_lock, so the total is capped at 2000 ms instead: 10 s of polling would
+   * stall every other atomic commit. One bus clear and one repeat, never more.
+   */
+  #define SII902X_DDC_GRANT_POLL_MS     200
+  #define SII902X_DDC_GRANT_BUDGET_MS   2000
+  #define SII902X_DDC_GRANT_ATTEMPTS    2
+
+Values: poll 200 ms, budget 2000 ms, attempts 2 (the first request plus one
+retry). The 2000 ms cap is deliberate and is not the vendor 10000 ms: the
+grant wait runs inside the mode set under mode_lock, so 10 s of polling would
+stall every other atomic commit.
+
+The loop (comment at src/sii902x.c:1132-1137, loop at 1138-1168):
+
+  for (attempt = 1; attempt <= SII902X_DDC_GRANT_ATTEMPTS; attempt++) {
+          value = saved | SII902X_SYS_CTRL_DDC_REQUEST;
+          ret = sii902x_write(SII902X_SYS_CTRL_DATA, value);
+          if (ret)
+                  break;
+          for (i = 0;
+               i < SII902X_DDC_GRANT_BUDGET_MS /
+                   SII902X_DDC_GRANT_POLL_MS; i++) {
+                  ret = sii902x_read(SII902X_SYS_CTRL_DATA, &value);
+                  last_read_ret = ret;
+                  if (!ret && (value & SII902X_SYS_CTRL_DDC_GRANT))
+                          break;
+                  msleep(SII902X_DDC_GRANT_POLL_MS);
+          }
+          if (!ret && (value & SII902X_SYS_CTRL_DDC_GRANT))
+                  break;
+          dev_err(dev,
+                  "DDC grant timeout: last-read=%d system-control=%02x\n",
+                  last_read_ret, value);
+          ret = -ETIMEDOUT;
+          if (attempt == SII902X_DDC_GRANT_ATTEMPTS ||
+              sii902x_use_hardware_i2c)
+                  break;
+          dev_warn(dev,
+                   "SiI9024A DDC grant timed out (attempt %u of %u); clearing the bus and retrying\n",
+                   attempt, SII902X_DDC_GRANT_ATTEMPTS);
+          sm750_sw_i2c_recover_bus();
+  }
+  if (ret)
+          goto release;
+
+The timeout line keeps its exact wording, so the existing evidence greps for
+"DDC grant timeout: last-read=%d system-control=%02x" still match. The bus
+clear runs only on the software path (the retry is skipped entirely when
+sii902x_use_hardware_i2c is set), and the retry is bounded by
+SII902X_DDC_GRANT_ATTEMPTS = 2, so the request is never repeated more than
+once.
+
+3. Poll counts for the two reference sinks
+------------------------------------------
+Reads occur at t=0 and then once per poll interval; a grant at latency L that
+is a multiple of the interval is seen on read L/interval + 1.
+
+  Sink grants at   Before (20 ms, 50 reads)        After (200 ms, 10 reads)
+  200 ms           11 reads                        2 reads
+  1000 ms          not observed: last read at     6 reads
+                   t=980, then timeout at 1000 ms
+  1800 ms          not observed                    10 reads (last at t=1800)
+  2000 ms          not observed                    not observed; timeout
+
+So a 200 ms-grant sink needs 2 reads instead of 11, and a 1 s-grant sink needs
+6 reads instead of 50 (the old loop could not observe a 1 s grant at all).
+Each read is one SYS_CTRL write plus a repeated-start read on the bit-banged
+bus; the old path issued 50 of them per EDID attempt, the new path at most 10
+per attempt.
+
+The observable ceiling is 1800 ms of sink latency, not 2000 ms, because the
+tenth read happens at t=1800 and the loop then sleeps one final interval
+before the attempt is declared timed out. A sink that grants between 1800 ms
+and 2000 ms is reported as a timeout.
+
+4. Worst-case wall time of the whole EDID path
+----------------------------------------------
+Grant phase, both attempts timing out:
+
+  2 attempts x 10 x 200 ms of msleep           4000 ms
+  2 x (1 write + 10 reads) register transfers  bit-bang, tens of microseconds
+  1 bus clear (up to 9 SCL clocks + STOP)      microseconds
+
+Release path (src/sii902x.c:1190-1214), worst case 50 iterations of
+udelay(30) + a SYS_CTRL write + read + msleep(1), roughly 100 ms; a normal
+release succeeds on the first iteration in about 30 us plus two transfers.
+
+Worst case total: about 4.1 s, and in that case the 256-byte EDID block read
+never runs because the grant was never obtained. For comparison the old worst
+case was 50 x 20 ms = 1000 ms plus the release retries, but it could not
+observe a 1 s grant at all.
+
+5. The DDC switch is released on every exit
+-------------------------------------------
+After the DDC request there are exactly three ways out of the grant/read
+section, and all three reach the release label:
+
+  - grant timeout on the final attempt: src/sii902x.c:1166-1167
+    ("if (ret)" / "goto release;"),
+  - the ownership write failing: src/sii902x.c:1171-1173
+    ("if (ret)" / "goto release;"),
+  - a successful read falls through the end of the read block into the
+    release label.
+
+The label itself (src/sii902x.c:1190) is unconditional: it rebuilds the saved
+system-control value with both DDC bits cleared (src/sii902x.c:1195-1196) and
+loops until the transmitter reports the switch open, returning an error only
+if it never does. The only returns that bypass it are the ones before the DDC
+request is made (no saved value read, or the transmitter is powered down), so
+no exit after the switch is closed can skip it.
+
+6. Defect 2: no bus clear per mode set
+--------------------------------------
+Before (HEAD ddd8500, src/sii902x.c:862-869):
+
+  int sm750_sii902x_begin_mode(struct device *dev, bool use_hardware_i2c,
+                              unsigned char scl_gpio, unsigned char sda_gpio)
+  {
+          unsigned char chipid[3];
+
+          return sii902x_begin_control(dev, use_hardware_i2c, scl_gpio,
+                                        sda_gpio, chipid);
+  }
+
+After (src/sii902x.c:870-895):
+
+  int sm750_sii902x_begin_mode(struct device *dev, bool use_hardware_i2c,
+                              unsigned char scl_gpio, unsigned char sda_gpio)
+  {
+          unsigned char chipid[3];
+          long bus_ret;
+
+          /*
+           * The vendor swI2CInit() clocks a possibly stranded slave nine times
+           * unconditionally; apply that per mode set. Nine clocks cost
+           * microseconds and unwedge a bus left mid-transaction by an earlier
+           * cycle, far cheaper than a failed EDID read.
+           */
+          if (!use_hardware_i2c) {
+                  bus_ret = sm750_sw_i2c_recover_bus();
+                  if (bus_ret)
+                          dev_warn(dev,
+                                   "SiI9024A pre-mode bus clear failed: %ld; continuing\n",
+                                   bus_ret);
+                  else
+                          dev_dbg(dev,
+                                  "SiI9024A pre-mode bus clear: lines idle\n");
+          }
+
+          return sii902x_begin_control(dev, use_hardware_i2c, scl_gpio,
+                                        sda_gpio, chipid);
+  }
+
+The clear is unconditional on the software path, runs before any transaction
+of the mode set, logs dev_dbg on success and dev_warn with the return value on
+failure, and never aborts the mode set.
+
+Honest scope note: on the current call sequence this clear is a second clear.
+sii902x_begin_control() calls sii902x_init_control_bus() (src/sii902x.c:783),
+which calls sm750_sw_i2c_init() (src/sii902x.c:763), and that function already
+returns sm750_sw_i2c_recover_bus() (src/ddk750_swi2c.c:457); the SM750LE
+variant issues nine sw_i2c_stop() clocks itself (src/ddk750_swi2c.c:403-404).
+The new call makes the vendor swI2CInit() behaviour explicit at the start of
+begin_mode and independent of what the bus init does, at the cost of nine
+extra clocks; it does not remove any existing recovery. No behaviour change
+was measured on hardware.
+
+7. Gate
+-------
+tests/check-sii902x-recovery.sh now has nine planted controls, each rejected
+by name:
+
+  rsen_gate, enxio_retry, no_bus_clear, retry_on_read, abort_on_timeout
+    (the five pre-existing controls, unchanged),
+  literal_poll      - msleep(SII902X_DDC_GRANT_POLL_MS) reverted to msleep(20),
+  budget_raise      - SII902X_DDC_GRANT_BUDGET_MS raised to 10000,
+  third_attempt     - SII902X_DDC_GRANT_ATTEMPTS raised to 3,
+  no_mode_clear     - the per-mode-set bus clear deleted from begin_mode.
+
+The script is still invoked from tests/check-drm-policy.sh:255, so
+`make check` runs it.
+
+8. What was NOT observed on hardware
+------------------------------------
+  - No module build was installed or loaded for this change, and no mode set
+    or EDID read was performed. There is no hardware observation in this
+    transcript.
+  - The host monitor grants DDC quickly, so the retry path (a bus clear after
+    a grant timeout) is unlikely to trigger and was not exercised. The bus
+    clear itself is only proven to run by the source gate.
+  - The actual DDC grant latency of any sink was not measured. The 200 ms
+    poll and the 1800 ms observable ceiling are arithmetic, not measurement.
+  - A sink that needs more than 1800-2000 ms is now reported as a timeout
+    where the vendor's 10 s reference would still wait. Whether any sink on
+    this board falls in that window is unknown.
+  - Whether clearing the bus actually unwedges a real sink left mid-transaction
+    is not observed; the claim rests on the vendor swI2CInit() behaviour and
+    on the existing timeout-recovery path (docs/evidence/runtime/
+    30-sii9024a-readiness-and-timeout.txt), not on a new capture.
+  - The per-mode-set clear is a duplicate of the clear already performed by
+    sm750_sw_i2c_init() on this call sequence; no log line from it has been
+    seen on hardware (it is dev_dbg and dev_warn only).
+
+9. Verification
+---------------
+  make CC=/usr/bin/gcc check                      exit 0
+  ./tests/check-sii902x-recovery.sh               exit 0 (nine controls)
+  bash -n tests/check-sii902x-recovery.sh         exit 0
+  git diff --check                                exit 0
+  LC_ALL=C grep -cP '[^\x00-\x7F]' on the three files   0 each
+
+The make run used the rootless libdrm tree at /mega/tmp/sm750/t3/libdrm as
+described in docs/ENVIRONMENT.md section 4.

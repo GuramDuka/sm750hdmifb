@@ -1,6 +1,35 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Release notes
 
+## 0.6.4 - Sysfs attributes for sm750-smi
+
+- **`sm750-smi` reads the driver instead of guessing.** The module now
+  publishes twelve monitoring attributes on the PCI device, so they appear as
+  `/sys/class/drm/cardN/device/<name>`: `mem_info_vram_total`,
+  `vram_total_bytes`, `vram_used_bytes`, `active_mode`,
+  `active_mode_refresh_hz`, `active_mode_pixel_clock_khz`, `hpd`, `rxsense`,
+  `link_state`, `active_crtc`, `vblank_count` and `crc_supported`. The
+  `memory.*`, `display.hpd`, `display.rxsense`, `display.link`,
+  `crtc.index`, `vblank.count` and `crc.support` rows are live instead of
+  `n/a`; `display.mode`, `display.refresh_hz` and
+  `display.pixel_clock_khz` prefer the driver's view of the active pipe. The
+  tool's libdrm, debugfs and `n/a` fallbacks stay, so an older module is still
+  picked up with no rebuild. Gate: `tests/check-sysfs-attributes.sh`.
+- **A monitoring read never disturbs the link.** `hpd`, `rxsense` and
+  `link_state` read the SiI9024A interrupt status with `clear_events = false`,
+  so polling them cannot consume a latched link event. The read is a pair of
+  bit-banged i2c register reads, roughly a millisecond, which is acceptable for
+  a monitoring poll and documented as such.
+- **`vram_used_bytes` reports driver-reserved VRAM, not TTM usage.** It sums
+  the regions the driver owns: the shadow front buffer, the backbuffer when it
+  is staged, the hardware cursor buffer and the DMA1 test buffer. An exact
+  VRAM-manager figure is not available on the shadow path, which has no
+  `vram_mm` helper at all, and the attribute says so in the source comment
+  rather than inventing a number.
+- **`crc_supported` tracks the kernel range that registers the CRTC CRC
+  callbacks.** It reports `1` only where `sm750_crtc_funcs` carries
+  `.get_crc_sources`, and `0` otherwise.
+
 ## 0.6.3 - SiI9024A readiness, write timeout recovery, split tools package
 
 - **A plugged but unpowered sink no longer reads as "not ready".** The SiI9024A

@@ -1,7 +1,7 @@
-# utc: 2026-11-22T11:50:41Z
+# utc: 2026-11-22T12:55:47Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
-# command: rpm -qpR /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.3-1.fc43.noarch.rpm; rpmspec -q --buildrequires; requires
+# command: rpm -qpR /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.4-1.fc43.noarch.rpm; rpmspec -q --buildrequires; requires
 # workdir: /home/coder/sm750hdmifb
 
 --- output ---
@@ -10,7 +10,7 @@
 /bin/sh
 /bin/sh
 /usr/bin/bash
-config(sm750hdmifb) = 0.6.3-1.fc43
+config(sm750hdmifb) = 0.6.4-1.fc43
 dkms
 dkms
 dkms

@@ -19,11 +19,11 @@
 #   tests/check-rpm-dkms.sh
 
 %global dkms_name     sm750hdmifb
-%global dkms_version  0.6.3
+%global dkms_version  0.6.4
 %global module_name   sm750hdmidrm
 
 Name:           sm750hdmifb
-Version:        0.6.3
+Version:        0.6.4
 Release:        1%{?dist}
 Summary:        DKMS source for the SM750G10 SiI9024A HDMI DRM-KMS driver
 License:        GPL-2.0-only

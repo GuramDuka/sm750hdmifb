@@ -3096,3 +3096,39 @@ and make crc-check all exit 0; four kernel builds exit 0.
   every touched file.
 - Lesson: a transcript that ships in the source archive is a shipped file, so
   it must satisfy the same hygiene gates as code - trailing whitespace included.
+
+### 2026-11-22T16:00Z | orchestrator | T52 + T53: the monitor learned to report itself, the DDC grant got a budget
+- T52 delivered twelve monitoring attributes on the PCI device so they appear
+  as `/sys/class/drm/cardN/device/<name>`: `mem_info_vram_total`,
+  `vram_total_bytes`, `vram_used_bytes`, `active_mode`,
+  `active_mode_refresh_hz`, `active_mode_pixel_clock_khz`, `hpd`, `rxsense`,
+  `link_state`, `active_crtc`, `vblank_count` and `crc_supported`
+  (`src/sm750_drm.c` between the `BEGIN`/`END sysfs monitoring attributes`
+  markers; group registered on `&pdev->dev` before `drm_dev_register`). Every
+  show function uses `dev_get_drvdata()` with a NULL guard and `sysfs_emit()`,
+  the mode-state readers take `mode_lock` with `READ_ONCE()`, the link-status
+  read passes `clear_events = false` so a poll cannot consume a latched event,
+  and `crc_supported` reports 1 exactly where `sm750_crtc_funcs` registers
+  `.get_crc_sources` (kernel range >= 7.0). `vram_used_bytes` sums the
+  driver-owned regions (shadow frame, staged backbuffer, cursor buffer, DMA
+  test buffer) and clamps to `vram_size`, with a source comment stating it is
+  driver-reserved VRAM, not TTM usage (the shadow path has no `vram_mm`).
+  `tools/sm750-smi` now reads the driver instead of guessing: the memory,
+  `display.hpd`, `display.rxsense`, `display.link`, `crtc.index`,
+  `vblank.count` and `crc.support` rows are live, and libdrm/debugfs/n-a
+  fallbacks remain for an older module. Guard `tests/check-sysfs-attributes.sh`
+  with five planted controls, invoked from `tests/check-drm-policy.sh`.
+- T53 gave the SiI9024A DDC grant wait a budget in line with the vendor
+  model: poll every 200 ms inside a 2000 ms budget with a single retry after
+  one bus clear (`SII902X_DDC_GRANT_*` at `src/sii902x.c:69-75`, loop at
+  `:1138-1168`), the DDC switch released on every exit path, and a
+  per-mode-set software bus clear (`:870-895`). The gate now runs nine planted
+  controls (the T48 five plus literal poll interval, raised budget, third
+  attempt, missing per-mode clear). Worst case under `mode_lock` is about
+  4.1 s when the sink never grants;
+  `docs/evidence/runtime/32-sii9024a-ddc-grant.txt` records it with a
+  NOT-observed-on-hardware section.
+- Driver version 0.6.4 (module, dkms.conf, both specs, build-package.sh,
+  docs/ci/build.yml). `tests/check-sii902x-recovery.sh` self-test reports nine
+  negative controls rejected; `tests/check-sysfs-attributes.sh` twelve
+  attributes and five controls.

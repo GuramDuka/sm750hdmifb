@@ -20,7 +20,12 @@
 #   - a write that still times out does not fail the enable: it warns once
 #     with the stage name and continues on the compatibility path,
 #   - reads never go through the retrying helper, and the EDID read is skipped
-#     while the transmitter is powered down.
+#     while the transmitter is powered down,
+#   - the DDC grant poll is the vendor 200 ms interval inside a 2000 ms cap,
+#     a timeout clears the software bus and repeats the request exactly once,
+#     and the DDC switch is released on every path,
+#   - every mode set clears a stranded software bus first, as the vendor
+#     swI2CInit() does, and does not fail the mode set when it reports busy.
 #
 # The gate is source level and rejects its own planted defects.
 #
@@ -184,6 +189,14 @@ else
 		"a write that still times out fails the enable"
 fi
 
+# --- the DDC grant budget and its single retry -------------------------------
+require_re "$sii" '^#define SII902X_DDC_GRANT_POLL_MS[[:space:]]+200$' \
+	"the DDC grant poll interval is not the vendor 200 ms"
+require_re "$sii" '^#define SII902X_DDC_GRANT_BUDGET_MS[[:space:]]+2000$' \
+	"the DDC grant budget is not capped at 2000 ms"
+require_re "$sii" '^#define SII902X_DDC_GRANT_ATTEMPTS[[:space:]]+2$' \
+	"the DDC grant request is not limited to one retry"
+
 # --- the call sites ----------------------------------------------------------
 require "$sii" 'sii902x_write_recovering(dev, "option-ROM step",' \
 	"the option-ROM register sequence does not retry a timed-out step"
@@ -220,6 +233,43 @@ else
 		"the EDID read does not check the powered-down state"
 	body_require "$edid_body" 'return -ENODATA;' \
 		"a powered-down transmitter does not skip the EDID read"
+	body_require "$edid_body" 'msleep(SII902X_DDC_GRANT_POLL_MS);' \
+		"the DDC grant poll is not the named 200 ms interval"
+	body_deny "$edid_body" 'msleep(20);' \
+		"the DDC grant poll still sleeps a literal 20 ms"
+	body_require "$edid_body" \
+		'i < SII902X_DDC_GRANT_BUDGET_MS /' \
+		"the DDC grant loop is not bounded by the named budget"
+	body_require "$edid_body" \
+		'attempt <= SII902X_DDC_GRANT_ATTEMPTS' \
+		"the DDC grant request is not bounded by the attempt count"
+	body_require "$edid_body" \
+		'(attempt %u of %u); clearing the bus and retrying' \
+		"the DDC grant retry is not logged with the attempt number"
+	body_require "$edid_body" \
+		'DDC grant timeout: last-read=%d system-control=%02x\n' \
+		"the DDC grant timeout line changed shape"
+	body_require "$edid_body" 'goto release;' \
+		"a failed DDC grant does not reach the release path"
+fi
+
+# --- the per-mode-set bus clear (vendor swI2CInit behaviour) -----------------
+begin_body=$(fn_body "$sii" '^int sm750_sii902x_begin_mode[(]')
+if [ -z "$begin_body" ]; then
+	complain "sm750_sii902x_begin_mode is missing"
+else
+	body_require "$begin_body" 'if (!use_hardware_i2c) {' \
+		"the per-mode-set bus clear is not limited to the software path"
+	body_require "$begin_body" 'sm750_sw_i2c_recover_bus();' \
+		"the mode set does not clear a stranded bus first"
+	body_require "$begin_body" \
+		'pre-mode bus clear failed: %ld; continuing' \
+		"a failed pre-mode bus clear is not logged and tolerated"
+	body_require "$begin_body" 'dev_warn(dev,' \
+		"a failed pre-mode bus clear is not a warning"
+	body_require "$begin_body" \
+		'sii902x_begin_control(dev, use_hardware_i2c,' \
+		"the mode set no longer delegates to begin_control"
 fi
 guard_line=$(grep -nF 'if (saved & SII902X_SYS_CTRL_PWR_DWN) {' "$sii" |
 	head -n 1 | cut -d: -f1 || true)
@@ -269,6 +319,27 @@ plant_abort_on_timeout() {
 		{ print }' "$1/sii902x.c" >"$1/sii902x.c.new"
 	mv "$1/sii902x.c.new" "$1/sii902x.c"
 }
+plant_literal_poll() {
+	sed -i 's/msleep(SII902X_DDC_GRANT_POLL_MS);/msleep(20);/' \
+		"$1/sii902x.c"
+}
+plant_budget_raise() {
+	sed -i 's/^#define SII902X_DDC_GRANT_BUDGET_MS[[:space:]]*2000$/#define SII902X_DDC_GRANT_BUDGET_MS 10000/' \
+		"$1/sii902x.c"
+}
+plant_third_attempt() {
+	sed -i 's/^#define SII902X_DDC_GRANT_ATTEMPTS[[:space:]]*2$/#define SII902X_DDC_GRANT_ATTEMPTS 3/' \
+		"$1/sii902x.c"
+}
+plant_no_mode_clear() {
+	awk '
+		/^int sm750_sii902x_begin_mode\(/ { in_fn = 1 }
+		in_fn && /^\tif \(!use_hardware_i2c\) \{$/ { skip = 1 }
+		skip { if ($0 == "\t}") skip = 0; next }
+		{ print }
+		/^}/ { in_fn = 0 }' "$1/sii902x.c" >"$1/sii902x.c.new"
+	mv "$1/sii902x.c.new" "$1/sii902x.c"
+}
 
 control() {
 	local name=$1
@@ -291,6 +362,10 @@ control enxio_retry plant_enxio_retry
 control no_bus_clear plant_no_bus_clear
 control retry_on_read plant_retry_on_read
 control abort_on_timeout plant_abort_on_timeout
+control literal_poll plant_literal_poll
+control budget_raise plant_budget_raise
+control third_attempt plant_third_attempt
+control no_mode_clear plant_no_mode_clear
 
 [ "$fail" -eq 0 ] || exit 1
 echo "Sii902x readiness and I2C recovery checks passed"

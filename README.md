@@ -84,7 +84,7 @@ git clone https://github.com/GuramDuka/sm750hdmifb.git
 cd sm750hdmifb
 make check
 ./build-package.sh
-sudo apt install ./dist/sm750hdmifb_0.6.3_all.deb ./dist/sm750hdmifb-tools_0.6.3_*.deb
+sudo apt install ./dist/sm750hdmifb_0.6.4_all.deb ./dist/sm750hdmifb-tools_0.6.4_*.deb
 sudo reboot
 ```
 
@@ -116,13 +116,13 @@ mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS}
 . ./packaging/source-excludes.sh
 mapfile -t skip < <(sm750_dev_only_pathspecs)
 git ls-files -z -- . "${skip[@]}" >"$work/tracked"
-tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.3-source.tar.gz" \
-    --transform='s|^|sm750hdmifb-0.6.3/|' --null -T "$work/tracked"
+tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.4-source.tar.gz" \
+    --transform='s|^|sm750hdmifb-0.6.4/|' --null -T "$work/tracked"
 
 rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb.spec
 rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb-tools.spec
-sudo dnf install -y "$topdir"/RPMS/noarch/sm750hdmifb-0.6.3-1.fc43.noarch.rpm \
-    "$topdir"/RPMS/x86_64/sm750hdmifb-tools-0.6.3-1.fc43.x86_64.rpm
+sudo dnf install -y "$topdir"/RPMS/noarch/sm750hdmifb-0.6.4-1.fc43.noarch.rpm \
+    "$topdir"/RPMS/x86_64/sm750hdmifb-tools-0.6.4-1.fc43.x86_64.rpm
 sm750-smi
 sudo reboot
 ```
@@ -319,11 +319,18 @@ Processes:
   (list may be partial: 691 /proc entries were not readable)
 ```
 
-The `n/a` rows name their reason. The VRAM, HPD, RXSENSE and link attributes
-do not exist in 0.6.2, so `memory.*` and `display.hpd|rxsense|link` report
-`driver attribute not present in this version`; a later module that adds those
-attributes is picked up with no rebuild. `crc.support` needs root because the
-CRC control file lives in debugfs. `--sysfs-root`, `--card` and `--proc-root`
+The `n/a` rows name their reason. That capture is from the 0.6.2 module: the
+VRAM, HPD, RXSENSE and link attributes did not exist, so `memory.*` and
+`display.hpd|rxsense|link` reported `driver attribute not present in this
+version`, and `crc.support` needed root because the CRC control file lives in
+debugfs. Since 0.6.4 the module publishes twelve attributes on the PCI device
+(`/sys/class/drm/cardN/device/`), so `memory.total`, `memory.used`,
+`memory.free`, `display.hpd`, `display.rxsense`, `display.link`,
+`crtc.index`, `vblank.count` and `crc.support` read from the driver instead of
+falling back; `display.mode`, `display.refresh_hz` and
+`display.pixel_clock_khz` prefer the driver's own view of the active pipe.
+The fallbacks stay in place, so an older module is still picked up with no
+rebuild. `--sysfs-root`, `--card` and `--proc-root`
 point the tool at a synthetic tree, which is how `tests/check-sm750-smi.sh`
 exercises every field without a GPU; a missing card node prints the PCI-only
 view and exits 2.
@@ -832,6 +839,7 @@ VBIOS and scanout checks are documented in
 | `tests/audit-release.sh` | Release tarball contents, version consistency and archive drift |
 | `tests/check-static.sh` | Opt-in static analysis gate with baseline comparison |
 | `tests/check-sm750-smi.sh` | Fixture-driven gate for `tools/sm750-smi`: 27 fields from synthetic sysfs/DRM trees, `--strict` exit codes, CSV/JSON parsing, four planted controls; no GPU or root needed |
+| `tests/check-sysfs-attributes.sh` | Source-level gate for the twelve monitoring attributes `sm750-smi` reads from `/sys/class/drm/cardN/device/`: names and array entries, the group on the PCI device before `drm_dev_register`, `sysfs_emit()` with no sleep and no lock beyond the mode lock in every show function, `clear_events` false on the link-status read; five planted controls |
 | `make console-check` | Opt-in console reachability: writes to the foreground VT, then requires the `sm750_scanout` window to carry content, to differ from the all-zero sentinel `0xe20eea22` and to report the `PANEL_FB_ADDRESS` offset; exits 77 (a skip) without root, card or a `KD_TEXT` foreground VT |
 | `make crc-check` | Opt-in live scanout readback: enables the CRTC CRC source `scanout`, checks that entries arrive, stay constant for a static frame, change with the content and agree with the `sm750_scanout` debugfs dump; exits 77 (a skip) without root, card or an active CRTC |
 
