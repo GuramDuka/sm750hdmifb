@@ -946,6 +946,7 @@ VBIOS and scanout checks are documented in
 | `tests/check-sysfs-attributes.sh` | Source-level gate for the twelve monitoring attributes `sm750-smi` reads from `/sys/class/drm/cardN/device/`: names and array entries, the group on the PCI device before `drm_dev_register`, `sysfs_emit()` with no sleep and no lock beyond the mode lock in every show function, `clear_events` false on the link-status read; five planted controls |
 | `make console-check` | Opt-in console reachability: writes to the foreground VT, then requires the `sm750_scanout` window to carry content, to differ from the all-zero sentinel `0xe20eea22` and to report the `PANEL_FB_ADDRESS` offset; exits 77 (a skip) without root, card or a `KD_TEXT` foreground VT |
 | `make crc-check` | Opt-in live scanout readback: enables the CRTC CRC source `scanout`, checks that entries arrive, stay constant for a static frame, change with the content and agree with the `sm750_scanout` debugfs dump; exits 77 (a skip) without root, card or an active CRTC |
+| `make check-pkg` | Self-tests for the sudo package helper (`tools/sm750-pkg.sh` into `/usr/local/sbin/sm750-pkg`): stubbed dnf/dkms/rpm through a temporary PATH, so no package is touched and no root is needed; nine groups |
 
 Hardware-side validation uses the standard tools rather than project scripts:
 `modetest` from libdrm for atomic commits and connector state, `kmscube` for the

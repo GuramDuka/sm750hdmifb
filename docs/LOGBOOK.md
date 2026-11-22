@@ -3282,3 +3282,15 @@ of work, best practice, icons and images, linked to the documentation.
 - Lesson: the release audit does not reject non-ASCII, so only a manual grep
   stands between a Cyrillic quote and a shipped transcript; quote user text
   by ref and paraphrase, never verbatim.
+
+### 2026-11-22T19:40Z | orchestrator | check-sm750-pkg.sh got a make target
+- User approved (m05177): add the target. `make check-pkg` now runs
+  tests/check-sm750-pkg.sh (Makefile:104, wired into .PHONY at Makefile:4).
+  It stays outside `make check` on purpose: the recipe command count of
+  `check` is asserted, and the helper self-test needs no build products.
+- Docs updated: README.md gate table (row after `make crc-check`),
+  docs/TEST-STRATEGY.md S17 row, docs/DELIVERABLES.md 5.2 row. The logbook
+  census entry at 19:05Z said "no make target yet" - superseded by this
+  entry.
+- Verified: `make check-pkg` passes all nine groups; README/TEST-STRATEGY/
+  DELIVERABLES ASCII clean; `git diff --check` clean.

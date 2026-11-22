@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
-.PHONY: all clean check check-deps check-package check-all-kernels module-info package static vbios-re vbios-trace crc-check console-check tools install-tools
+.PHONY: all clean check check-deps check-package check-pkg check-all-kernels module-info package static vbios-re vbios-trace crc-check console-check tools install-tools
 
 all:
 	$(MAKE) -C $(KDIR) M=$(CURDIR)/src modules
@@ -96,6 +96,13 @@ console-check:
 	@./tests/check-console-scanout.sh; rc=$$?; \
 	if [ $$rc -eq 77 ]; then exit 0; fi; \
 	exit $$rc
+
+# Self-test gate for the sudo package helper (tools/sm750-pkg.sh, installed as
+# /usr/local/sbin/sm750-pkg): stubs dnf/dkms/rpm/modprobe through a temporary
+# PATH, so no package is touched and no root is needed. Not part of `check`
+# for the same reason `static` is not - the recipe command count is asserted.
+check-pkg:
+	./tests/check-sm750-pkg.sh
 
 tests/check-vblank: tests/check-vblank.c
 	$(CC) -O2 -Wall -Wextra -Werror $$(pkg-config --cflags libdrm) \
