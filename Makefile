@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
-.PHONY: all clean check check-deps check-package check-pkg check-all-kernels module-info package static vbios-re vbios-trace crc-check console-check tools install-tools
+.PHONY: all clean check check-deps check-package check-pkg check-all-kernels module-info package static vbios-re vbios-trace crc-check console-check check-kunit check-oops tools install-tools
 
 all:
 	$(MAKE) -C $(KDIR) M=$(CURDIR)/src modules
@@ -103,6 +103,27 @@ console-check:
 # for the same reason `static` is not - the recipe command count is asserted.
 check-pkg:
 	./tests/check-sm750-pkg.sh
+
+# Opt-in DRM KUnit sweep: runs the kernel's own DRM KUnit suites from
+# kernel-modules-internal. Loading internal test modules needs root and that
+# modprobe is not in the sudoers allowlist (docs/ROOT-ACTIONS.md section 3.9),
+# so the gate exits 77 unprivileged and the recipe turns that into a skip; it
+# is not part of `check` for the same reason `static` is not.
+check-kunit:
+	@./tests/check-kunit-drm.sh; rc=$$?; \
+	if [ $$rc -eq 77 ]; then exit 0; fi; \
+	exit $$rc
+
+# Opt-in oops detector wrapped around the default policy gate: snapshots the
+# kernel log through the allowlisted reader, runs the gate, and fails on any
+# new oops-pattern line. Needs a readable kernel log, so it is not in `check`;
+# the gate exits 77 when the log is unreadable and the recipe turns that into
+# a skip. Pass DMESG_CMD='sudo -n dmesg' for this host's allowlisted reader.
+check-oops:
+	@DMESG_CMD="$${DMESG_CMD:-dmesg}" ./tests/check-oops-delta.sh -- \
+		./tests/check-drm-policy.sh; rc=$$?; \
+	if [ $$rc -eq 77 ]; then exit 0; fi; \
+	exit $$rc
 
 tests/check-vblank: tests/check-vblank.c
 	$(CC) -O2 -Wall -Wextra -Werror $$(pkg-config --cflags libdrm) \

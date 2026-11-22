@@ -36,6 +36,8 @@ scripts=(
 	tests/check-test-pattern.sh
 	tests/check-restore-path.sh
 	tests/check-sii902x-recovery.sh
+	tests/check-kunit-drm.sh
+	tests/check-oops-delta.sh
 	tests/check-sm750-smi.sh
 	tests/check-sm750-pkg.sh
 	tests/check-sysfs-attributes.sh

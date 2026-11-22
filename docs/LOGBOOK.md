@@ -3294,3 +3294,47 @@ of work, best practice, icons and images, linked to the documentation.
   entry.
 - Verified: `make check-pkg` passes all nine groups; README/TEST-STRATEGY/
   DELIVERABLES ASCII clean; `git diff --check` clean.
+
+### 2026-11-22T20:45Z | orchestrator | T55: KUnit sweep gate landed, census still unproven
+- Owner installed the 42 per-module modprobe sudoers lines (m05354): 21
+  forward plus 21 reverse, exact single argument, verified with
+  `sudo -n -l` -> 42 matching lines. The support modules
+  `drm_kunit_helpers` and `drm_kunit_edid` stay ungranted on purpose;
+  modprobe pulls them in as dependencies.
+- T55 deliverables landed: tests/check-kunit-drm.sh (291 lines: discovery
+  under /lib/modules/$(uname -r)/internal/drivers/gpu/drm/tests, floor of
+  8 modules, live sweep through MODPROBE_CMD, reverse unload on every
+  exit path, exit 77 SKIP when KUnit is not usable, --self-test with four
+  planted defects rejected and two negatives accepted),
+  tests/check-oops-delta.sh (before/after dmesg snapshot through
+  DMESG_CMD, three planted defects rejected and four negatives accepted,
+  verified wrapping check-drm-policy.sh and check-sm750-pkg.sh clean),
+  opt-in targets `make check-kunit` and `make check-oops` (outside the
+  `check` recipe, whose command count is asserted), scratch census now 17
+  scripts, docs/ROOT-ACTIONS.md 3.9 (INSTALLED) and 3.10 (PROPOSED
+  runtime enable), docs/evidence/runtime/33-kunit-and-oops-sweep.txt.
+- LIVE RESULT, and it is a skip, not a pass: all 21 suites load and print
+  only `KTAP version 1 / 1..1 / kunit: disabled`, because
+  `# CONFIG_KUNIT_DEFAULT_ENABLED is not set` in
+  /boot/config-7.3.4-100.fc43.x86_64, so kunit loads with enable=0 and no
+  subtest ever executes. The gate reports exit 77 and names the
+  prerequisite instead of claiming a census. The real pass/fail census
+  remains UNPROVEN.
+- Two measured details behind that skip: `kunit` is already resident
+  (lsmod, 114688, refcount 0) and nothing in the allowlist can unload it,
+  so it stays loaded for the rest of the boot; and
+  /sys/module/kunit/parameters/ has no `enable` file on this kernel - the
+  module parameter exists in modinfo but is not writable through sysfs, so
+  the only routes are modprobe.d plus a fresh load, or the kernel command
+  line.
+- Owner action required before the census can be claimed (section 3.10):
+  write /etc/modprobe.d/kunit-enable.conf containing
+  `options kunit enable=1` while kunit is not resident, or add
+  `kunit.enable=1` to the kernel command line and reboot, and add the
+  single sudoers line for `/usr/bin/modprobe -r kunit` so the base module
+  can be cleared between runs.
+- Plan of record: T55 status pending -> completed (25 tasks, all
+  completed), decision 75 records the deliverables, the live skip and the
+  owner action. Gates re-run green: check-scratch-policy (17 scripts),
+  check-drm-policy, check-release-version (0.6.4), check-drm-packaging,
+  check-sm750-pkg, check-test-pattern, check-sysfs-attributes.

@@ -825,6 +825,87 @@ x86_64 pair was refused as a release mismatch (`tools/sm750-pkg.sh:148-207`).
 `--setopt=gpgcheck=True`, the same policy in a spelling dnf5 accepts, and
 `status` prints the exact command it would run (`install would run: ...`).
 
+### 3.9 DRM KUnit sweep loader (T55, INSTALLED 2026-11-22)
+
+`tests/check-kunit-drm.sh` (`make check-kunit`) loads the kernel's own DRM
+KUnit test modules from
+`/lib/modules/$(uname -r)/internal/drivers/gpu/drm/tests/` and parses the
+KUnit TAP results from the kernel log.
+
+Status: INSTALLED. The owner granted exact per-module lines instead of bare
+`/usr/bin/modprobe`: for each of the 21 DRM test suites, one forward line
+`/usr/bin/modprobe <module>` and one reverse line
+`/usr/bin/modprobe -r <module>` (42 lines total, verified with `sudo -n -l`
+2026-11-22). The exact-single-argument match means `modprobe -a`, `--force`,
+`-v` or any second argument is refused; the gate therefore passes exactly one
+module name per call. The support modules `drm_kunit_helpers` and
+`drm_kunit_edid` are deliberately NOT granted: modprobe pulls them in as
+dependencies, and the gate never loads them directly. `/usr/bin/dmesg` was
+already granted (row 4 of the allowlist), so the TAP reader needs no new
+line.
+
+Unprivileged run on this host:
+
+```sh
+MODPROBE_CMD='sudo -n /usr/bin/modprobe' DMESG_CMD='sudo -n dmesg' \
+  ./tests/check-kunit-drm.sh
+```
+
+or as root: `sudo -n ./tests/check-kunit-drm.sh`. On machines without the
+allowlist the gate skips with exit 77 and one SKIP line.
+
+### 3.10 Proposed: enable KUnit at runtime (NOT YET INSTALLED)
+
+Measured 2026-11-22: this kernel is built with
+`# CONFIG_KUNIT_DEFAULT_ENABLED is not set` in
+`/boot/config-7.3.4-100.fc43.x86_64`, so the `kunit` module loads with
+`enable=0` even though `CONFIG_KUNIT_AUTORUN_ENABLED=y`. Every suite load
+then prints only
+
+```text
+KTAP version 1
+1..1
+kunit: disabled
+```
+
+to the kernel log and runs no subtest. The gate treats that as an unavailable
+runner (SKIP, exit 77, naming the reason) rather than a pass.
+
+Two owner-side fixes, either suffices (do both for boot-time and module
+runs):
+
+1. Persistent, no reboot needed for module-loaded tests - create
+   `/etc/modprobe.d/kunit-enable.conf` containing exactly:
+
+```text
+options kunit enable=1
+```
+
+   `kunit` must not be resident when this takes effect; after the earlier
+   sweep runs it may still be loaded (see below), so unload it first
+   (`modprobe -r kunit` as root) and let the next sweep load it with the
+   option applied.
+
+2. Boot-time: add `kunit.enable=1` to the kernel command line (GRUB).
+
+Two residual grants make the sweep fully self-cleaning; neither is in the
+allowlist yet:
+
+```text
+/usr/bin/modprobe -r kunit
+```
+
+and, if per-suite reverse lines are not enough after option 1 is installed,
+nothing else is needed. Note `/sys/module/kunit/parameters/*` exists only
+while `kunit` is loaded, is mode 0600 root-only, and has no `enable` file on
+this kernel (the runtime knob is the module parameter, not a sysfs file), so
+writing sysfs is not an alternative.
+
+Status: PROPOSED, not installed. Until it is, `make check-kunit` on this host
+runs all 21 suites live through the allowlist and then skips with exit 77
+because every suite reports `kunit: disabled`; see
+`docs/evidence/runtime/33-kunit-and-oops-sweep.txt` for the measured run.
+
 ## 4. udev ACL rule
 
 Path: `/etc/udev/rules.d/99-sm750-coder-acl.rules`, mode `0644 root:root`, 710

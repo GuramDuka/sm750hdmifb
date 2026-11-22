@@ -1,0 +1,147 @@
+# 33-kunit-and-oops-sweep.txt
+# Captured 2026-11-22T16:52:35Z by T55 as uid 1005 on 7.3.4-100.fc43.x86_64,
+# updated 2026-11-22T20:30Z after the owner installed the per-module modprobe
+# allowlist (docs/ROOT-ACTIONS.md section 3.9). The KUnit sweep now RUNS LIVE
+# through that allowlist; the results it reports are recorded below verbatim.
+
+$ uname -r
+7.3.4-100.fc43.x86_64
+
+# kunit gate, plain unprivileged run with no loader prefix:
+$ ./tests/check-kunit-drm.sh
+SKIP: kunit-drm: loading the DRM KUnit test modules needs root, this shell is uid 1005; run as root (sudo ./tests/check-kunit-drm.sh) or pass the allowlisted loader, MODPROBE_CMD='sudo -n /usr/bin/modprobe' with the per-suite allowlist of docs/ROOT-ACTIONS.md section 3.9
+exit=77
+
+# kunit gate, --self-test (planted parser controls, no root):
+$ ./tests/check-kunit-drm.sh --self-test
+negative control failing_subtest: rejected (kunit-drm: FAIL drm_rect_test: drm_test_rect_clip_scaled_div_by_zero)
+negative control missing_suite: rejected (kunit-drm: no '# Subtest: drm_rect_test' marker in the kernel log; KUnit did not run the suite)
+negative control missing_totals: rejected (kunit-drm: no '# Totals:' line for drm_rect_test; the run did not finish (timeout 330 s?))
+negative control totals_mismatch: rejected (kunit-drm: FAIL drm_rect_test: totals line reports failures: [  1.0]     # Totals: pass:1 fail:1 skip:0 total:2)
+negative control clean_run: accepted (kunit-drm: drm_rect_test ok ([  1.0]     # Totals: pass:2 fail:0 skip:0 total:2))
+negative control skipped_subtest: accepted (kunit-drm: drm_rect_test ok ([  1.0]     # Totals: pass:2 fail:0 skip:1 total:2))
+KUnit sweep self-test passed (4 planted defects rejected, 2 negative controls accepted)
+exit=0
+
+# kunit gate, LIVE run through the installed per-module allowlist:
+$ MODPROBE_CMD='sudo -n /usr/bin/modprobe' DMESG_CMD='sudo -n dmesg' \
+    ./tests/check-kunit-drm.sh
+kunit-drm: 23 modules discovered under /lib/modules/7.3.4-100.fc43.x86_64/internal/drivers/gpu/drm/tests
+SKIP: kunit-drm: 21 of 21 suites only printed 'kunit: disabled': KUnit is disabled at runtime on kernel 7.3.4-100.fc43.x86_64 (# CONFIG_KUNIT_DEFAULT_ENABLED is not set in /boot/config-7.3.4-100.fc43.x86_64, so kunit loads with enable=0). No subtest ran, so this is not a pass. Enable it with 'options kunit enable=1' in /etc/modprobe.d/ or 'kunit.enable=1' on the kernel command line (docs/ROOT-ACTIONS.md section 3.10), then rerun
+exit=77
+
+# What one suite load actually prints, taken directly from the kernel log:
+$ before=$(sudo -n dmesg | wc -l)
+$ sudo -n /usr/bin/modprobe drm_rect_test
+$ sudo -n /usr/bin/modprobe -r drm_rect_test
+$ sudo -n dmesg | tail -n +$((before+1))
+[40014.812108] KTAP version 1
+[40014.812115] 1..1
+[40014.812117] kunit: disabled
+
+# Per-module outcome of the live sweep: all 21 allowlisted suites were loaded
+# and unloaded, and every one of them produced the three lines above and no
+# subtest. No suite failed and none passed, because none ran.
+# sweep summary: suites swept=21, with subtests=0, 'kunit: disabled'=21,
+#                failed=0, skipped subtest=0
+# residual modules after the sweep: the kunit base module stays resident,
+# because only '/usr/bin/modprobe -r <suite>' is allowlisted, not
+# '/usr/bin/modprobe -r kunit'. The gate prints a NOTE about it; see
+# docs/ROOT-ACTIONS.md section 3.10.
+
+# kunit oops gate, --self-test:
+$ ./tests/check-oops-delta.sh --self-test
+negative control unchanged_log: accepted
+negative control fake_warning: rejected (oops-delta: new kernel log line: WARNING: CPU 3 at drm_do_get_edid)
+negative control fake_bug: rejected (oops-delta: new kernel log line: BUG: kernel NULL pointer dereference at sm750)
+negative control allow_filtered: accepted
+negative control allow_wins: accepted
+negative control command_fails: rejected
+Oops detector self-test passed (3 planted defects rejected, 4 negative controls accepted)
+exit=0
+
+# oops gate, plain run without DMESG_CMD (dmesg is denied unprivileged):
+$ ./tests/check-oops-delta.sh -- true
+SKIP: oops-delta: the kernel log is not readable through 'dmesg' (set DMESG_CMD, for example DMESG_CMD='sudo -n dmesg')
+exit=77
+
+# oops gate live, allowlisted reader, wrapping two gates:
+$ DMESG_CMD='sudo -n dmesg' ./tests/check-oops-delta.sh -- ./tests/check-drm-policy.sh
+negative control spin_lock_in_show: rejected (exit 1): sysfs attributes: vram_total_bytes_show() takes a spin or rtnl lock
+Sysfs attribute checks passed (12 attributes, 5 planted controls)
+DRM mode policy checks passed
+oops-delta: clean; no new oops-pattern lines in the kernel log
+exit=0
+
+$ DMESG_CMD='sudo -n dmesg' ./tests/check-oops-delta.sh -- ./tests/check-sm750-pkg.sh
+sm750-pkg self-tests passed (9 groups: selection, version pair, symlinks, argv, unprivileged status, root gate, single dkms call, missing tools, ownership/mode)
+oops-delta: clean; no new oops-pattern lines in the kernel log
+exit=0
+
+# discovered DRM KUnit module list, count:
+drm_atomic_commit_test
+drm_atomic_test
+drm_bridge_test
+drm_cmdline_parser_test
+drm_connector_test
+drm_damage_helper_test
+drm_dp_mst_helper_test
+drm_exec_test
+drm_fixp_test
+drm_format_helper_test
+drm_format_test
+drm_framebuffer_test
+drm_gem_shmem_test
+drm_hdmi_state_helper_test
+drm_kunit_edid
+drm_kunit_helpers
+drm_managed_test
+drm_mm_test
+drm_modes_test
+drm_plane_helper_test
+drm_probe_helper_test
+drm_rect_test
+drm_sysfb_modeset_test
+count=23 (21 suites + 2 support modules)
+
+## LIVE SWEEP COMPLETED, KUNIT ITSELF DISABLED
+
+The sweep is no longer unproven at the gate level: all 21 allowlisted suites
+were loaded and unloaded for real on this host, and the gate discovered,
+parsed, unmapped and reported their output. What is unproven is KUnit's own
+execution, and the reason is environmental, not a bug in the gate:
+
+  - /boot/config-7.3.4-100.fc43.x86_64 has
+    "# CONFIG_KUNIT_DEFAULT_ENABLED is not set", so kunit loads with
+    enable=0 even though CONFIG_KUNIT_AUTORUN_ENABLED=y.
+  - Consequently each suite prints "KTAP version 1 / 1..1 /
+    kunit: disabled" and no subtest, and the gate skips with exit 77 naming
+    that reason instead of reporting a pass.
+
+Verified on this host:
+  - module discovery and the floor (23 .ko.xz files, floor 8);
+  - plain modprobe resolution through modules.dep;
+  - the live allowlisted loader path (MODPROBE_CMD='sudo -n /usr/bin/modprobe')
+    for all 21 suites, with reverse unloads on every exit path;
+  - the TAP parser against synthetic logs (four planted defects rejected:
+    failing_subtest, missing_suite, missing_totals, totals_mismatch; two
+    negative controls accepted: clean_run, skipped_subtest);
+  - the oops detector end to end against the live allowlisted
+    'sudo -n dmesg' reader, wrapping tests/check-drm-policy.sh and
+    tests/check-sm750-pkg.sh, both clean.
+
+## NOT YET RUN: KUnit with tests enabled
+
+Nothing here proves the real pass/fail census of the DRM KUnit suites,
+because no suite ever executed a subtest on this host. To obtain it the owner
+must first install the runtime enable of docs/ROOT-ACTIONS.md section 3.10
+('options kunit enable=1' in /etc/modprobe.d/kunit-enable.conf, with kunit
+not resident, or kunit.enable=1 on the kernel command line). Only then can
+the sweep report, per suite, the counts parsed from
+"# Totals: pass:N fail:N skip:N".
+
+Also NOT verified until then: that the '# Subtest:' markers land in dmesg
+within the 330 s wait, that no suite trips a kernel warning under this
+host's configuration (the pre-existing nvidia taint, 0x3001, is unrelated
+and is never a signal in either gate), and that 'modprobe -r' cleanly drops
+every suite and then kunit.

@@ -916,6 +916,8 @@ make vbios-re     # rebuild the option ROM and compare it byte for byte
 make vbios-trace  # execute both images and compare their instruction traces
 make crc-check    # live scanout CRC and sm750_scanout readback on the card
 make console-check # console reachability: the scanout window is not blank
+make check-kunit  # sweep the kernel's own DRM KUnit test suites (root)
+make check-oops   # oops-detector wrap around the policy gate
 ```
 
 `make vbios-re` and `make vbios-trace` need the captured image
@@ -947,6 +949,8 @@ VBIOS and scanout checks are documented in
 | `make console-check` | Opt-in console reachability: writes to the foreground VT, then requires the `sm750_scanout` window to carry content, to differ from the all-zero sentinel `0xe20eea22` and to report the `PANEL_FB_ADDRESS` offset; exits 77 (a skip) without root, card or a `KD_TEXT` foreground VT |
 | `make crc-check` | Opt-in live scanout readback: enables the CRTC CRC source `scanout`, checks that entries arrive, stay constant for a static frame, change with the content and agree with the `sm750_scanout` debugfs dump; exits 77 (a skip) without root, card or an active CRTC |
 | `make check-pkg` | Self-tests for the sudo package helper (`tools/sm750-pkg.sh` into `/usr/local/sbin/sm750-pkg`): stubbed dnf/dkms/rpm through a temporary PATH, so no package is touched and no root is needed; nine groups |
+| `make check-kunit` | Opt-in DRM KUnit sweep: discovers the DRM KUnit suites under `/lib/modules/$(uname -r)/internal/drivers/gpu/drm/tests/`, modprobes each (KUnit autorun) and parses the TAP results from the kernel log; runs as root or through the allowlisted loader `MODPROBE_CMD='sudo -n /usr/bin/modprobe'` (`docs/ROOT-ACTIONS.md` section 3.9), exits 77 (a skip) without either. On this host the suites load but print only `kunit: disabled` because KUnit is not enabled at runtime (`# CONFIG_KUNIT_DEFAULT_ENABLED is not set`), so the gate skips naming that prerequisite (`docs/ROOT-ACTIONS.md` section 3.10) rather than reporting a pass |
+| `make check-oops` | Opt-in oops detector wrapped around `tests/check-drm-policy.sh`: snapshots the kernel log before and after through `DMESG_CMD` (default `dmesg`; this host: `sudo -n dmesg`) and fails on any new `BUG:`/`WARNING:`/`Oops`/GPF/NULL-deref/lockdep/call-trace/`RIP:` line; `--allow` regexes exclude known baseline lines; exits 77 when the log is unreadable |
 
 Hardware-side validation uses the standard tools rather than project scripts:
 `modetest` from libdrm for atomic commits and connector state, `kmscube` for the
