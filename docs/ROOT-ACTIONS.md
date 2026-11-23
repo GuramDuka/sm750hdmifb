@@ -854,7 +854,7 @@ MODPROBE_CMD='sudo -n /usr/bin/modprobe' DMESG_CMD='sudo -n dmesg' \
 or as root: `sudo -n ./tests/check-kunit-drm.sh`. On machines without the
 allowlist the gate skips with exit 77 and one SKIP line.
 
-### 3.10 Proposed: enable KUnit at runtime (NOT YET INSTALLED)
+### 3.10 Installed: enable KUnit at runtime (INSTALLED 2026-11-22)
 
 Measured 2026-11-22: this kernel is built with
 `# CONFIG_KUNIT_DEFAULT_ENABLED is not set` in
@@ -901,10 +901,16 @@ while `kunit` is loaded, is mode 0600 root-only, and has no `enable` file on
 this kernel (the runtime knob is the module parameter, not a sysfs file), so
 writing sysfs is not an alternative.
 
-Status: PROPOSED, not installed. Until it is, `make check-kunit` on this host
-runs all 21 suites live through the allowlist and then skips with exit 77
-because every suite reports `kunit: disabled`; see
-`docs/evidence/runtime/33-kunit-and-oops-sweep.txt` for the measured run.
+Status: INSTALLED 2026-11-22 by the owner: `/etc/modprobe.d/kunit-enable.conf`
+containing `options kunit enable=1` exists on this host, and the sudoers
+allowlist carries the residual grant `/usr/bin/modprobe -r kunit` (verified
+2026-11-22: `sudo -n /usr/bin/modprobe -r kunit` exits 0, and
+`/etc/modprobe.d/kunit-enable.conf` reads exactly `options kunit enable=1`).
+The first real KUnit census was obtained the same day: all 21 DRM KUnit
+suites ran for real, 0 failures, in 8.7 s wall clock
+(`docs/evidence/runtime/33-kunit-and-oops-sweep.txt`, section "LIVE SWEEP,
+KUNIT ENABLED"). The earlier SKIP for disabled KUnit recorded in that file
+is superseded by that census.
 
 ## 4. udev ACL rule
 

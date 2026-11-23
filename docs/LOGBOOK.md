@@ -3338,3 +3338,40 @@ of work, best practice, icons and images, linked to the documentation.
   owner action. Gates re-run green: check-scratch-policy (17 scripts),
   check-drm-policy, check-release-version (0.6.4), check-drm-packaging,
   check-sm750-pkg, check-test-pattern, check-sysfs-attributes.
+
+### 2026-11-22T23:55Z | orchestrator | T55 census: 21/21 suites, 629 pass / 0 fail / 0 skip
+- Owner actions verified: /etc/modprobe.d/kunit-enable.conf (options kunit
+  enable=1, root:root) and the sudoers line for /usr/bin/modprobe -r kunit
+  (sudo -n -l match). kunit was unloaded with the new grant and reloaded
+  with enable=1 after the power-loss reboot; real subtests now run.
+- Two defects found in the fresh gate while obtaining the census, both in
+  tests/check-kunit-drm.sh and both mine to own:
+  1. The suite marker was '# Subtest: <module>' but KUnit prints
+     '# Subtest: <suite>' (the _test suffix is dropped) plus a separate
+     '# module: <module>' line. Every suite therefore burned the full
+     330 s wait and was reported as not run. Fix: match '# module:', wait
+     on '# Totals:' with a monotonic timestamp cursor (a line-count cursor
+     breaks when the ring buffer wraps - the drm_hdmi_state_helper_test
+     delta is ~600 lines of WARNING tracebacks), aggregate multiple
+     '# Totals:' blocks (drm_connector_test emits 10, drm_bridge_test 3,
+     drm_hdmi_state_helper_test 4), and require fail:0 in every one.
+     Measured settle time per suite: under 250 ms; the whole sweep 8.4 s.
+  2. A green run exited 1: unload_all() ended in
+     'grep -q ... && echo NOTE', so a successful kunit unload returned 1,
+     and as an EXIT trap its status overrode the script's rc 0. Fixed
+     with a plain nested if plus explicit 'return 0'; a structural
+     self-test control (exit_status_green) pins the shape.
+- Measured census, verified by me (rc=0, closing line verbatim, stderr
+  empty): 21 of 21 suites pass, aggregate 629 pass / 0 fail / 0 skip.
+  Largest: drm_connector_test 159, drm_format_helper_test 79,
+  drm_cmdline_parser_test 68, drm_framebuffer_test 63,
+  drm_hdmi_state_helper_test 56, drm_dp_mst_helper_test 53.
+  drm_atomic_test prints no Totals line; the gate accepts its top-level
+  ok:2/1 with no failures. The expected WARNING tracebacks inside
+  drm_hdmi_state_helper_test (drm_atomic.c:452/:1368) are part of the
+  suite's own scenarios, not kernel damage.
+- Self-test now: 6 planted defects rejected, 4 negative controls
+  accepted, exit_status_green pinned. Evidence:
+  docs/evidence/runtime/33-kunit-and-oops-sweep.txt; ROOT-ACTIONS 3.10
+  updated PROPOSED -> INSTALLED. The earlier skip-based entry is
+  superseded: the census is now proven.

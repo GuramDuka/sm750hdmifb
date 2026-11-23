@@ -104,7 +104,7 @@ drm_rect_test
 drm_sysfb_modeset_test
 count=23 (21 suites + 2 support modules)
 
-## LIVE SWEEP COMPLETED, KUNIT ITSELF DISABLED
+## LIVE SWEEP COMPLETED, KUNIT ITSELF DISABLED (SUPERSEDED - see the census at the end)
 
 The sweep is no longer unproven at the gate level: all 21 allowlisted suites
 were loaded and unloaded for real on this host, and the gate discovered,
@@ -145,3 +145,115 @@ within the 330 s wait, that no suite trips a kernel warning under this
 host's configuration (the pre-existing nvidia taint, 0x3001, is unrelated
 and is never a signal in either gate), and that 'modprobe -r' cleanly drops
 every suite and then kunit.
+
+
+## LIVE SWEEP, KUNIT ENABLED (supersedes the SKIP above)
+
+Captured 2026-11-22T23:10Z on 7.3.4-100.fc43.x86_64 after the owner installed
+`/etc/modprobe.d/kunit-enable.conf` (`options kunit enable=1`) and the sudoers
+residual grant `/usr/bin/modprobe -r kunit` (docs/ROOT-ACTIONS.md section 3.10,
+now INSTALLED). The SKIP section above records what happened while KUnit was
+disabled; everything below is a real census with subtests executing.
+
+Gate used: tests/check-kunit-drm.sh with the corrected markers (the suite
+marker is `# module: <module>`, not `# Subtest: <suite>` - the KTAP suite line
+drops the `_test` suffix, so the old marker never matched real output and the
+first attempt burned 330 s per suite and reported 5 false failures while dmesg
+held 16 "# Totals: ... fail:0" lines). Wait condition: delta settled once it
+carries "# Totals:" (or, for drm_atomic_test which prints none, the top-level
+KTAP "ok N <suite>"); measured settle is under 250 ms, so the sweep finished
+in 8.7 s wall clock, not 330 s per suite. Cursor between suites is the last
+line's monotonic `[ ts]`, not a line count - the drm_hdmi_state_helper_test
+delta holds ~600 lines with WARNING tracebacks (expected KUnit assertion
+backtraces at drm_atomic.c:452/1368, all results pass), enough to wrap the
+ring buffer and break a count-based cursor.
+
+$ MODPROBE_CMD='sudo -n /usr/bin/modprobe' DMESG_CMD='sudo -n dmesg' \
+    ./tests/check-kunit-drm.sh
+kunit-drm: 23 modules discovered under /lib/modules/7.3.4-100.fc43.x86_64/internal/drivers/gpu/drm/tests
+
+KUnit DRM sweep passed: 21 suites, 0 failures
+exit=0, wall clock 8.7 s ("real 0m8.718s")
+
+# Re-run after the EXIT-trap status fix (see "Exit status" below), same
+# environment, kunit not resident at gate start:
+$ time MODPROBE_CMD='sudo -n /usr/bin/modprobe' DMESG_CMD='sudo -n dmesg' \
+    ./tests/check-kunit-drm.sh
+... 21 "ok" lines, nothing on stderr ...
+KUnit DRM sweep passed: 21 suites, 0 failures
+rc=0, stdout 23 lines, stderr empty, wall clock 8.4 s ("real 0m8.405s")
+
+Per-suite totals parsed from the gate (all fail:0, skip:0 unless noted):
+
+  drm_atomic_commit_test pass:5
+  drm_atomic_test no-totals (top-level KTAP ok:2/1
+  no failures)
+  drm_bridge_test aggregate of 3 totals lines pass:10
+  drm_cmdline_parser_test pass:68
+  drm_connector_test aggregate of 10 totals lines pass:159
+  drm_damage_helper_test pass:21
+  drm_dp_mst_helper_test pass:53
+  drm_exec_test pass:7
+  drm_fixp_test pass:2
+  drm_format_helper_test pass:79
+  drm_format_test pass:18
+  drm_framebuffer_test pass:63
+  drm_gem_shmem_test pass:8
+  drm_hdmi_state_helper_test aggregate of 4 totals lines pass:56
+  drm_managed_test pass:2
+  drm_mm_test pass:6
+  drm_modes_test pass:5
+  drm_plane_helper_test pass:12
+  drm_probe_helper_test pass:7
+  drm_rect_test pass:43
+  drm_sysfb_modeset_test pass:5
+
+Census: 21 suites, 629 passed subtests, 0 failed, 0 skipped
+(drm_atomic_test prints no "# Totals:" line; its single subtest
+drm_test_atomic_get_connector_for_encoder reported ok at both KTAP levels).
+
+Self-test after the fix (planted defects / negative controls, all against
+measured real KTAP shapes): 6 planted rejected - failing_subtest,
+missing_suite, missing_totals, totals_mismatch, wrong_module (# module: line
+names a different module), second_totals_fails (two Totals blocks, second
+fail:1); 4 negatives accepted - no_totals_line (drm_atomic_test real shape),
+clean_run, skipped_subtest, two_totals_clean (aggregate pass:7 fail:0 skip:1).
+Line: "KUnit sweep self-test passed (6 planted defects rejected, 4 negative
+controls accepted)".
+
+Note: the earlier "SKIP: ... kunit: disabled" outcome in this file is
+superseded by this census; it is kept for the record of what the gate does
+when KUnit is disabled.
+
+## Exit status of a green run (fixed 2026-11-22T23:40Z)
+
+The 8.7 s run recorded above printed 21 "ok" lines and nothing on stderr but
+returned rc=1, and never printed the closing "KUnit DRM sweep passed" line.
+Cause, isolated: `unload_all()` (installed as the EXIT trap) ended in
+`grep -q '^kunit ' /proc/modules && echo "kunit-drm: NOTE ..." >&2`; when the
+unload succeeded grep returned 1, the compound list returned 1, and under
+`set -euo pipefail` that became the trap's status and the script's rc, which
+overrode the intended 0 and skipped the epilogue. The trigger is kunit not
+being resident at gate start, which is the state on this host, so the green
+run was always reported as a failure.
+
+Minimal reproduction, no modules involved:
+
+$ bash -c 'set -euo pipefail; f(){ grep -q "^kunit " /proc/modules && echo NOTE; }; f; echo REACHED'; echo "rc=$?"
+rc=1
+
+Fix: `unload_all()` restructured to plain nested `if grep -q ...; then ... fi`
+with an explicit `return 0`, so no compound list can leak a status; the unload
+attempts, their best-effort error suppression and the resident-kunit NOTE are
+unchanged. The same audit found no other trace-visible function ending in a
+compound list.
+
+Pinned by the new self-test control `exit_status_green`, which asserts
+`unload_all()` ends in `return 0` and runs a same-shaped trap harness under
+`set -euo pipefail` to prove the closing line is still reached:
+
+$ ./tests/check-kunit-drm.sh --self-test
+...
+control exit_status_green: accepted (green run reaches the closing line, rc 0)
+KUnit sweep self-test passed (6 planted defects rejected, 4 negative controls accepted, exit_status_green pinned)
+rc=0
