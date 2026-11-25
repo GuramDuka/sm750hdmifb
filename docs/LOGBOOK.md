@@ -3375,3 +3375,54 @@ of work, best practice, icons and images, linked to the documentation.
   docs/evidence/runtime/33-kunit-and-oops-sweep.txt; ROOT-ACTIONS 3.10
   updated PROPOSED -> INSTALLED. The earlier skip-based entry is
   superseded: the census is now proven.
+
+### 2026-11-25T17:00Z | orchestrator | T56 accepted: a compositor owns the SM750, and two gate defects it exposed
+
+- Task: prove that a userspace compositor can own the SM750 and scan out
+  while the owner's Plasma keeps seat0 and tty1, then fix whatever the
+  proof exposes. Owner released card0 for it (m05837).
+- Helper `tools/sm750-headless.sh` (9223 bytes, sha256 137c665b...): one
+  privileged entry point, `/usr/local/sbin/sm750-headless`, five modes
+  probe | diagnose | weston | cage | kmscube. It takes DRM master with
+  fcntl 0x641E, delivers it back with 0x641F, snapshots eleven driver
+  sysfs attributes plus connector state per run into
+  `/mega/tmp/sm750/headless/<stamp>-<mode>/`, and never touches logind,
+  seat0 or the active VT.
+- Measured through the installed root helper (the definitive evidence;
+  the earlier unprivileged mirror runs are superseded):
+  probe PASS master acquired and dropped; diagnose PASS (no fd holders,
+  module refcount 0, fbcon bind 1); weston 30 s PASS vblank
+  21248 -> 21581; cage 20 s PASS vblank 21966 -> 22307; kmscube 15 s
+  completed rc=0 with vblank 22692 -> 23135.
+- A43 (helper mis-models, S4, fixed): LIBSEAT_BACKEND=builtin does not
+  exist in libseat 0.9.3 (logind, seatd, noop only); a frame count alone
+  passed a compositor that had already exited; WLR_DRM_DEVICES was the
+  by-path symlink and wlroots splits that variable on ':' so cage found
+  zero GPUs (fixed with a CARD_NODE resolution guard); kmscube was given
+  -n 300 where -n is a connector id; cage was given -s, which permits VT
+  switching on the owner's seat; and, found on the first real sudo run,
+  kmscube's clean early exit was reported as a failure even though it is
+  launched with -c 300 and therefore exits by design.
+- A44 (hardcoded 60 Hz vblank gate, S4, fixed): `make check` failed with
+  "vblank rate is outside the 5% tolerance / Measured 75.21 DRM vblanks/s
+  over 120 events (expected 60.00)" against a panel the driver had
+  programmed to 75 Hz. The investigation cleared the driver: a frozen
+  vblank_count on an idle pipe is DRM core's vblankoffdelay (5000 ms
+  default), measured freezing 5.51 s after the last WAIT_VBLANK returned
+  and resuming immediately for a new waiter. No src/ file was touched.
+  tests/check-drm-module.sh now derives the expectation from
+  active_mode_refresh_hz with a 20..250 plausibility range, keeps
+  SM750_DRM_EXPECTED_HZ as an override, falls back to 60 with a loud
+  stderr note, and has a three-control --self-test.
+- Gates: `Headless helper checks passed (10 assertions, 10 planted
+  controls)` incl. the two new kmscube controls; `DRM module self-test
+  passed (3 planted controls rejected, pristine copy accepted at 75.00
+  Hz)`; the override proof `SM750_DRM_EXPECTED_HZ=60` exits 1 with
+  "Measured 75.21 ... (expected 60.00)"; scratch census 19 scripts; and
+  `make check` exits 0 end to end for the first time since the panel was
+  reprogrammed to 75 Hz.
+- Evidence: docs/evidence/runtime/34-vblank-idle-freeze.txt,
+  docs/evidence/runtime/35-kmscube-exit-semantics.txt. Plan task T56.
+- Residual: the installed helper is the 8759-byte revision; the tree is
+  at 9223 bytes, so one owner-run install is still required before the
+  kmscube PASS path can be observed on the host.

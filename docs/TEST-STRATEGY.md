@@ -102,6 +102,7 @@ exports `TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}`), never to `/tmp`.
 
 | S18 | In-repo `tests/check-kunit-drm.sh` (`make check-kunit`, opt-in) | DRM KUnit sweep: discovers the DRM KUnit suites under `/lib/modules/$(uname -r)/internal/drivers/gpu/drm/tests/` (floor of 8 so an empty directory fails), modprobes each (KUnit autorun runs it at load), parses the TAP output (`# Subtest:`, `ok N - name`, `not ok N - name`, `# Totals: pass:N fail:N skip:N`) from the kernel log via `DMESG_CMD`, fails naming the suite and subtest, and unloads every module in an EXIT trap. Needs root, or the allowlisted loader of `docs/ROOT-ACTIONS.md` section 3.9 (`MODPROBE_CMD='sudo -n /usr/bin/modprobe'`); without either an unprivileged run exits 77 with one SKIP line. Four planted parser defects rejected plus two negative controls in `--self-test` | Live on 2026-11-22 through the installed per-module allowlist: 23 modules discovered, 21 suites loaded and unloaded, all 21 printed only `kunit: disabled` because `# CONFIG_KUNIT_DEFAULT_ENABLED is not set` on this kernel, so the gate skips with exit 77 naming that prerequisite (`docs/ROOT-ACTIONS.md` section 3.10) instead of passing; self-test PASS; the suites' real pass/fail census is NOT YET OBSERVED |
 | S19 | In-repo `tests/check-oops-delta.sh` (`make check-oops`, opt-in; standalone `-- <command...>`) | Reusable oops detector: snapshots the kernel log before and after the wrapped command through `DMESG_CMD` (default `dmesg`, this host `sudo -n dmesg`), diffs the delta, filters `--allow` regexes or `OOPS_ALLOW_FILE`, and fails on any new `BUG:`, `WARNING:`, `Oops`, `general protection fault`, `kernel NULL pointer dereference`, `lockdep`, `call trace` or `RIP:` line; exits 77 when the log is unreadable. Three planted defects rejected (new `WARNING:`, new `BUG:`, wrapped command failing) plus four negative controls (unchanged log, allow-filtered warning, allow wins over BUG, allowlist file) in `--self-test`; exercised live by wrapping `tests/check-drm-policy.sh` and `tests/check-sm750-pkg.sh` | PASS (2026-11-22, `sudo -n dmesg` reader, both wrapped gates clean) |
+| S20 | In-repo `tests/check-headless-helper.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the operator helper `tools/sm750-headless.sh`: POSIX `sh` that passes `sh -n`, the five modes `probe`, `diagnose`, `weston`, `cage` and `kmscube` with a usage path that exits 2 for anything else, the `0000:01:00.0` and `sm750hdmidrm` driver binding test, `LIBSEAT_BACKEND=noop` exported and never `builtin`, the weston arm carrying `--backend=drm`, `--drm-device=card0` and `--shell=kiosk-shell.so`, the cage arm without `-s` (which would permit VT switching) and the kmscube arm with `-c` and without `-n` (which is a connector id), the `SECONDS` numeric test and the 1..600 clamp, the verdict failing on a died compositor and on a vblank delta `<= 0`, TERM before KILL on an EXIT trap, and no local absolute path or non-ASCII byte. Static only: it runs no compositor, needs no root and never touches the card | PASS (2026-11-25); ten planted defects rejected (the `LIBSEAT_BACKEND` export deleted, `noop` changed to `builtin`, `-s` added to cage, `-c` changed to `-n` in kmscube, the survivor check deleted, the vblank check deleted, a clean kmscube completion reported as a failure, a kmscube exit code ignored, an absolute local path appended, the lower clamp loosened to 0) plus a pristine control accepted, in `--self-test` |
 ### S1: in-repo `make check`
 
 - Package/version: the repository itself at 0.5.9; no external package. The
@@ -114,10 +115,28 @@ make check KDIR=/lib/modules/7.3.3-100.fc43.x86_64/build CC=/usr/bin/gcc
 
 - Pass criterion: exit 0, all 17 recipe commands execute, and no command
   reports an error. The live vblank probe inside
-  `tests/check-drm-module.sh:80-90` is allowed to print `SKIP` only because
+  `tests/check-drm-module.sh:290-301` is allowed to print `SKIP` only because
   `/dev/dri/card0` was denied at the time of that run (before the T10 udev ACL);
-  that SKIP is not a pass, and it has not been re-run since the ACL was added.
-- Evidence: `docs/evidence/builds/01-make-check.log` (exit 0).
+  that SKIP is not a pass. The probe has since been run against the device, and
+  it now derives its expectation from the driver instead of assuming 60 Hz:
+  `resolve_expected_refresh` (`tests/check-drm-module.sh:49-76`) prefers a
+  non-empty `SM750_DRM_EXPECTED_HZ`, otherwise reads `active_mode_refresh_hz`
+  through `/sys/class/drm/card0/device/` (`:34`) and falls back to
+  `/sys/bus/pci/devices/0000:01:00.0/active_mode_refresh_hz` (`:35`). A value
+  that is not a number in 20..250 substitutes 60 Hz and says so on stderr, so
+  the probe can never silently skip. The pass line names the refresh and its
+  source. A hardcoded 60 Hz failed a panel programmed at 1024x768@75, which
+  was a false failure in the gate and not a driver defect.
+  `tests/check-drm-module.sh --self-test` (`:208-216`) plants the three
+  regressions that matter - a restored hardcoded value, a dropped 20..250 range
+  check, and a removed sysfs fallback that would yield 0 Hz - and requires each
+  to fail while the pristine copy passes, so the derivation is load-bearing.
+  A frozen `vblank_count` on an idle pipe is DRM core's `vblankoffdelay`, not a
+  defect: the core disables the source about 5 s after the last waiter returns
+  and a new waiter restarts it, so a 0 Hz idle reading must never be read as a
+  failure (`docs/evidence/runtime/34-vblank-idle-freeze.txt`).
+- Evidence: `docs/evidence/builds/01-make-check.log` (exit 0);
+  `docs/evidence/runtime/34-vblank-idle-freeze.txt` (live probe at 75.00 Hz).
 
 ### S2: in-repo build matrix
 
@@ -563,6 +582,45 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   controls)`. The live attribute values are in
   `docs/evidence/runtime/31-sysfs-attributes.txt`.
 
+### S20: headless helper gate
+
+- Command: `./tests/check-headless-helper.sh` (called by
+  `tests/check-drm-policy.sh`, which `make check` runs). It takes an optional
+  script path, defaults to `tools/sm750-headless.sh`, and needs neither the
+  card, nor root, nor a compositor. `--self-test` runs the planted controls;
+  plain invocation runs the assertions only. Scratch trees go under
+  `${TMPDIR:-/mega/tmp/sm750/tmp}`.
+- Holds: the helper is a POSIX `sh` script that passes `sh -n`; the mode
+  dispatcher carries `probe`, `diagnose`, `weston`, `cage` and `kmscube` and
+  every other word reaches `usage`, which exits 2; the BDF `0000:01:00.0` and
+  the driver name `sm750hdmidrm` both appear and are compared in one
+  `[ "$driver" = sm750hdmidrm ]` test; `export LIBSEAT_BACKEND=noop` is
+  present and no export sets `builtin`; the compositor arms are read out of the
+  switch body with comments stripped, so a flag is only credited where it is
+  executed, and the weston arm must carry `--backend=drm`, `--drm-device=card0`
+  and `--shell=kiosk-shell.so`, the cage arm must carry `-d` and must not carry
+  `-s`, and the kmscube arm must carry `-c` and must not carry `-n`;
+  `SECONDS` is rejected as non-numeric (`*[!0-9]*`) and clamped with `-ge 1`
+  and `-le 600`; the verdict records `survived=0`, fails on
+  `[ "$survived" -ne 1 ]`, computes `frames=$((vblank_after - vblank_before))`
+  and fails on `[ "$frames" -le 0 ]`, writes `status=3` on both paths and keeps
+  the sentence "a frame count alone never proves a compositor rendered";
+  `trap cleanup EXIT` is installed and `kill -TERM` precedes `kill -KILL`; the
+  script holds no absolute local path and no non-ASCII byte.
+- Planted controls: `LIBSEAT_BACKEND` export deleted, `noop` changed to
+  `builtin`, `-s` added to the cage arm, `-c 300` changed to `-n 300` in the
+  kmscube arm, the `survived=0` assignment deleted, the
+  `elif [ "$frames" -le 0 ]` branch disabled, the kmscube clean-exit branch
+  turned into a failure, the kmscube exit code ignored so a crash reads as a
+  pass, an absolute local path appended after the last line, and the lower
+  clamp loosened from `-ge 1` to `-ge 0`. Each mutates a copy under the scratch
+  directory and must exit non-zero naming the defect; the unmutated copy must
+  pass.
+- Status: PASS, `Headless helper checks passed (10 assertions, 10 planted
+  controls)`; the `--self-test` run prints
+  `Headless helper checks passed (10 assertions, 10 planted controls, self-test)`.
+  The helper itself has not been run: every mode needs root and the card.
+
 ## 3. `make check`: the recipe commands
 
 Since 2026-11-22 the recipe has 18 commands: `./tests/check-sm750-smi.sh`
@@ -609,8 +667,9 @@ commands below are `Makefile:32-48` and their observed results in
 | 17 | `python3 tests/test-staging-results.py` (:48) | `Ran 4 tests ... OK` | PASS |
 
 No command is excluded. Command 1's live probe was skipped in the recorded run
-for one documented reason: `tests/check-drm-module.sh:85` requires a read-write
-`card0`, and the node was denied to this user at the time. The script prints
+for one documented reason: the read-write `card0` guard in
+`tests/check-drm-module.sh:295-296` refused, and the node was denied to this
+user at the time. The script prints
 that the skip is not a pass. The skipped probe is tracked as GAP row R12 in
 section 4, not hidden inside the PASS row. Since T10 added the udev ACL for
 `coder`, that probe could now be re-run; T10 did not re-run `make check`, so

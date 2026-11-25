@@ -127,7 +127,7 @@ to `src/*.c` or `src/*.h` (`docs/evidence/builds/11-warnings-scan.log`).
 ```
 
 Expected: exit 0. The script rebuilds the noarch RPM from a fresh `_topdir`,
-asserts the payload against `git ls-files` (138 payload files in the current
+asserts the payload against `git ls-files` (142 payload files in the current
 tree; the same command the script uses is `git ls-files -- . ':(exclude)docs/plan'
 ':(exclude)docs/evidence' ':(exclude)docs/images' ':(exclude)docs/notes' |
 wc -l`), the `%files` list
@@ -421,7 +421,7 @@ list.
 | --- | --- |
 | `docs/AUDIT.md` | repository audit, 24 defects with reproduction and evidence |
 | `docs/DEFECTS.md` | one disposition per defect: fixed, accepted or deferred |
-| `docs/TEST-STRATEGY.md` | suites S1-S19, recorded results, remaining gaps |
+| `docs/TEST-STRATEGY.md` | suites S1-S20, recorded results, remaining gaps |
 | `docs/STATIC-ANALYSIS.md` | static-analysis gate, per-tool counts, triage of every finding, tool configuration and limits |
 | `docs/PACKAGING-RPM.md` | spec purpose, build recipe, install, verify, rollback |
 | `docs/ENVIRONMENT.md` | host, header trees, tool matrix, privilege state |
@@ -440,6 +440,8 @@ list.
 | `tests/check-oops-delta.sh` | T55 reusable oops detector (`make check-oops`, opt-in, and standalone `tests/check-oops-delta.sh -- <command...>`): snapshots the kernel log before and after the wrapped command through `DMESG_CMD` (default `dmesg`, this host `sudo -n dmesg`), diffs the delta, filters `--allow` regexes or `OOPS_ALLOW_FILE`, and fails on a new `BUG:`, `WARNING:`, `Oops`, GPF, NULL-deref, `lockdep`, call-trace or `RIP:` line; exits 77 when the log is unreadable; taint is deliberately not a signal (the host carries the nvidia taint); `--self-test` runs three planted defects and four negative controls |
 | `tests/check-sm750-pkg.sh` | Self-tests for the sudo package helper `tools/sm750-pkg.sh`: argv and file policy, newest-pair selection, stubbed dnf/dkms/rpm through a temporary PATH, nine groups, no root |
 | `tools/sm750-console.sh` | T37 console helper, installed as `/usr/local/sbin/sm750-console` (root only): `show` prints the active tty, `KDGETMODE` of `/dev/tty0` decoded as `KD_TEXT`/`KD_GRAPHICS`/`KD_KDWANTED`, the `vtconsole` bind state, `PANEL_FB_ADDRESS` and the `sm750_scanout` offset/nonzero/crc32; `text [N]` runs `chvt` (default 2) and prints the same status; `graphics` runs `chvt 1`. Usage errors exit 2 |
+| `tools/sm750-headless.sh` | T56 operator helper, installed as `/usr/local/sbin/sm750-headless` (root only): refuses to run unless `0000:01:00.0` is bound to `sm750hdmidrm`, takes DRM master (`0x641E`, dropped with `0x641F`) to prove the card is free and exits 4 when another process holds it, then runs one fixed program for a bounded time and writes a verdict. Modes `probe`, `diagnose`, `weston [SECONDS]`, `cage [SECONDS]`, `kmscube [SECONDS]`; `SECONDS` is numeric, defaults to 20 and is clamped to 1..600; no free-form arguments. The compositors run with `LIBSEAT_BACKEND=noop` (libseat 0.9.3 has `logind`, `seatd` and `noop`, and `noop` opens the device directly, so seat0, logind and every VT are untouched), `cage` is invoked without `-s` because that flag permits VT switching, and `kmscube` gets `-c` (frame count) rather than `-n` (a connector id). Each run writes `01-before.txt`, `02-master.txt`, `03-compositor.log`, `04-client.log`/`.pid` (weston), `05-verdict.txt`, `06-after.txt` and a `0700` `runtime/` under `/mega/tmp/sm750/headless/`. The verdict fails when the compositor did not survive `SECONDS` or the `vblank_count` delta is `<= 0`, and states that a frame count alone never proves a compositor rendered. Exit 0 success, 1 environment, 2 usage, 3 expectation failed, 4 master held |
+| `tests/check-headless-helper.sh` | T56 source-level gate for `tools/sm750-headless.sh` (part of `make check` through `tests/check-drm-policy.sh`): POSIX `sh` plus `sh -n`, the five modes and the usage path that exits 2, the `0000:01:00.0` / `sm750hdmidrm` binding test, `LIBSEAT_BACKEND=noop` exported and never `builtin`, the weston, cage and kmscube argument sets read out of the switch body with comments stripped (so `-s` on cage and `-n` on kmscube are rejected where they would be executed), the `SECONDS` numeric test and 1..600 clamp, the survivor and vblank-delta failures with `status=3`, TERM before KILL on an EXIT trap, no local absolute path and no non-ASCII byte. Static only: no compositor, no root, no card. `--self-test` runs eight planted defects plus a pristine control |
 
 ### 5.3 Specification archive
 

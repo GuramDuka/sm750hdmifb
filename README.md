@@ -74,14 +74,14 @@ packaged tarball.
 | Measure | Value |
 | --- | --- |
 | Driver source | 11252 lines of C and headers under `src/` |
-| Defect findings tracked | 42, from A01 to A42, each with a disposition |
+| Defect findings tracked | 44, from A01 to A44, each with a disposition |
 | Acceptance criteria | 6 PASS, 0 FAIL, 1 GAP - the gap is pixel-level capture at the panel, which needs a human or capture hardware |
-| Project gates | 26 gate scripts, 18 commands in `make check`, five opt-in targets with planted-defect controls |
+| Project gates | 29 gate scripts, 18 commands in `make check`, seven opt-in verification targets with planted-defect controls |
 | Kernel and format matrix | 9 combinations, kernel 6.17.1 through the 7.4 daily headers |
 | IGT KMS subset | 26 pass, 14 skip, 1 fail by design |
 | GL path | `kmscube`, 299 frames in 5.07 s, 59.01 fps on llvmpipe |
 | Vblank rate | 60.43 per second measured over 120 events |
-| Evidence | 39 runtime transcripts, 28 build transcripts and 7 packaging transcripts under `docs/evidence/` |
+| Evidence | 41 runtime transcripts, 28 build transcripts and 7 packaging transcripts under `docs/evidence/` |
 | Documentation | 21 documents under `docs/`, plus the specification archive and the deck |
 
 ### How a claim is checked
@@ -801,6 +801,30 @@ sudo sm750-console text 3    # a specific VT
 sudo sm750-console graphics  # chvt 1: back to the session VT
 ```
 
+`tools/sm750-headless.sh` (installed as `/usr/local/sbin/sm750-headless`, root
+only) answers the two questions `sm750-console` does not: who holds DRM master
+on the card, and does a compositor survive on it. It refuses to start unless
+`0000:01:00.0` is bound to `sm750hdmidrm`, takes master itself (`0x641E`,
+dropped with `0x641F`) to prove the card is free, exits 4 when another process
+holds it, then runs one fixed program for a bounded time:
+
+```sh
+sudo sm750-headless probe               # snapshots and the master probe only, immediate
+sudo sm750-headless diagnose            # who holds card0, module refcount, vtcon bind
+sudo sm750-headless weston              # weston kiosk plus one terminal, 20 s
+sudo sm750-headless cage 30             # cage around one terminal, 30 s
+sudo sm750-headless kmscube 15          # kmscube, 15 s
+```
+
+`SECONDS` defaults to 20 and is clamped to 1..600; no other argument is
+accepted. The compositors run with `LIBSEAT_BACKEND=noop`, so they open the
+DRM device directly and never touch seat0, logind or a VT; `cage` gets no `-s`
+and `kmscube` gets `-c` (frame count), not `-n` (a connector id). Each run
+writes a verdict directory under `/mega/tmp/sm750/headless/`, and the verdict
+is FAIL when the compositor did not survive the full time or the
+`vblank_count` delta is `<= 0` - a frame count alone never proves a compositor
+rendered.
+
 ### What the HDMI output actually shows
 
 On the reference host the SM750 HDMI output carries the kernel console, and the
@@ -907,7 +931,7 @@ file by stripping it, so the deck is kept as a standalone page and only linked.
 - [Slides (Markdown source)](docs/DECK.md) - Marp-flavoured Markdown, ten slides, for editing and for `marp --pdf`
 - [Deck source](docs/deck/index.html) - the page itself: hand-written reveal-style JavaScript, an inline SVG architecture diagram, hash routing (`#/3`), a print stylesheet and a no-script fallback that stacks all ten slides
 
-Five verification targets are opt-in and deliberately outside `make check`, so
+Seven verification targets are opt-in and deliberately outside `make check`, so
 the default gate stays the same 18 commands on machines without the analysers:
 
 ```sh
@@ -919,6 +943,13 @@ make console-check # console reachability: the scanout window is not blank
 make check-kunit  # sweep the kernel's own DRM KUnit test suites (root)
 make check-oops   # oops-detector wrap around the policy gate
 ```
+
+Three further targets are build and self-test wrappers rather than verification
+targets and are not part of that count: `make check-pkg` (byte-for-byte
+reproducibility of the built RPM), `make check-package` (the release package
+build and audit) and `make check-all-kernels` (builds the module against each
+available kernel tree). The seven above need the analysers, the card or root;
+`make check` needs none of them.
 
 `make vbios-re` and `make vbios-trace` need the captured image
 (`VBIOS_ROM=...`, or the default path) and print `SKIP` with exit 0 when it is
@@ -946,6 +977,7 @@ VBIOS and scanout checks are documented in
 | `tests/check-static.sh` | Opt-in static analysis gate with baseline comparison |
 | `tests/check-sm750-smi.sh` | Fixture-driven gate for `tools/sm750-smi`: 27 fields from synthetic sysfs/DRM trees, `--strict` exit codes, CSV/JSON parsing, four planted controls; no GPU or root needed |
 | `tests/check-sysfs-attributes.sh` | Source-level gate for the twelve monitoring attributes `sm750-smi` reads from `/sys/class/drm/cardN/device/`: names and array entries, the group on the PCI device before `drm_dev_register`, `sysfs_emit()` with no sleep and no lock beyond the mode lock in every show function, `clear_events` false on the link-status read; five planted controls |
+| `tests/check-headless-helper.sh` | Source-level gate for `tools/sm750-headless.sh`: POSIX `sh` plus `sh -n`, the five modes and the usage path, the `0000:01:00.0` / `sm750hdmidrm` binding test, `LIBSEAT_BACKEND=noop` and never `builtin`, the weston, cage and kmscube argument sets read out of the executed switch arms (`-s` rejected on cage, `-n` rejected on kmscube), the `SECONDS` numeric test and 1..600 clamp, the survivor and vblank failures, TERM before KILL on an EXIT trap, no local absolute path and no non-ASCII byte; eight planted controls in `--self-test`, no compositor, no root and no card needed |
 | `make console-check` | Opt-in console reachability: writes to the foreground VT, then requires the `sm750_scanout` window to carry content, to differ from the all-zero sentinel `0xe20eea22` and to report the `PANEL_FB_ADDRESS` offset; exits 77 (a skip) without root, card or a `KD_TEXT` foreground VT |
 | `make crc-check` | Opt-in live scanout readback: enables the CRTC CRC source `scanout`, checks that entries arrive, stay constant for a static frame, change with the content and agree with the `sm750_scanout` debugfs dump; exits 77 (a skip) without root, card or an active CRTC |
 | `make check-pkg` | Self-tests for the sudo package helper (`tools/sm750-pkg.sh` into `/usr/local/sbin/sm750-pkg`): stubbed dnf/dkms/rpm through a temporary PATH, so no package is touched and no root is needed; nine groups |

@@ -260,4 +260,11 @@ test "$stage_count" -ge 6 || {
 # false on the link-status read). Source-level, with its own five
 # planted-defect controls.
 ./tests/check-sysfs-attributes.sh "$source_file"
+# T56: the headless compositor helper tools/sm750-headless.sh (fixed mode and
+# program list, the card pinned to 0000:01:00.0 bound to sm750hdmidrm,
+# LIBSEAT_BACKEND=noop so no VT is touched, cage without -s, kmscube with -c
+# and without -n, a clamped run time, a verdict that needs a survivor and a
+# vblank delta, TERM then KILL cleanup). Source-level; it never runs the
+# helper and needs no root.
+./tests/check-headless-helper.sh
 echo "DRM mode policy checks passed"

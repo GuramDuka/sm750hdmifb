@@ -1,0 +1,134 @@
+# 34-vblank-idle-freeze.txt
+# Captured 2026-11-25T16:20Z by T57 as uid 1005 on 7.3.4-100.fc43.x86_64.
+# Subject: does the SM750 DRM vblank counter freeze on an idle pipe, and is
+# that a driver defect? Answer: it freezes, and that is DRM core behaviour.
+
+WHY THIS FILE EXISTS
+
+`make check` stopped at its second recipe command because
+tests/check-drm-module.sh asked tests/check-vblank for 60 Hz while the panel
+was programmed at 1024x768@75. The measured rate was 75.2 Hz, the tool rejected
+it, and the gate failed on a healthy driver. This file records three things:
+
+  1. the measured rate on the live pipe, so the 75 Hz mode is documented
+     rather than assumed;
+  2. the freeze-and-resume measurement, so a later reader does not mistake a
+     frozen counter for a stall in the driver;
+  3. the exact commands used, so every number below can be reproduced.
+
+1. RUN CONDITIONS
+
+    host:   deneb, Fedora 43, kernel 7.3.4-100.fc43.x86_64
+    module: sm750hdmidrm 0.6.4, PCI 0000:01:00.0
+    mode:   1024x768, active_mode_refresh_hz = 75.00
+    node:   /dev/dri/card0, udev ACL grants uid 1005 read-write
+    build:  tests/check-vblank rebuilt from tests/check-vblank.c (120 samples,
+            5 percent tolerance, 20..250 sanity range)
+
+2. THE MEASURED RATE AT THE ACTIVE MODE
+
+    $ ./tests/check-vblank /dev/dri/card0 75      # run 1
+    Measured 75.33 DRM vblanks/s over 120 events (expected 75.00)
+    exit=0
+
+    $ ./tests/check-vblank /dev/dri/card0 75      # run 2
+    Measured 75.11 DRM vblanks/s over 120 events (expected 75.00)
+    exit=0
+
+    $ ./tests/check-vblank /dev/dri/card0 75      # run 3
+    Measured 75.14 DRM vblanks/s over 120 events (expected 75.00)
+    exit=0
+
+The same measurement against the hardcoded expectation that used to be in the
+gate:
+
+    $ ./tests/check-vblank /dev/dri/card0 60
+    vblank rate is outside the 5% tolerance
+    Measured 75.15 DRM vblanks/s over 120 events (expected 60.00)
+    exit=1
+
+Both invocations are correct. The tool is doing its job in the second case:
+the expectation, not the driver, was wrong.
+
+3. THE FREEZE, MEASURED
+
+Method: complete one live probe so the pipe is genuinely awake, then sample
+/sys/class/drm/card0/device/vblank_count every 0.25 s for 12 s with no waiter
+outstanding, and finally start one more waiter.
+
+    frozen 5.51 s after the last WAIT_VBLANK returned
+    first 8 samples:
+      t=0.25 24686   t=0.50 24705   t=0.75 24724   t=1.00 24743
+      t=1.25 24761   t=1.50 24780   t=1.75 24799   t=2.00 24818
+    last 6 samples:
+      t=10.76 25076  t=11.01 25076  t=11.26 25076
+      t=11.51 25076  t=11.77 25076  t=12.02 25076
+
+The first samples advance by 19 counts per 0.25 s, which is 75.5 Hz, matching
+section 2. The counter then stops and stays at 25076 for the rest of the
+window.
+
+Resume proof, in the same session:
+
+    after a new waiter: delta=121 over 1.6s
+
+121 counts over 1.6 s is 75.6 Hz: the counter restarts on the first new
+DRM_VBLANK waiter. Nothing is stuck; the source is simply off.
+
+4. THE SAME BEHAVIOUR UNDER A COMPOSITOR SESSION
+
+Sampled per-second deltas of the same attribute during a cage compositor
+session on the same mode: 61, 60, 61, 6, then zeros for the remainder of the
+session. cage asks for vblanks only while it repaints. Once it goes idle the
+core disables the source and the counter stalls exactly as in section 3.
+
+5. THE COMMANDS USED
+
+    $ ./tests/check-vblank /dev/dri/card0 75
+    $ ./tests/check-vblank /dev/dri/card0 60
+
+    $ python3 -   # sampler, reading the sysfs counter every 0.25 s
+    ATT='/sys/class/drm/card0/device/vblank_count'
+    subprocess.run(['./tests/check-vblank','/dev/dri/card0','75'], ...)
+    loop for 12 s: read ATT, sleep 0.25, record
+    subprocess.run(['./tests/check-vblank','/dev/dri/card0','75'], ...)
+    read ATT again, report the delta
+
+The gate itself, after the fix:
+
+    $ ./tests/check-drm-module.sh src/sm750hdmidrm.ko
+    Measured 75.08 DRM vblanks/s over 120 events (expected 75.00)
+    DRM vblank ioctl checks passed: /dev/dri/card0 at 75.00 Hz (expected refresh from /sys/class/drm/card0/device/active_mode_refresh_hz)
+    DRM module metadata checks passed: src/sm750hdmidrm.ko
+    exit=0
+
+The expectation now comes from the driver rather than a constant:
+resolve_expected_refresh at tests/check-drm-module.sh:49-75 reads
+active_mode_refresh_hz through /sys/class/drm/card0/device/ (tests/check-drm-module.sh:34)
+and falls back to /sys/bus/pci/devices/0000:01:00.0/active_mode_refresh_hz
+(tests/check-drm-module.sh:35). The live probe that uses it is
+tests/check-drm-module.sh:290-301.
+
+6. CONCLUSION - NOT A DRIVER DEFECT
+
+A vblank_count that freezes on an idle pipe is DRM core's vblankoffdelay
+behaviour, not a defect in sm750hdmidrm. The core arms a disable timer with a
+default of 5000 ms when the last DRM_VBLANK waiter returns; when it expires the
+core calls the driver's crtc disable_vblank hook, sm750_crtc_disable_vblank()
+stops the vblank timer, and the counter stops advancing. The measured delay
+here is 5.51 s, which is that timer plus scheduling slack. A new waiter
+immediately restarts the source (section 3), and the interrupt path itself was
+never in doubt: with a waiter outstanding the rate is 75 Hz every time.
+
+Consequences for anyone reading these numbers:
+
+  - a single idle sample that reports 0 Hz proves nothing and must never be
+    recorded as a failure;
+  - a vblank measurement is only meaningful while a waiter is outstanding,
+    which is what tests/check-vblank does for 120 events;
+  - a stalled counter during a compositor session means the compositor stopped
+    asking, not that the raster stopped.
+
+Therefore no driver change follows from this file. The change it justifies is
+in the gate: derive the expectation from the active mode, keep
+SM750_DRM_EXPECTED_HZ as an explicit override, and refuse to guess silently.

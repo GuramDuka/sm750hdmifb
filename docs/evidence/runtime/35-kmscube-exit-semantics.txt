@@ -1,0 +1,176 @@
+# 35 - kmscube exit semantics in tools/sm750-headless.sh
+#
+# Recorded: 2026-11-25 (UTC session of the verdict-logic fix)
+# Scope: the verdict logic of the operator helper installed as
+# /usr/local/sbin/sm750-headless, and the static gate that pins it.
+# Change: tools/sm750-headless.sh, tests/check-headless-helper.sh.
+#
+# ---------------------------------------------------------------------------
+# 1. The defect
+# ---------------------------------------------------------------------------
+# The verdict treated "the program exited before the deadline" as failure
+# unconditionally. That is right for weston and cage, which are long-running
+# compositors, and wrong for kmscube: the helper starts kmscube with a fixed
+# frame count (-c 300, tools/sm750-headless.sh:209), so kmscube exits by design
+# once it has rendered and scanned out those frames. A rc=0 exit before the
+# deadline is the success case; it proves kmscube completed a full
+# render-and-scanout cycle. The old logic reported that healthy run as FAIL.
+#
+# ---------------------------------------------------------------------------
+# 2. The four measured runs (sudo path, root through the installed helper)
+# ---------------------------------------------------------------------------
+# Measured by the operator session through the NOPASSWD allowlist entry, not
+# reproduced here: this session runs unprivileged and may take no master.
+#
+# sudo -n /usr/local/sbin/sm750-headless probe
+#   master: acquired
+#   master: dropped
+#   PASS
+#
+# sudo -n /usr/local/sbin/sm750-headless diagnose
+#   # fd-table holders of the card inode 1108
+#   (none)
+#   # module refcount: 0
+#   # fbcon bind: 1
+#
+# sudo -n /usr/local/sbin/sm750-headless weston 30
+#   RESULT: PASS weston held the card for 30s and VBlank advanced
+#   vblank 21248 -> 21581 (delta 333)
+#   helper rc 0
+#
+# sudo -n /usr/local/sbin/sm750-headless cage 20
+#   RESULT: PASS cage held the card for 20s and VBlank advanced
+#   vblank 21966 -> 22307 (delta 341)
+#   helper rc 0
+#
+# sudo -n /usr/local/sbin/sm750-headless kmscube 15
+#   sm750-headless: kmscube exited with rc=0 before 15s
+#   vblank 22692 -> 23135 (delta 443)
+#   RESULT: FAIL kmscube did not survive 15s (see 03-compositor.log)
+#   helper rc 3
+#
+# The kmscube run is the defect made visible: rc=0, 443 frames scanned out on
+# a 15 s deadline, and the helper still returned 3.
+
+# ---------------------------------------------------------------------------
+# 3. rc=0 versus rc=255: completion versus crash
+# ---------------------------------------------------------------------------
+# Root, through the helper (above): kmscube rendered its 300 frames and exited
+# rc=0. Unprivileged, earlier: kmscube died with rc=255 inside the llvmpipe
+# worker pool. Both observations are consistent with "completion versus crash";
+# neither is explained by "survival", which is why the old single exit model
+# could not describe kmscube at all. The verdict now distinguishes the two by
+# rc, not by survival.
+#
+# ---------------------------------------------------------------------------
+# 4. The verdict logic after the fix (line numbers as of this edit)
+# ---------------------------------------------------------------------------
+# tools/sm750-headless.sh:229-238  the survivor probe now records rc=0 as the
+#   default and "wait" overwrites it only on a non-zero exit, so a clean early
+#   exit reads back as rc=0 rather than as an empty variable.
+# tools/sm750-headless.sh:246-247  the two-line honesty comment is unchanged
+#   verbatim: the raster scans out whether or not a user client owns the card.
+# tools/sm750-headless.sh:248-250  the zero-vblank guard, now first in the
+#   chain so it applies to every mode including kmscube.
+# tools/sm750-headless.sh:252      one comment line: kmscube gets a fixed frame
+#   count via -c, so a clean early exit is its pass condition.
+# tools/sm750-headless.sh:253-260  the kmscube exit model:
+#   still running at the deadline -> PASS "was still rendering"
+#   exited rc=0                    -> PASS "rendered its frame count"
+#   exited rc!=0                   -> FAIL, message names rc, status=3
+# tools/sm750-headless.sh:261-265  weston and cage keep the old semantics and
+#   the old strings: a non-survivor is FAIL regardless of rc, status=3.
+#
+# The verdict strings produced, per case:
+#   kmscube, exit rc=0 before deadline:
+#     RESULT: PASS kmscube rendered its frame count and exited rc=0
+#   kmscube, exit rc=N before deadline:
+#     RESULT: FAIL kmscube exited with rc=N before 15s (see 03-compositor.log)
+#   kmscube, still running at deadline:
+#     RESULT: PASS kmscube was still rendering after 15s and VBlank advanced
+#   weston/cage, still running:
+#     RESULT: PASS weston held the card for 30s and VBlank advanced
+#   weston/cage, exited early:
+#     RESULT: FAIL weston did not survive 30s (see 03-compositor.log)
+#   any mode, frames <= 0:
+#     RESULT: FAIL no vertical blank was counted while the compositor ran
+#
+# Replaying the measured kmscube run against the new logic: survived=0, rc=0,
+# frames=443 -> the rc==0 arm -> "RESULT: PASS kmscube rendered its frame
+# count and exited rc=0", status 0.
+#
+# ---------------------------------------------------------------------------
+# 5. The gate (tests/check-headless-helper.sh) after the update
+# ---------------------------------------------------------------------------
+# Section g was adjusted to the new reality: the status=3 census is now three
+# (zero-vblank, kmscube rc!=0, weston/cage non-survivor) and the gate asserts
+# exactly three rather than the old "at least two". The vblank mutation moved
+# from "elif" to "if" because the delta guard now leads the chain.
+#
+# New section g2 pins the kmscube exit model: the mode branch, the rc==0
+# condition, the three distinct PASS/FAIL strings, the survival of the
+# weston/cage failure arm, and the ordering rule that the zero-vblank guard
+# precedes the kmscube branch (otherwise a kmscube that drew nothing could pass
+# on rc alone).
+#
+# Two new planted controls, each with its own rejection message:
+#   kmscube-exit-is-failure  replaces "elif [ "$rc" -eq 0 ]; then" with
+#     "elif false; then", so a clean completion is FAIL again.
+#     rejected: FAIL: g2: a clean kmscube exit (rc 0) must not be reported as failure
+#   kmscube-rc-ignored       replaces the same test with "elif true; then", so
+#     a crashed kmscube (rc 255) would pass.
+#     rejected: FAIL: g2: the kmscube exit branch must not pass unconditionally;
+#     a crashed kmscube (rc 255) would pass
+#
+# ---------------------------------------------------------------------------
+# 6. Verification runs (this session, unprivileged)
+# ---------------------------------------------------------------------------
+# $ sh -n tools/sm750-headless.sh
+#   (no output, rc 0)
+#
+# $ ./tests/check-headless-helper.sh
+#   ok: a. the helper exists, starts with #!/bin/sh and passes sh -n
+#   ok: b. modes probe, diagnose, weston, cage and kmscube dispatch, anything else exits 2
+#   ok: c. the card is pinned to 0000:01:00.0 and verified bound to sm750hdmidrm
+#   ok: d. LIBSEAT_BACKEND=noop is exported and no invented backend is set
+#   ok: e. weston gets its drm backend, device and shell; cage runs without -s; kmscube uses -c and not -n
+#   ok: f. SECONDS is numeric and clamped to 1..600
+#   ok: g. the verdict fails on a dead compositor and on a zero vblank delta
+#   ok: g2. kmscube passes on a clean early exit, fails on a non-zero rc, and cannot pass on zero frames
+#   ok: h. cleanup sends TERM then KILL from an EXIT trap
+#   ok: i. no absolute local path and no non-ASCII byte in the helper
+#   negative control no-libseat-export: rejected: FAIL: d: LIBSEAT_BACKEND=noop must be exported; logind and seatd are not usable here
+#   negative control builtin-backend: rejected: FAIL: d: LIBSEAT_BACKEND=noop must be exported; logind and seatd are not usable here
+#   negative control cage-vt-switch: rejected: FAIL: e: cage must not be given -s; -s allows VT switching and seat0 belongs to the owner
+#   negative control kmscube-connector: rejected: FAIL: e: kmscube must be given -c, the frame count
+#   negative control survived-check-dropped: rejected: FAIL: g: the verdict must record that the compositor did not survive
+#   negative control vblank-check-dropped: rejected: FAIL: g: the verdict must fail when no vertical blank was counted
+#   negative control kmscube-exit-is-failure: rejected: FAIL: g2: a clean kmscube exit (rc 0) must not be reported as failure
+#   negative control kmscube-rc-ignored: rejected: FAIL: g2: the kmscube exit branch must not pass unconditionally; a crashed kmscube (rc 255) would pass
+#   negative control local-path: rejected: FAIL: i: absolute local path in <scratch>/sm750-headless.sh at line 279
+#   negative control seconds-zero-clamp: rejected: FAIL: f: SECONDS must have a lower bound of 1
+#   negative control pristine: accepted
+#   Headless helper checks passed (10 assertions, 10 planted controls)
+#   rc 0
+#
+# $ ./tests/check-headless-helper.sh --self-test
+#   identical output plus:
+#   Headless helper checks passed (10 assertions, 10 planted controls, self-test)
+#   rc 0
+#
+# The assertion count in the pass message is now derived from the gated
+# sections ($assertions) and the control count is a declared constant ($controls),
+# so the numbers cannot drift from the work actually performed.
+#
+# ---------------------------------------------------------------------------
+# 7. What was deliberately not changed
+# ---------------------------------------------------------------------------
+# - The weston and cage PASS/FAIL strings, byte for byte.
+# - The two-line honesty comment (raster scanout proves nothing alone).
+# - The kmscube invocation "-A -D $CARD -c 300".
+# - sections a-f and h-i of the gate.
+# - No file under docs/ other than this evidence file: another agent is
+#   editing docs/ROOT-ACTIONS.md, docs/TEST-STRATEGY.md, docs/AUDIT.md,
+#   docs/DELIVERABLES.md, README.md and docs/LOGBOOK.md concurrently.
+# - tests/check-scratch-policy.sh: neither helper nor gate gained a mktemp
+#   call, so the census is untouched and its own gate still passes.

@@ -108,45 +108,103 @@ deliberately NOT granted - a grant to `cat` on that path would be a grant to
 read every future allowlist, and `visudo` on the live file is not needed once
 the staged file is verified. Verification is by `sudo -n -l` content only.
 
-### The 29 NOPASSWD entries
+### The 76 NOPASSWD entries
 
-`sudo -n -l` lists 29 entries, measured 2026-11-21: 25 for this work plus four
-that predate it (`/usr/bin/dmidecode`, `/usr/bin/nice`,
-`/usr/local/cuda/bin/ncu`, `/usr/local/cuda/bin/nvprof`). The host owner added
-two of the 25 today: the console helper (`/usr/local/sbin/sm750-console`, row 9
-in the table above) and the `dnf install` path for the 0.6.2-1 RPM. The 25, at
-0.6.2-2:
+`sudo -n -l` lists 76 distinct NOPASSWD command lines, measured 2026-11-25:
+73 for this work plus three that predate it (`/usr/bin/dmidecode`,
+`/usr/local/cuda/bin/ncu`, `/usr/local/cuda/bin/nvprof`). Of the 73, 45 are
+`modprobe` lines - 22 loads and 23 `-r` removals, covering the 21 DRM KUnit
+suites in section 3.9 above plus `kunit` and `sm750hdmidrm` - and 28 are the
+helper, `dkms`, log and RPM lines. `/usr/bin/nice` is no longer granted: the
+host owner removed it, because a general utility that can run an arbitrary
+program as root is precisely the hole this allowlist exists to avoid. The 76,
+copied verbatim from that measurement:
 
 ```text
-/usr/local/sbin/sm750-crc
-/usr/local/sbin/sm750-crc-cycle
-/usr/local/sbin/sm750-regs
-/usr/bin/dmesg
-/usr/bin/journalctl -k -b --no-pager
-/usr/bin/journalctl -k -b -q --no-pager
-/usr/local/sbin/sm750-lspci
-/usr/local/sbin/sm750-vbios-dump
-/usr/local/sbin/sm750-console
-/usr/bin/dkms status
-/usr/bin/dkms build -m sm750hdmifb -v 0.6.0
-/usr/bin/dkms install -m sm750hdmifb -v 0.6.0
-/usr/bin/dkms uninstall -m sm750hdmifb -v 0.6.0
-/usr/bin/dkms remove -m sm750hdmifb -v 0.6.0 --all
-/usr/bin/dkms build -m sm750hdmifb -v 0.6.1
-/usr/bin/dkms install -m sm750hdmifb -v 0.6.1
-/usr/bin/dkms uninstall -m sm750hdmifb -v 0.6.1
-/usr/bin/dkms remove -m sm750hdmifb -v 0.6.1 --all
 /usr/bin/depmod -a
-/usr/bin/modprobe -r sm750hdmidrm
-/usr/bin/modprobe sm750hdmidrm
+/usr/bin/dkms build -m sm750hdmifb -v 0.6.0
+/usr/bin/dkms build -m sm750hdmifb -v 0.6.1
+/usr/bin/dkms install -m sm750hdmifb -v 0.6.0
+/usr/bin/dkms install -m sm750hdmifb -v 0.6.1
+/usr/bin/dkms remove -m sm750hdmifb -v 0.6.0 --all
+/usr/bin/dkms remove -m sm750hdmifb -v 0.6.1 --all
+/usr/bin/dkms status
+/usr/bin/dkms uninstall -m sm750hdmifb -v 0.6.0
+/usr/bin/dkms uninstall -m sm750hdmifb -v 0.6.1
+/usr/bin/dmesg
+/usr/bin/dmidecode
 /usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
 /usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.1-1.fc43.noarch.rpm
 /usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-1.fc43.noarch.rpm
+/usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-2.fc43.noarch.rpm
+/usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-3.fc43.noarch.rpm
 /usr/bin/dnf remove -y sm750hdmifb
+/usr/bin/journalctl -k -b --no-pager
+/usr/bin/journalctl -k -b -q --no-pager
+/usr/bin/modprobe drm_atomic_commit_test
+/usr/bin/modprobe drm_atomic_test
+/usr/bin/modprobe drm_bridge_test
+/usr/bin/modprobe drm_cmdline_parser_test
+/usr/bin/modprobe drm_connector_test
+/usr/bin/modprobe drm_damage_helper_test
+/usr/bin/modprobe drm_dp_mst_helper_test
+/usr/bin/modprobe drm_exec_test
+/usr/bin/modprobe drm_fixp_test
+/usr/bin/modprobe drm_format_helper_test
+/usr/bin/modprobe drm_format_test
+/usr/bin/modprobe drm_framebuffer_test
+/usr/bin/modprobe drm_gem_shmem_test
+/usr/bin/modprobe drm_hdmi_state_helper_test
+/usr/bin/modprobe drm_managed_test
+/usr/bin/modprobe drm_mm_test
+/usr/bin/modprobe drm_modes_test
+/usr/bin/modprobe drm_plane_helper_test
+/usr/bin/modprobe drm_probe_helper_test
+/usr/bin/modprobe drm_rect_test
+/usr/bin/modprobe drm_sysfb_modeset_test
+/usr/bin/modprobe -r drm_atomic_commit_test
+/usr/bin/modprobe -r drm_atomic_test
+/usr/bin/modprobe -r drm_bridge_test
+/usr/bin/modprobe -r drm_cmdline_parser_test
+/usr/bin/modprobe -r drm_connector_test
+/usr/bin/modprobe -r drm_damage_helper_test
+/usr/bin/modprobe -r drm_dp_mst_helper_test
+/usr/bin/modprobe -r drm_exec_test
+/usr/bin/modprobe -r drm_fixp_test
+/usr/bin/modprobe -r drm_format_helper_test
+/usr/bin/modprobe -r drm_format_test
+/usr/bin/modprobe -r drm_framebuffer_test
+/usr/bin/modprobe -r drm_gem_shmem_test
+/usr/bin/modprobe -r drm_hdmi_state_helper_test
+/usr/bin/modprobe -r drm_managed_test
+/usr/bin/modprobe -r drm_mm_test
+/usr/bin/modprobe -r drm_modes_test
+/usr/bin/modprobe -r drm_plane_helper_test
+/usr/bin/modprobe -r drm_probe_helper_test
+/usr/bin/modprobe -r drm_rect_test
+/usr/bin/modprobe -r drm_sysfb_modeset_test
+/usr/bin/modprobe -r kunit
+/usr/bin/modprobe -r sm750hdmidrm
+/usr/bin/modprobe sm750hdmidrm
+/usr/bin/sm750-smi
+/usr/local/cuda/bin/ncu
+/usr/local/cuda/bin/nvprof
+/usr/local/sbin/sm750-console
+/usr/local/sbin/sm750-crc
+/usr/local/sbin/sm750-crc-cycle
+/usr/local/sbin/sm750-headless
+/usr/local/sbin/sm750-lspci
+/usr/local/sbin/sm750-pkg
+/usr/local/sbin/sm750-regs
+/usr/local/sbin/sm750-vbios-dump
 ```
 
 Deliberately not granted: `/bin/sh`, `/bin/bash`, `tee`, `cp`, `mv`, `chmod`,
-`mount`, `dd`, `insmod`, `systemctl`, and bare `dnf`. The `setfacl` line for the
+`mount`, `dd`, `insmod`, `systemctl`, `kill`, and bare `dnf`. `kill` is in this
+list for a measured reason: `sudo -n kill` prompts for a password, so an
+orphaned helper process can only be cleared by the host owner. That is the
+intended state, not a gap - a NOPASSWD `kill` would signal any process on the
+host as root. The `setfacl` line for the
 card node stays commented in the file as a one-shot fallback; the udev rule in
 section 4 replaces it.
 
@@ -911,6 +969,158 @@ suites ran for real, 0 failures, in 8.7 s wall clock
 (`docs/evidence/runtime/33-kunit-and-oops-sweep.txt`, section "LIVE SWEEP,
 KUNIT ENABLED"). The earlier SKIP for disabled KUnit recorded in that file
 is superseded by that census.
+
+### 3.11 `/usr/local/sbin/sm750-headless` (installed 2026-11-25T13:41Z, stale)
+
+Source `tools/sm750-headless.sh`: 9223 bytes, 276 lines, sha256
+`137c665b7f60c17a95a6bdcd7948fb7064239eb62a6a108932e60315ce80913c` as measured
+2026-11-25T13:49Z; static
+gate `tests/check-headless-helper.sh` (part of `make check` through
+`tests/check-drm-policy.sh`).
+
+What it is for: a panel that stays black has three candidate owners - the
+driver's mode, the compositor, and whoever holds DRM master. `sm750-console`
+answers the first (section 3.4), and nothing answered the other two. This
+helper takes master on the SM750 itself, runs one named compositor for a fixed
+number of seconds, and writes a verdict that is either backed by a measured
+vertical-blank delta or is a FAIL.
+
+The helper takes master to prove the card is free (`DRM_IOCTL_SET_MASTER`
+`0x641E`, dropped again with `0x641F`), not to keep it: it drops master before
+the compositor starts, so the compositor acquires it the normal way. A card
+already held by another process is not fought over; that run exits 4 and names
+the holder.
+
+Allowlist line, one line, no argument restrictions beyond the helper's own
+argv check:
+
+```text
+coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-headless
+```
+
+The grant is on the path, not on the file content, so replacing the body needs
+no sudoers change.
+
+Install (host owner, root), from the repository root:
+
+```sh
+sudo install -m 0755 -o root -g root tools/sm750-headless.sh /usr/local/sbin/sm750-headless
+```
+
+The path is relative to the repository root on purpose: the body is read from
+the tree and written to `/usr/local/sbin`. Re-run it after every edit of
+`tools/sm750-headless.sh`, or the installed copy keeps running the old logic -
+that is exactly the state of the installed copy today, see "Installed state"
+below.
+
+Modes, and the longest each may run:
+
+| Mode | What it does | Run time |
+| --- | --- | --- |
+| `probe` | Snapshots the driver attributes, takes and drops master, snapshots again, writes no compositor log. The cheapest answer to "is the card free and does it still respond" | immediate |
+| `diagnose` | Skips the master probe and instead enumerates every `/proc/*/fd` link pointing at `card0`, the `sm750hdmidrm` module refcount from `/proc/modules` and the `vtcon1` bind state. Answers "who is holding it" | immediate |
+| `weston [SECONDS]` | Weston with the DRM backend, the pixman renderer and the kiosk shell, plus one `weston-terminal` client on `wayland-0` | `SECONDS`, default 20, 1..600 |
+| `cage [SECONDS]` | `cage -d -- /usr/bin/weston-terminal`, a kiosk compositor around one terminal | `SECONDS`, default 20, 1..600 |
+| `kmscube [SECONDS]` | `kmscube -A -D <card> -c 300`: the frame count is the argument, the run time is still bounded by `SECONDS` | `SECONDS`, default 20, 1..600 |
+
+`SECONDS` must be numeric and is clamped to 1..600; a second argument in any
+other shape, an unknown mode, or more than two arguments all reach the usage
+path and exit 2. There is no passthrough argument, no shell, no `eval`, and the
+program list is fixed: `/usr/bin/weston`, `/usr/bin/cage`, `/usr/bin/kmscube`,
+`/usr/bin/weston-terminal`, `python3`, and the coreutils already on the
+allowlist.
+
+What it does not touch:
+
+- **seat0 and the owner's session.** The compositors are started with
+  `LIBSEAT_BACKEND=noop`, which opens the DRM device directly and performs no
+  VT operation. libseat 0.9.3 offers exactly three backends - `logind`, `seatd`
+  and `noop`; there is no `builtin` backend. `noop` is the only one that needs
+  neither a seat manager nor a logind session.
+- **No VT switch.** `cage` runs with `-d` and deliberately without `-s`,
+  because `-s` would let it switch the VT out from under the owner.
+- **No other card.** The device is fixed to the by-path link for
+  `0000:01:00.0`, and the run refuses to start unless that card is bound to
+  `sm750hdmidrm`. `card0` in the compositor arguments is a name weston and
+  kmscube resolve inside that same private environment.
+- **No permanent state.** Every run writes under
+  `/mega/tmp/sm750/headless/` (override with `SM750_HEADLESS_DIR`), never into
+  `/etc` or the repository. The compositor is stopped with TERM, then KILL, on
+  an EXIT trap, so a Ctrl-C or a failed assertion does not leave a process
+  holding the card.
+
+Log directory layout, one directory per run, `<UTC stamp>-<mode>`:
+
+| Path | Content |
+| --- | --- |
+| `01-before.txt` | Driver attributes and connector state before anything ran |
+| `02-master.txt` | The master probe result: acquired, or the errno it failed with |
+| `03-compositor.log` | The compositor's own stdout and stderr (weston also writes `weston.log`) |
+| `04-client.log`, `04-client.pid` | Weston only: the terminal client's output and pid |
+| `04-holders.txt` | Diagnose only: every fd-table holder of the card, the module refcount, the vtcon bind |
+| `05-verdict.txt` | Survivor line, the two vblank counters, the delta, and `RESULT: PASS` or `RESULT: FAIL` with the reason |
+| `06-after.txt` | The same attribute set as `01-before.txt`, after cleanup |
+| `runtime/` | The compositor's `XDG_RUNTIME_DIR`, mode `0700` |
+
+The verdict fails on two conditions and passes only when neither holds: the
+compositor did not survive the full `SECONDS` (except for `kmscube`, which is
+given a fixed frame count by `-c` and passes when it exits `0` early, so an
+early clean exit is not a failure - a non-zero exit is), or the
+`vblank_count` delta is zero or negative. `05-verdict.txt` states why a frame count alone proves
+nothing - the raster scans out whether or not a user client owns the card - so
+a PASS is "the compositor held the card and the pipe advanced", not "the
+compositor drew a picture". Only a panel observation or an external capture
+proves the pixels.
+
+Exit codes: 0 the run completed and every expectation held, 1 environment
+problem (not root, wrong driver, program missing), 2 usage, 3 the compositor
+started but an expectation failed, 4 nothing could take master.
+
+Installed state, measured 2026-11-25T13:49Z:
+
+```text
+-rwxr-xr-x 1 root root 8759 2026-11-25 16:41 /usr/local/sbin/sm750-headless
+sha256 03de0f981b6860b87e08faf7cc4ffd643eaaa5d2914ddf2f04dccc244fd9f5c0
+```
+
+Status: **INSTALLED, STALE.** The allowlist line is present (`sudo -n -l`
+lists `(root) NOPASSWD: /usr/local/sbin/sm750-headless`). The refinement of
+2026-11-25 is installed: the 8759-byte revision that fixed the four defects
+below. The tree has since moved on to the 9223-byte source recorded above, so
+one owner-run install is still required to bring the installed copy level.
+
+The 7387-byte revision of 2026-11-23, now superseded on the host, carried these
+four defects:
+
+- `LIBSEAT_BACKEND=builtin` - not a libseat backend, so the compositor cannot
+  open a seat at all;
+- `cage -d -s -- ...` - `-s` allows VT switching, which is the one thing the
+  helper must not permit;
+- `kmscube -D <card> -n 300` - `-n` is a connector id, so the frame count is
+  lost;
+- no survivor check - a compositor that died immediately still reached the
+  vblank test and could read as a PASS.
+
+Refresh (host owner, root), from the repository root:
+
+```sh
+sudo install -m 0755 -o root -g root tools/sm750-headless.sh /usr/local/sbin/sm750-headless
+sha256sum /usr/local/sbin/sm750-headless
+```
+
+Expected after the refresh:
+`137c665b7f60c17a95a6bdcd7948fb7064239eb62a6a108932e60315ce80913c`, 9223
+bytes. The installed copy is the 8759-byte
+`03de0f981b6860b87e08faf7cc4ffd643eaaa5d2914ddf2f04dccc244fd9f5c0` revision,
+so one owner-run install is still required. The static gate
+`tests/check-headless-helper.sh` validates the source in the tree; it cannot see
+the installed copy, so the hash above is the only evidence that the refresh
+happened.
+
+Every mode was exercised through the installed helper on 2026-11-25 (probe,
+diagnose, weston 30, cage 20, kmscube 15); the measured vblank deltas are
+recorded under defect A43 in `docs/DEFECTS.md`. Those runs used the installed
+8759-byte revision, not the 9223-byte source documented above.
 
 ## 4. udev ACL rule
 
