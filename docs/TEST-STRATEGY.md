@@ -103,6 +103,7 @@ exports `TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}`), never to `/tmp`.
 | S18 | In-repo `tests/check-kunit-drm.sh` (`make check-kunit`, opt-in) | DRM KUnit sweep: discovers the DRM KUnit suites under `/lib/modules/$(uname -r)/internal/drivers/gpu/drm/tests/` (floor of 8 so an empty directory fails), modprobes each (KUnit autorun runs it at load), parses the TAP output (`# Subtest:`, `ok N - name`, `not ok N - name`, `# Totals: pass:N fail:N skip:N`) from the kernel log via `DMESG_CMD`, fails naming the suite and subtest, and unloads every module in an EXIT trap. Needs root, or the allowlisted loader of `docs/ROOT-ACTIONS.md` section 3.9 (`MODPROBE_CMD='sudo -n /usr/bin/modprobe'`); without either an unprivileged run exits 77 with one SKIP line. Four planted parser defects rejected plus two negative controls in `--self-test` | Live on 2026-11-22 through the installed per-module allowlist: 23 modules discovered, 21 suites loaded and unloaded, all 21 printed only `kunit: disabled` because `# CONFIG_KUNIT_DEFAULT_ENABLED is not set` on this kernel, so the gate skips with exit 77 naming that prerequisite (`docs/ROOT-ACTIONS.md` section 3.10) instead of passing; self-test PASS; the suites' real pass/fail census is NOT YET OBSERVED |
 | S19 | In-repo `tests/check-oops-delta.sh` (`make check-oops`, opt-in; standalone `-- <command...>`) | Reusable oops detector: snapshots the kernel log before and after the wrapped command through `DMESG_CMD` (default `dmesg`, this host `sudo -n dmesg`), diffs the delta, filters `--allow` regexes or `OOPS_ALLOW_FILE`, and fails on any new `BUG:`, `WARNING:`, `Oops`, `general protection fault`, `kernel NULL pointer dereference`, `lockdep`, `call trace` or `RIP:` line; exits 77 when the log is unreadable. Three planted defects rejected (new `WARNING:`, new `BUG:`, wrapped command failing) plus four negative controls (unchanged log, allow-filtered warning, allow wins over BUG, allowlist file) in `--self-test`; exercised live by wrapping `tests/check-drm-policy.sh` and `tests/check-sm750-pkg.sh` | PASS (2026-11-22, `sudo -n dmesg` reader, both wrapped gates clean) |
 | S20 | In-repo `tests/check-headless-helper.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the operator helper `tools/sm750-headless.sh`: POSIX `sh` that passes `sh -n`, the five modes `probe`, `diagnose`, `weston`, `cage` and `kmscube` with a usage path that exits 2 for anything else, the `0000:01:00.0` and `sm750hdmidrm` driver binding test, `LIBSEAT_BACKEND=noop` exported and never `builtin`, the weston arm carrying `--backend=drm`, `--drm-device=card0` and `--shell=kiosk-shell.so`, the cage arm without `-s` (which would permit VT switching) and the kmscube arm with `-c` and without `-n` (which is a connector id), the `SECONDS` numeric test and the 1..600 clamp, the verdict failing on a died compositor and on a vblank delta `<= 0`, TERM before KILL on an EXIT trap, and no local absolute path or non-ASCII byte. Static only: it runs no compositor, needs no root and never touches the card | PASS (2026-11-25); ten planted defects rejected (the `LIBSEAT_BACKEND` export deleted, `noop` changed to `builtin`, `-s` added to cage, `-c` changed to `-n` in kmscube, the survivor check deleted, the vblank check deleted, a clean kmscube completion reported as a failure, a kmscube exit code ignored, an absolute local path appended, the lower clamp loosened to 0) plus a pristine control accepted, in `--self-test` |
+| S21 | In-repo `tests/check-render-node.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the render node: both `driver_features` lines in `src/sm750_drm.c` carry `DRIVER_RENDER` on the same line as `DRIVER_MODESET`, no executable line carries `DRIVER_RENDER` without `DRIVER_MODESET` (a render-only device would lose card0 and every mode), and `SM750_DRM_VERSION` agrees with the `readonly version=` line of `build-package.sh`. The live half walks `/sys/class/drm/renderD*`, keeps the node whose `device/driver` basename is `sm750hdmidrm`, and requires the matching `/dev/dri/renderDN` character device and write access for the invoking user; with no such node it prints one `SKIP:` line and still exits 0, which is the state before a 0.6.5 module is loaded | PASS (2026-11-25); five assertions, four source-level and one live on `/dev/dri/renderD131`, plus three planted defects rejected (`render_dropped`, `render_only`, `version_drift`) in `--self-test` |
 ### S1: in-repo `make check`
 
 - Package/version: the repository itself at 0.5.9; no external package. The
@@ -620,6 +621,36 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   controls)`; the `--self-test` run prints
   `Headless helper checks passed (10 assertions, 10 planted controls, self-test)`.
   The helper itself has not been run: every mode needs root and the card.
+
+### S21: render-node gate
+
+- Command: `./tests/check-render-node.sh` (called by
+  `tests/check-drm-policy.sh:270-276`, which `make check` runs). It takes an
+  optional repository directory and needs neither root nor a card; the live half
+  reads `/sys/class/drm/renderD*` and only needs read access to the nodes.
+  Scratch trees go under `${TMPDIR:-/mega/tmp/sm750/tmp}`.
+- Holds: `src/sm750_drm.c` has exactly two `.driver_features = ` lines and both
+  carry `DRIVER_RENDER`; no executable line (comment lines are skipped by the
+  `awk` filter) carries `DRIVER_RENDER` without `DRIVER_MODESET`; and the
+  `SM750_DRM_VERSION` define matches the `readonly version=` line of
+  `build-package.sh`. The live assertion selects the `renderD*` node whose
+  `device/driver` resolves to `sm750hdmidrm` and requires the matching
+  `/dev/dri/renderDN` to be a character device writable by the invoking user.
+  When no such node exists the live half prints
+  `SKIP: the running module does not advertise a render node yet: install 0.6.5`
+  and the gate still exits 0, so the gate is useful before the module is
+  installed and becomes a real assertion the moment a 0.6.5 module is loaded.
+- Planted controls: `render_dropped` (the `DRIVER_RENDER` flag removed from one
+  of the two lines), `render_only` (a synthetic `DRIVER_RENDER` on a line
+  without `DRIVER_MODESET`) and `version_drift` (the packaged version moved
+  while the module define stayed). Each mutates a copy under the scratch
+  directory and must exit non-zero naming the defect.
+- Status: PASS, `Render node checks passed (5 assertions, 3 planted controls)`
+  on the installed 0.6.5, and
+  `Render node checks passed (8 assertions, 3 planted controls)` under
+  `--self-test`. The gate adds no recipe command, so `make check` still runs 18
+  commands. The observed node and the kwin outcome are in
+  `docs/evidence/runtime/36-render-node.txt`.
 
 ## 3. `make check`: the recipe commands
 

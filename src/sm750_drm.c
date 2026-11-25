@@ -76,12 +76,12 @@ typedef struct drm_atomic_state sm750_atomic_commit;
 #define SM750_DRM_NAME "sm750hdmidrm"
 /* Keep in step with the package version in build-package.sh and dkms.conf;
  * tests/check-release-version.sh fails when the three disagree. */
-#define SM750_DRM_VERSION "0.6.4"
+#define SM750_DRM_VERSION "0.6.5"
 /* modetest reports these as the driver version, so they must track the release
  * number above; tests/check-release-version.sh fails when they drift. */
 #define DRIVER_MAJOR 0
 #define DRIVER_MINOR 6
-#define DRIVER_PATCHLEVEL 4
+#define DRIVER_PATCHLEVEL 5
 #define SM750_DRM_MAX_WIDTH 2560
 #define SM750_DRM_PHYSICAL_MAX_WIDTH 2048
 #define SM750_DRM_PLL PRIMARY_PLL
@@ -4514,8 +4514,17 @@ static int sm750_dumb_create(struct drm_file *file, struct drm_device *drm,
 					     SM750_DRM_LINE_ALIGN, args);
 }
 
+/* A render node is advertised so that userspace which refuses a card-only
+ * device can still obtain a file descriptor: kwin 6.7.5 skips every DRM
+ * device whose node set has no render node. SM750 has no 3D engine, so this
+ * node carries only dumb-buffer and PRIME/dma-buf primitives plus the core
+ * ioctls marked render-allowed; it is not a claim of GL capability, and Mesa
+ * ships no SM750 driver (kms_swrast only). DRIVER_MODESET stays: a render
+ * node without it would cost the card its modesetting. Both driver_features
+ * lines are pinned by tests/check-render-node.sh.
+ */
 static const struct drm_driver sm750_drm_driver = {
-	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
+	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_RENDER,
 	.fops = &sm750_drm_fops,
 	.debugfs_init = sm750_vram_debugfs_init,
 	.dumb_create = sm750_dumb_create,
@@ -4528,8 +4537,9 @@ static const struct drm_driver sm750_drm_driver = {
 	.patchlevel = DRIVER_PATCHLEVEL,
 };
 
+/* Render node: same rationale as the block above sm750_drm_driver. */
 static const struct drm_driver sm750_shadow_drm_driver = {
-	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC,
+	.driver_features = DRIVER_GEM | DRIVER_MODESET | DRIVER_ATOMIC | DRIVER_RENDER,
 	.fops = &sm750_drm_fops,
 	.debugfs_init = sm750_debugfs_init,
 	DRM_GEM_SHMEM_DRIVER_OPS,

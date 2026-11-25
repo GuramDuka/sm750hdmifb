@@ -267,4 +267,11 @@ test "$stage_count" -ge 6 || {
 # vblank delta, TERM then KILL cleanup). Source-level; it never runs the
 # helper and needs no root.
 ./tests/check-headless-helper.sh
+# T57: the render node. kwin 6.7.5 skips a DRM device whose node set has no
+# render node, so the driver advertises DRIVER_RENDER on the same
+# driver_features line as DRIVER_MODESET (a render-only device would lose
+# modesetting); the node carries dumb and PRIME primitives only, because SM750
+# has no 3D engine. Source-level with three planted controls; the live half
+# skips while the running module predates the change.
+./tests/check-render-node.sh
 echo "DRM mode policy checks passed"

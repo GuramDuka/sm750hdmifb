@@ -19,12 +19,12 @@
 #   tests/check-rpm-dkms.sh
 
 %global dkms_name     sm750hdmifb
-%global dkms_version  0.6.4
+%global dkms_version  0.6.5
 %global module_name   sm750hdmidrm
 
 Name:           sm750hdmifb
-Version:        0.6.4
-Release:        2%{?dist}
+Version:        0.6.5
+Release:        1%{?dist}
 Summary:        DKMS source for the SM750G10 SiI9024A HDMI DRM-KMS driver
 License:        GPL-2.0-only
 URL:            https://github.com/KodeMunkie/sm750hdmifb
@@ -357,6 +357,15 @@ exit 0
 %doc README.md LICENSE docs/RELEASE-NOTES.md docs/TESTING.md packaging/copyright
 
 %changelog
+* Wed Nov 25 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.5-1
+- Release 0.6.5: the driver advertises DRIVER_RENDER, so the card registers a
+  render node (/dev/dri/renderDN) alongside card0. kwin 6.7.5 skips a DRM
+  device that has no render node, so compositors which demand one can at least
+  open the device. SM750 has no 3D engine: the node carries only dumb-buffer
+  and PRIME/dma-buf primitives plus the render-allowed core ioctls, and it is
+  not a claim of GL capability (Mesa has no SM750 driver; kms_swrast only).
+  DRIVER_MODESET is kept on the same line so the card keeps its modesetting.
+  New gate tests/check-render-node.sh, with three planted controls.
 * Sun Nov 22 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.4-2
 - Rebuild so this package carries the same release number as
   sm750hdmifb-tools 0.6.4-2, which fixes the sm750-smi banner alignment. The

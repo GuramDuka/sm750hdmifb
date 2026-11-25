@@ -3462,3 +3462,65 @@ real, and deleting it would leave A43 resting on a claim instead of a run.
 Lesson repeated for the fourth time in this project: the installed copy under
 `/usr/local/sbin` lags the tree silently, `sudo install` is not allowlisted, and
 only the hash pair distinguishes "refreshed" from "reported as refreshed".
+
+### 2026-11-25T19:20Z | orchestrator | 0.6.5: the driver now advertises a render node
+
+Release 0.6.5 adds `DRIVER_RENDER` to both `driver_features` lines:
+`src/sm750_drm.c:4527` (the TTM-capable struct) and `src/sm750_drm.c:4542`
+(the shadow struct that is actually instantiated on this host). Version and
+patchlevel moved to 0.6.5 in `build-package.sh:9`, `dkms.conf:3`, both specs
+(Release back to `1%{?dist}`) and `docs/ci/build.yml`.
+
+Measured after `sm750-pkg install` then `sm750-pkg reload` (the reload needed
+our own Xorg :1 test server to be stopped first, otherwise `modprobe -r` says
+`Module sm750hdmidrm is in use`; the user's seat0 session was never touched):
+
+- `/sys/module/sm750hdmidrm/version` = 0.6.5.
+- `/dev/dri/renderD131` exists, `crw-rw-rw- root:render 226,131`, with a
+  matching `/sys/class/drm/card0/device/drm/renderD131`.
+- `DRM_IOCTL_VERSION` on both nodes returns driver `sm750hdmidrm`, version
+  0.6.5, description `SM750G10 SiI9024A HDMI DRM shadow driver` - so the
+  shadow struct is the one bound, not the TTM one.
+- Capabilities read through `DRM_IOCTL_GET_CAP` (identical on both nodes):
+  dumb buffer 1, vblank high crtc 1, preferred depth 24, prefer shadow 1,
+  prime 3, timestamp monotonic 1, async page flip 0, cursor 64x64, addfb2
+  modifiers 1, page flip target 0, crtc in vblank event 1, syncobj 0,
+  syncobj timeline 0, atomic async page flip 0.
+- On card0 a dumb buffer of 1920x1080x32 allocates handle 1, pitch 7680,
+  size 8294400, maps at 0x100300000, exports a dmabuf of the same size and
+  re-imports to the same handle. On the render node `CREATE_DUMB` returns
+  `EACCES`, which is the correct DRM rule (dumb buffers are card-node only)
+  and is recorded as behaviour, not as a defect.
+
+The node does not make Wayland work. `kwin_wayland` 6.7.5 with
+`KWIN_DRM_DEVICES=/dev/dri/card0 LIBSEAT_BACKEND=noop` now gets past the
+"no render node" stage and refuses one step later: `Ignoring render device
+/dev/dri/renderD131 without hardware acceleration`, then `Failed to open
+/dev/dri/card0 device (Operation not permitted)` and `No suitable DRM devices
+have been found`. strace shows the trace contains exactly one EPERM, an
+unrelated futex, and that kwin never opens card0 at all - it only stats and
+resolves the sysfs path - so the message is libkwin's permission-model
+verdict, not a failed syscall. The two barriers are independent: no Mesa
+driver for this GPU (nothing matching sm750/smi/silicon under /usr/lib64/dri,
+and `eglQueryDevicesEXT` returns zero devices) and no logind seat for a
+non-seat session. X11 remains the route where Plasma actually runs on this
+driver, without compositing.
+
+Gate `tests/check-render-node.sh` (5 assertions, 8 with `--self-test`, three
+planted controls `render_dropped`, `render_only`, `version_drift`) is wired at
+`tests/check-drm-policy.sh:270-276` and registered in the scratch census, so
+the recipe count in `make check` stays 18. Full sweep green afterwards:
+scratch policy (20 scripts), drm policy, release version, packaging, pkg
+helper, sii902x recovery, test pattern, render node, headless helper, crc
+uapi, console blank, restore path, sysfs attributes, sm750-smi, and
+`make CC=/usr/bin/gcc check`. `check-kunit-drm.sh` skips with 77 for lack of
+root, as designed.
+
+Counts re-measured after staging the two new files: 143 payload files, 30 gate
+scripts, 43 runtime transcripts. `docs/DELIVERABLES.md:130` and `README.md:84`
+carried the pre-add figures 142 and 42 and were corrected before the commit.
+
+Lesson: an audit that compares the archive against `git ls-files` cannot see
+an untracked file, so it passes right up to the moment of the commit; staging
+first and then re-reading every count is the only way the numbers in the docs
+match the tree that gets pushed.

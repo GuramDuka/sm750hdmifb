@@ -22,7 +22,7 @@ Three labels are used throughout:
 | AC | Subject | Deliverable paths | Verification command | Root |
 | --- | --- | --- | --- | --- |
 | AC-1 | Device specifications archived with checksums | `docs/specs/INDEX.md`, `docs/specs/SHA256SUMS`, `docs/specs/GAPS.md`, `docs/specs/REGISTER-MAP.md` | `ls docs/specs` (four text files, no binary) and the checksum re-download in section 2.1 | no |
-| AC-2 | Audit and defect inventory | `docs/AUDIT.md`, `docs/DEFECTS.md`, `docs/evidence/audit/identity-and-range.txt`, `docs/evidence/audit/privilege-probe.txt`, `docs/evidence/audit/release-gate-and-environment.txt`, `docs/evidence/audit/rootless-libdrm-check.txt` | `grep -cE '^.[[:space:]]A[0-9]' docs/AUDIT.md docs/DEFECTS.md` -> 24 and 29 (that grep counts one header row per defect id; `docs/AUDIT.md` keeps the 24 it audited, `docs/DEFECTS.md` carries the five later dispositions A25-A29) | no |
+| AC-2 | Audit and defect inventory | `docs/AUDIT.md`, `docs/DEFECTS.md`, `docs/evidence/audit/identity-and-range.txt`, `docs/evidence/audit/privilege-probe.txt`, `docs/evidence/audit/release-gate-and-environment.txt`, `docs/evidence/audit/rootless-libdrm-check.txt` | `grep -cE '^.[[:space:]]A[0-9]' docs/AUDIT.md docs/DEFECTS.md` -> 24 and 44 (that grep counts one header row per defect id; `docs/AUDIT.md` keeps the 24 it audited, `docs/DEFECTS.md` carries the later dispositions A25-A45, with A31 present as its own detail section rather than a table row) | no |
 | AC-3 | Runtime and hardware validation ladder | `docs/TEST-STRATEGY.md` sections 5 and 9, `docs/evidence/baseline/03-connector.txt`, `docs/evidence/runtime/08-register-dump.txt` (the successful dump; `docs/evidence/builds/09-register-dump.log` is the earlier denied attempt), `docs/evidence/scanout/01-build.txt` .. `docs/evidence/scanout/06-crc-debugfs-runtime.txt`, `docs/evidence/EVIDENCE-GAPS.md` GAP-B3/B4 | `grep -n 'GAP-B[34]' docs/evidence/EVIDENCE-GAPS.md` | partly; see section 3 |
 | AC-4 | Test strategy and recorded results | `docs/TEST-STRATEGY.md`, `tests/check-scanout-crc.sh`, `docs/evidence/builds/01-make-check.log` .. `docs/evidence/builds/19-cursor-alpha-fix.log` | evidence-existence loop in section 2.4 | no |
 | AC-5 | Build integrity | `Makefile` (`check` at `Makefile:30-48`, `check-deps` at `Makefile:17-28`, `check-all-kernels` at `Makefile:50-51`), `tests/build-all-kernels.sh`, `docs/evidence/builds/01-make-check.log`, `docs/evidence/builds/02-check-all-kernels.log`, `docs/evidence/builds/03-kernel-7.2.15-100.log`, `docs/evidence/builds/04-kernel-7.3.3-100.log`, `docs/evidence/builds/05-kernel-7.3.4-100.log`, `docs/evidence/builds/06-kernel-6.17.1.log`, `docs/evidence/builds/11-warnings-scan.log` | `make check` and `./tests/build-all-kernels.sh`; section 2.5 | no |
@@ -127,7 +127,7 @@ to `src/*.c` or `src/*.h` (`docs/evidence/builds/11-warnings-scan.log`).
 ```
 
 Expected: exit 0. The script rebuilds the noarch RPM from a fresh `_topdir`,
-asserts the payload against `git ls-files` (142 payload files in the current
+asserts the payload against `git ls-files` (143 payload files in the current
 tree; the same command the script uses is `git ls-files -- . ':(exclude)docs/plan'
 ':(exclude)docs/evidence' ':(exclude)docs/images' ':(exclude)docs/notes' |
 wc -l`), the `%files` list
@@ -192,10 +192,11 @@ bodies and the recovery recipe for a broken allowlist are in
 | RPM erase | `sudo -n dnf remove -y sm750hdmifb` then `sudo -n dkms status -m sm750hdmifb -v 0.6.0` (expected no output) | **CLOSED, GAP-B7.** Executed as the rollback proof: `%preun` ran `dkms remove --all`, the object file was deleted and the display survived (`docs/evidence/runtime/20-rollback.txt`). Recorded hazard: the erase leaves the module loaded with no file on disk, so a reboot in that state would leave card0 driverless; 0.6.0 was reinstalled and a `modprobe -r`/`modprobe` cycle proved the fresh package loads. |
 
 The KMS row no longer needs a privilege step: `/etc/udev/rules.d/99-sm750-coder-acl.rules`
-grants `u:coder:rw` on the card node at every probe, and the SM750 registers no
-render node, so `/dev/dri/renderD128` (the NVIDIA card at `02:00.0`) is not a
-substitute. The three access mechanisms and their state are recorded in
-`docs/ENVIRONMENT.md` section 5.1.
+grants `u:coder:rw` on the card node at every probe. The SM750 also registers a
+render node from 0.6.5 on (`/dev/dri/renderD131`, 226:131), but a render node
+carries no KMS objects, so `/dev/dri/renderD128` (the NVIDIA card at `02:00.0`)
+is still not a substitute for the card node. The three access mechanisms and
+their state are recorded in `docs/ENVIRONMENT.md` section 5.1.
 
 ### 3.1 Second output: the console on the SM750 HDMI port
 
@@ -421,7 +422,7 @@ list.
 | --- | --- |
 | `docs/AUDIT.md` | repository audit, 24 defects with reproduction and evidence |
 | `docs/DEFECTS.md` | one disposition per defect: fixed, accepted or deferred |
-| `docs/TEST-STRATEGY.md` | suites S1-S20, recorded results, remaining gaps |
+| `docs/TEST-STRATEGY.md` | suites S1-S21, recorded results, remaining gaps |
 | `docs/STATIC-ANALYSIS.md` | static-analysis gate, per-tool counts, triage of every finding, tool configuration and limits |
 | `docs/PACKAGING-RPM.md` | spec purpose, build recipe, install, verify, rollback |
 | `docs/ENVIRONMENT.md` | host, header trees, tool matrix, privilege state |
@@ -442,6 +443,7 @@ list.
 | `tools/sm750-console.sh` | T37 console helper, installed as `/usr/local/sbin/sm750-console` (root only): `show` prints the active tty, `KDGETMODE` of `/dev/tty0` decoded as `KD_TEXT`/`KD_GRAPHICS`/`KD_KDWANTED`, the `vtconsole` bind state, `PANEL_FB_ADDRESS` and the `sm750_scanout` offset/nonzero/crc32; `text [N]` runs `chvt` (default 2) and prints the same status; `graphics` runs `chvt 1`. Usage errors exit 2 |
 | `tools/sm750-headless.sh` | T56 operator helper, installed as `/usr/local/sbin/sm750-headless` (root only): refuses to run unless `0000:01:00.0` is bound to `sm750hdmidrm`, takes DRM master (`0x641E`, dropped with `0x641F`) to prove the card is free and exits 4 when another process holds it, then runs one fixed program for a bounded time and writes a verdict. Modes `probe`, `diagnose`, `weston [SECONDS]`, `cage [SECONDS]`, `kmscube [SECONDS]`; `SECONDS` is numeric, defaults to 20 and is clamped to 1..600; no free-form arguments. The compositors run with `LIBSEAT_BACKEND=noop` (libseat 0.9.3 has `logind`, `seatd` and `noop`, and `noop` opens the device directly, so seat0, logind and every VT are untouched), `cage` is invoked without `-s` because that flag permits VT switching, and `kmscube` gets `-c` (frame count) rather than `-n` (a connector id). Each run writes `01-before.txt`, `02-master.txt`, `03-compositor.log`, `04-client.log`/`.pid` (weston), `05-verdict.txt`, `06-after.txt` and a `0700` `runtime/` under `/mega/tmp/sm750/headless/`. The verdict fails when the compositor did not survive `SECONDS` or the `vblank_count` delta is `<= 0`, and states that a frame count alone never proves a compositor rendered. Exit 0 success, 1 environment, 2 usage, 3 expectation failed, 4 master held |
 | `tests/check-headless-helper.sh` | T56 source-level gate for `tools/sm750-headless.sh` (part of `make check` through `tests/check-drm-policy.sh`): POSIX `sh` plus `sh -n`, the five modes and the usage path that exits 2, the `0000:01:00.0` / `sm750hdmidrm` binding test, `LIBSEAT_BACKEND=noop` exported and never `builtin`, the weston, cage and kmscube argument sets read out of the switch body with comments stripped (so `-s` on cage and `-n` on kmscube are rejected where they would be executed), the `SECONDS` numeric test and 1..600 clamp, the survivor and vblank-delta failures with `status=3`, TERM before KILL on an EXIT trap, no local absolute path and no non-ASCII byte. Static only: no compositor, no root, no card. `--self-test` runs eight planted defects plus a pristine control |
+| `tests/check-render-node.sh` | T57 source-level and live gate for the render node (part of `make check` through `tests/check-drm-policy.sh:270-276`): both `driver_features` lines in `src/sm750_drm.c` carry `DRIVER_RENDER` on the same line as `DRIVER_MODESET`, no executable line sets `DRIVER_RENDER` without `DRIVER_MODESET` because a render-only device would lose card0 and every mode, `SM750_DRM_VERSION` agrees with the `readonly version=` line of `build-package.sh`, and the live half requires the `renderD*` node whose `device/driver` basename is `sm750hdmidrm` to exist as a character device writable by the invoking user, printing one `SKIP:` line when the running module predates 0.6.5. Rejects three planted controls `render_dropped`, `render_only` and `version_drift`. Adds no `make check` recipe command, so the count stays 18 |
 
 ### 5.3 Specification archive
 
@@ -527,6 +529,7 @@ list.
 | `docs/evidence/packaging/04-rpm-qpR.log` | dependency assertions |
 | `docs/evidence/packaging/05-dkms-sandbox.log` | sandbox DKMS `built` with a real module, captured under `LC_ALL=C` and ASCII-gated |
 | `docs/evidence/runtime/28-dangling-kernel-link.txt` | T42: the three dangling `/var/lib/dkms/sm750hdmifb/kernel-<kernel>-x86_64` symlinks verbatim, the `/usr/sbin/dkms` lines that turn one into `die 6`, the transcript excerpt of the abort, the fix with spec line numbers, the six-control gate transcript, and an explicit `NOT YET OBSERVED ON THE HOST` section |
+| `docs/evidence/runtime/36-render-node.txt` | T57: the render node from missing to observed - the gate assertions and its three planted controls, the earlier `NOT YET OBSERVED` section kept as history, and the 2026-11-25 observation on module 0.6.5: `/dev/dri/renderD131` as `crw-rw-rw- root:render 226:131` with its sysfs counterpart, the `DRM_IOCTL_VERSION` identity of both nodes and the shadow-driver description it returns, the kwin 6.7.5 refusal with its exact log lines and the strace showing card0 is stat-ed but never opened, the two remaining barriers (no Mesa SM750 driver, no logind seat), and the X11 route where Plasma runs with compositing off |
 | `docs/evidence/packaging/06-posttrans-missing-headers.log` | missing-header branch of `%posttrans`, plus the stale-purge run whose `dkms remove` fails (exit 4) and the dangling-link run (A40) |
 | `docs/evidence/packaging/07-check-rpm-dkms.log` | full `tests/check-rpm-dkms.sh` run |
 | `docs/evidence/packaging/0.5.9/01-rpmbuild.log` | `rpmbuild -ba` at 0.5.9, exit 0, frozen: produced before the T45 `LC_ALL=C` capture, non-ASCII lines left unedited as the historical record |

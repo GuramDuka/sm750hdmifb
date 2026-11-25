@@ -65,7 +65,7 @@ packaged tarball.
 | Panel safety | a test card with a bouncing-disc animation paints whenever no client has produced a frame, rotates its colours against burn-in, and yields the scanout the moment a real client commits | [parameters](docs/PARAMETERS.md) |
 | Observability | twelve sysfs monitoring attributes beside the DRM device node and `sm750-smi`, a 27-field reporting tool for mode, link, HPD, receive sense, memory, CRC and process state | [sm750-smi](#gates-and-test-scripts), [parameters](docs/PARAMETERS.md) |
 | Robustness | bridge readiness polled with a bounded budget, I2C transaction timeouts survived and retried with a bus recovery, restore path reworked so a failed commit cannot blank the panel, stale DKMS registrations purged on upgrade | [defect inventory](docs/DEFECTS.md) |
-| Test suites | the vendor-neutral suites located, piloted and recorded: IGT KMS subset, `modetest`, `kmscube`, nine-combination build matrix, plus 26 project gates of which 18 run in the default `make check` | [test strategy and results](docs/TEST-STRATEGY.md) |
+| Test suites | the vendor-neutral suites located, piloted and recorded: IGT KMS subset, `modetest`, `kmscube`, nine-combination build matrix, plus 30 project gates of which 18 run in the default `make check` | [test strategy and results](docs/TEST-STRATEGY.md) |
 | Packaging | one DKMS source tree with a noarch module package and an arch-dependent tools package, RPM and Debian, changelogs, dependency checks, sandbox build and a stale-version upgrade path | [RPM packaging](docs/PACKAGING-RPM.md) |
 | Audit | every finding tracked with an id, a disposition and evidence; acceptance verdict recorded criterion by criterion | [repository audit](docs/AUDIT.md), [defects](docs/DEFECTS.md), [acceptance](docs/ACCEPTANCE-REPORT.md) |
 
@@ -74,14 +74,14 @@ packaged tarball.
 | Measure | Value |
 | --- | --- |
 | Driver source | 11252 lines of C and headers under `src/` |
-| Defect findings tracked | 44, from A01 to A44, each with a disposition |
+| Defect findings tracked | 45, from A01 to A45, each with a disposition |
 | Acceptance criteria | 6 PASS, 0 FAIL, 1 GAP - the gap is pixel-level capture at the panel, which needs a human or capture hardware |
-| Project gates | 29 gate scripts, 18 commands in `make check`, seven opt-in verification targets with planted-defect controls |
+| Project gates | 30 gate scripts, 18 commands in `make check`, seven opt-in verification targets with planted-defect controls |
 | Kernel and format matrix | 9 combinations, kernel 6.17.1 through the 7.4 daily headers |
 | IGT KMS subset | 26 pass, 14 skip, 1 fail by design |
 | GL path | `kmscube`, 299 frames in 5.07 s, 59.01 fps on llvmpipe |
 | Vblank rate | 60.43 per second measured over 120 events |
-| Evidence | 41 runtime transcripts, 28 build transcripts and 7 packaging transcripts under `docs/evidence/` |
+| Evidence | 43 runtime transcripts, 28 build transcripts and 7 packaging transcripts under `docs/evidence/` |
 | Documentation | 21 documents under `docs/`, plus the specification archive and the deck |
 
 ### How a claim is checked
@@ -656,9 +656,14 @@ minor=${card##*/card}
 sudo cat /sys/kernel/debug/dri/$minor/regs
 ```
 
-The card registers no render node, so `/dev/dri/by-path/pci-0000:01:00.0-card`
-is the only stable handle for it; the `renderD*` nodes on a multi-GPU host
-belong to other cards.
+The driver advertises a render node beside the card node, so
+`/dev/dri/by-path/pci-0000:01:00.0-render` resolves to the same device as
+`/dev/dri/by-path/pci-0000:01:00.0-card`; before 0.6.5 no render node existed
+and the card node was the only stable handle. The node carries the dumb-buffer
+and PRIME primitives only: it is not a claim of GL acceleration, and no Mesa
+driver exists for this GPU, so a client that needs an accelerated render node
+still will not find one. The `renderD*` nodes of other cards on a multi-GPU host
+are unrelated.
 
 The file is mode `0444` and lives under the DRM minor's debugfs directory, so
 reading it requires root. It is inert until read, never writes to the device,
@@ -978,6 +983,7 @@ VBIOS and scanout checks are documented in
 | `tests/check-sm750-smi.sh` | Fixture-driven gate for `tools/sm750-smi`: 27 fields from synthetic sysfs/DRM trees, `--strict` exit codes, CSV/JSON parsing, four planted controls; no GPU or root needed |
 | `tests/check-sysfs-attributes.sh` | Source-level gate for the twelve monitoring attributes `sm750-smi` reads from `/sys/class/drm/cardN/device/`: names and array entries, the group on the PCI device before `drm_dev_register`, `sysfs_emit()` with no sleep and no lock beyond the mode lock in every show function, `clear_events` false on the link-status read; five planted controls |
 | `tests/check-headless-helper.sh` | Source-level gate for `tools/sm750-headless.sh`: POSIX `sh` plus `sh -n`, the five modes and the usage path, the `0000:01:00.0` / `sm750hdmidrm` binding test, `LIBSEAT_BACKEND=noop` and never `builtin`, the weston, cage and kmscube argument sets read out of the executed switch arms (`-s` rejected on cage, `-n` rejected on kmscube), the `SECONDS` numeric test and 1..600 clamp, the survivor and vblank failures, TERM before KILL on an EXIT trap, no local absolute path and no non-ASCII byte; eight planted controls in `--self-test`, no compositor, no root and no card needed |
+| `tests/check-render-node.sh` | Source-level and live gate for the render node: both `driver_features` lines in `src/sm750_drm.c` carry `DRIVER_RENDER` beside `DRIVER_MODESET`, no executable line sets `DRIVER_RENDER` without `DRIVER_MODESET`, `SM750_DRM_VERSION` agrees with `build-package.sh`, and a live `renderD*` node owned by `sm750hdmidrm` must be writable by the invoking user; three planted controls `render_dropped`, `render_only` and `version_drift` in `--self-test`, one `SKIP:` line before a 0.6.5 module is loaded |
 | `make console-check` | Opt-in console reachability: writes to the foreground VT, then requires the `sm750_scanout` window to carry content, to differ from the all-zero sentinel `0xe20eea22` and to report the `PANEL_FB_ADDRESS` offset; exits 77 (a skip) without root, card or a `KD_TEXT` foreground VT |
 | `make crc-check` | Opt-in live scanout readback: enables the CRTC CRC source `scanout`, checks that entries arrive, stay constant for a static frame, change with the content and agree with the `sm750_scanout` debugfs dump; exits 77 (a skip) without root, card or an active CRTC |
 | `make check-pkg` | Self-tests for the sudo package helper (`tools/sm750-pkg.sh` into `/usr/local/sbin/sm750-pkg`): stubbed dnf/dkms/rpm through a temporary PATH, so no package is touched and no root is needed; nine groups |

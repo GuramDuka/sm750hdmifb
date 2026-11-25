@@ -43,6 +43,7 @@ scripts=(
 	tests/check-sm750-pkg.sh
 	tests/check-sysfs-attributes.sh
 	tests/check-headless-helper.sh
+	tests/check-render-node.sh
 	tools/benchmark-staging.sh
 	tools/sm750-crc-cycle.sh
 )
