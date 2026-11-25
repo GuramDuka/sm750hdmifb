@@ -970,7 +970,7 @@ suites ran for real, 0 failures, in 8.7 s wall clock
 KUNIT ENABLED"). The earlier SKIP for disabled KUnit recorded in that file
 is superseded by that census.
 
-### 3.11 `/usr/local/sbin/sm750-headless` (installed 2026-11-25T13:41Z, stale)
+### 3.11 `/usr/local/sbin/sm750-headless` (installed 2026-11-25T14:26Z)
 
 Source `tools/sm750-headless.sh`: 9223 bytes, 276 lines, sha256
 `137c665b7f60c17a95a6bdcd7948fb7064239eb62a6a108932e60315ce80913c` as measured
@@ -1079,15 +1079,16 @@ started but an expectation failed, 4 nothing could take master.
 Installed state, measured 2026-11-25T13:49Z:
 
 ```text
--rwxr-xr-x 1 root root 8759 2026-11-25 16:41 /usr/local/sbin/sm750-headless
-sha256 03de0f981b6860b87e08faf7cc4ffd643eaaa5d2914ddf2f04dccc244fd9f5c0
+-rwxr-xr-x 1 root root 9223 2026-11-25 17:26 /usr/local/sbin/sm750-headless
+sha256 137c665b7f60c17a95a6bdcd7948fb7064239eb62a6a108932e60315ce80913c
 ```
 
-Status: **INSTALLED, STALE.** The allowlist line is present (`sudo -n -l`
-lists `(root) NOPASSWD: /usr/local/sbin/sm750-headless`). The refinement of
-2026-11-25 is installed: the 8759-byte revision that fixed the four defects
-below. The tree has since moved on to the 9223-byte source recorded above, so
-one owner-run install is still required to bring the installed copy level.
+Status: **INSTALLED, CURRENT.** The allowlist line is present (`sudo -n -l`
+lists `(root) NOPASSWD: /usr/local/sbin/sm750-headless`), and the installed copy
+is byte-identical to `tools/sm750-headless.sh` in the tree - re-measured
+2026-11-25T14:26Z. Re-run the `sha256sum` pair above after every edit of the
+source: the static gate validates the tree, and it cannot see
+`/usr/local/sbin`.
 
 The 7387-byte revision of 2026-11-23, now superseded on the host, carried these
 four defects:
@@ -1110,17 +1111,33 @@ sha256sum /usr/local/sbin/sm750-headless
 
 Expected after the refresh:
 `137c665b7f60c17a95a6bdcd7948fb7064239eb62a6a108932e60315ce80913c`, 9223
-bytes. The installed copy is the 8759-byte
-`03de0f981b6860b87e08faf7cc4ffd643eaaa5d2914ddf2f04dccc244fd9f5c0` revision,
-so one owner-run install is still required. The static gate
+bytes - the value the host carried from 2026-11-25T14:26Z. The static gate
 `tests/check-headless-helper.sh` validates the source in the tree; it cannot see
-the installed copy, so the hash above is the only evidence that the refresh
-happened.
+the installed copy, so the hash pair is the only evidence that the refresh
+happened. `docs/PARAMETERS.md` and this section are the two places that record
+the expected value; update both when the source changes.
 
-Every mode was exercised through the installed helper on 2026-11-25 (probe,
-diagnose, weston 30, cage 20, kmscube 15); the measured vblank deltas are
-recorded under defect A43 in `docs/DEFECTS.md`. Those runs used the installed
-8759-byte revision, not the 9223-byte source documented above.
+Every mode has been exercised through the installed helper. The runs of
+2026-11-25T13:41Z used the then-installed 8759-byte revision: probe PASS,
+diagnose PASS (no holders, module refcount 0, fbcon bind 1), weston 30 PASS 333
+frames, cage 20 PASS 341 frames, kmscube 15 finished `rc=0` with 443 frames -
+and kmscube was still reported as FAIL, which is the sixth defect A43 records.
+The runs of 2026-11-25T14:27Z used the installed 9223-byte revision with the
+per-mode verdict model, and all of them passed:
+
+```text
+probe    master acquired, dropped                                  rc 0
+diagnose no card0 holders, module refcount 0, fbcon bind 1          rc 0
+weston   RESULT: PASS weston held the card for 15s and VBlank advanced   rc 0
+cage     RESULT: PASS cage held the card for 15s and VBlank advanced     rc 0
+kmscube  RESULT: PASS kmscube rendered its frame count and exited rc=0   rc 0
+```
+
+The kmscube PASS of 14:27Z advanced the counter by 428, which is the proof the
+per-mode rule asks for: a clean exit only passes when the pipe actually
+advanced. Measured vblank deltas and the defect history are recorded under A43
+in `docs/DEFECTS.md`; the five log directories are under
+`/mega/tmp/sm750/headless/`.
 
 ## 4. udev ACL rule
 

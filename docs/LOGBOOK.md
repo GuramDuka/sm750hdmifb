@@ -3426,3 +3426,39 @@ of work, best practice, icons and images, linked to the documentation.
 - Residual: the installed helper is the 8759-byte revision; the tree is
   at 9223 bytes, so one owner-run install is still required before the
   kmscube PASS path can be observed on the host.
+
+### 2026-11-25T14:30Z | orchestrator | helper refreshed on the host, kmscube PASS path observed
+
+The host owner installed the current helper. Verified by hash pair, not by
+report: `/usr/local/sbin/sm750-headless` and `tools/sm750-headless.sh` are both
+9223 bytes with sha256
+`137c665b7f60c17a95a6bdcd7948fb7064239eb62a6a108932e60315ce80913c`, mtime
+2026-11-25T17:26. This closes the residual that the T56 entry of 17:00Z recorded
+(that entry stays as written: at its time the installed copy was the 8759-byte
+revision).
+
+All five modes then ran through the installed copy, and all five passed:
+
+```
+probe    master acquired, dropped                                       rc 0
+diagnose no card0 holders, module refcount 0, fbcon bind 1              rc 0
+weston   PASS weston held the card for 15s and VBlank advanced          rc 0
+cage     PASS cage held the card for 15s and VBlank advanced            rc 0
+kmscube  PASS kmscube rendered its frame count and exited rc=0          rc 0
+```
+
+The kmscube line is the one that matters: the same command against the previous
+revision printed `RESULT: FAIL kmscube did not survive 12s` for a clean
+`rc=0` exit, which is the sixth defect A43 records. The new per-mode rule
+passes it only because the pipe advanced - 428 vblank frames - so the fix is
+observable, not assumed.
+
+`docs/ROOT-ACTIONS.md` 3.11 now reads INSTALLED, CURRENT with the 9223-byte
+hash, and its measured-run paragraph separates the 13:41Z runs (8759-byte
+revision, kmscube FAIL) from the 14:27Z runs (9223-byte revision, all pass).
+Both lists are kept on purpose: the FAIL is the evidence that the defect was
+real, and deleting it would leave A43 resting on a claim instead of a run.
+
+Lesson repeated for the fourth time in this project: the installed copy under
+`/usr/local/sbin` lags the tree silently, `sudo install` is not allowlisted, and
+only the hash pair distinguishes "refreshed" from "reported as refreshed".
