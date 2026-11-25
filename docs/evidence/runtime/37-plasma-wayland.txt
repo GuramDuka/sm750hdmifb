@@ -1,0 +1,202 @@
+# 37 - A full Plasma Wayland session on the SM750 driver
+#
+# Recorded: 2026-11-25 (UTC session of the Plasma-on-Wayland measurement)
+# Host: Fedora 43, kernel 7.3.4-100.fc43.x86_64, kwin 6.7.5, Plasma 6.7.5,
+#       Mesa 25.3.6, module sm750hdmidrm 0.6.5, PCI 0000:01:00.0.
+# Actor: uid 1005 (service account). No root was used for the session itself.
+# Scope: the run, the environment, the two blocks and their bypasses, the
+#        scanout proof, the three remaining limits, and the NOT MEASURED list.
+# Companion document: docs/PLASMA-WAYLAND.md (prose analysis of these facts).
+#
+# ---------------------------------------------------------------------------
+# 1. Session context
+# ---------------------------------------------------------------------------
+# Service user coder (uid 1005), remote session 7, TTY=pts/12, Remote=yes,
+# Seat= (empty). The host owner (uid 1000) runs their own Plasma on seat0 with
+# a different GPU. Nothing in this work touched those processes or seat0.
+#
+# ---------------------------------------------------------------------------
+# 2. The two blocks, and the measured bypass of each
+# ---------------------------------------------------------------------------
+# 2.1 "No accelerated render device" - a preference, not a barrier
+#
+# kwin's GpuManager only filters RENDER devices: KWin::GpuManager::addDevice
+# calls RenderDevice::isSoftwareDevice and merely logs
+#   kwin_core: Ignoring render device %s without hardware acceleration
+# OUTPUT devices take KWin::DrmDevice::openWithAuthentication instead and are
+# not subject to that filter.
+#
+# Measured: an accelerated NVIDIA render node plus the SM750 as output works.
+# The driver's own render node (0.6.5, DRIVER_RENDER) is also accepted as a
+# render node, but it is software-only, which kwin tolerates for output
+# devices.
+#
+# Related non-facts, measured:
+#   - kwin 6.7.5 does not link libseat at all, so LIBSEAT_BACKEND and seatd
+#     are irrelevant to it.
+#   - KWIN_WAYLAND_NO_PERMISSION_CHECKS=1 is a no-op here.
+#
+# 2.2 "No logind seat" - real at the logind level, bypassed at the bus level
+#
+# systemd's logind-session-device.c, session_device_new():
+#   if (!s->seat)
+#           return -EPERM;
+# so TakeDevice fails for a session with no seat, which is this remote
+# session's state.
+#
+# Measured bypass: make the system bus unreachable with
+#   DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent/sysbus
+# KWin::Session::create() then falls through to KWin::NoopSession and kwin
+# opens the DRM node directly, without logind.
+#
+# ---------------------------------------------------------------------------
+# 3. The exact environment block (all as uid 1005, no root)
+# ---------------------------------------------------------------------------
+# runtime=/mega/tmp/sm750/wayland-barriers/plasma4/run   (mode 0700)
+#
+# dbus-daemon --session --nofork --nopidfile \
+#     --address=unix:path=/mega/tmp/sm750/wayland-barriers/plasma4/run/bus
+#
+# env -u WAYLAND_DISPLAY -u DISPLAY \
+#     XDG_RUNTIME_DIR=/mega/tmp/sm750/wayland-barriers/plasma4/run \
+#     DBUS_SESSION_BUS_ADDRESS=unix:path=/mega/tmp/sm750/wayland-barriers/plasma4/run/bus \
+#     DBUS_SYSTEM_BUS_ADDRESS=unix:path=/nonexistent/sysbus \
+#     KWIN_DRM_DEVICES=/dev/dri/card0 \
+#     KWIN_RENDER_NODES=/dev/dri/renderD128 \
+#     QT_FORCE_STDERR_LOGGING=1 \
+#     startplasma-wayland
+#
+# Note on node numbering on this host: renderD128 is the SM750 and
+# renderD129..renderD131 are the NVIDIA cards - the opposite of what the
+# numbering suggests. Resolve the node by
+# /dev/dri/by-path/pci-0000:01:00.0-render rather than by number.
+#
+# ---------------------------------------------------------------------------
+# 4. Session log excerpt (verbatim)
+# ---------------------------------------------------------------------------
+#   compositing has been successfully initialized
+#   kwin_wayland_drm: New output on GPU /dev/dri/card0: PHL 243V7
+#   drmModeAddFB2WithModifiers is supported on GPU "/dev/dri/card0"
+#   Using Atomic Mode Setting on gpu "/dev/dri/card0"
+#   Number of planes on GPU "/dev/dri/card0" : 2
+#
+# Processes present afterwards:
+#   startplasma-wayland
+#   kwin_wayland_wrapper --xwayland
+#   kwin_wayland --wayland-fd 7 --socket wayland-0
+#   Xwayland :1
+#   plasmashell
+#
+# ---------------------------------------------------------------------------
+# 5. Proof that the panel scans the composited frame
+# ---------------------------------------------------------------------------
+# 5.1 sm750-regs (root helper, docs/ROOT-ACTIONS.md)
+#
+#   PANEL_FB_ADDRESS    = 0x003f4800
+#   PANEL_FB_WIDTH      = 0x0f000f00   (pitch 3840, RGB565)
+#   PANEL_WINDOW_WIDTH  = 0x077f0000
+#   PANEL_WINDOW_HEIGHT = 0x04370000
+#   PANEL_CURRENT_LINE  advancing
+#
+# 5.2 sm750-crc dump (the driver's debugfs sm750_scanout window)
+#
+#   offset   4147200        (= 1920 * 1080 * 2 bytes)
+#   length   262144
+#   nonzero  262144
+#   crc32    0x976e751b     identical across three consecutive dumps of a
+#                           static desktop
+#
+# 5.3 Contrast: the same dump earlier in a kwin-only run
+#
+#   offset   0
+#   nonzero  0
+#   crc32    0xe20eea22     (crc32 of 256 KiB of zeros)
+#   PANEL_FB_ADDRESS 0x00000000
+#
+# Reading: the earlier black panel was real. The difference in 5.2 is that a
+# full session (plasmashell) now presents frames.
+#
+# 5.4 Screenshot cross-check
+#
+#   grim                      -> fails: "compositor doesn't support the screen
+#                                capture protocol". kwin has no
+#                                zwlr_screencopy; it needs its own screencast
+#                                protocol over PipeWire.
+#   spectacle -b -n -o FILE   -> writes a 1920x1080 PNG of a live desktop;
+#                                non-black sample fraction 0.9999.
+#
+# Correspondence test: the 262144-byte RGB565 dump was decoded at pitch 3840
+# (1920 px) and compared with the same scanlines of that PNG at identical
+# sampling. The two ASCII luminance maps matched in structure - the same
+# bright vertical band at the same columns, the same dark field, the same
+# isolated markers.
+#
+# Honest limits of the correspondence test:
+#   - the dump window was 256 KiB = 68 of 1080 scanlines, because
+#     crc_window_bytes defaults to 262144 and was mode 0444 until 0.6.6;
+#   - the dump's start offset alternates between 0 and 4147200 because the
+#     driver double-buffers;
+#   - RGB565 with blue-noise dithering is not byte-identical to an RGB888
+#     screenshot, so the comparison is structural, not bit-exact.
+#
+# ---------------------------------------------------------------------------
+# 6. The three limits that remain
+# ---------------------------------------------------------------------------
+# 6.1 No input devices.
+#     /dev/input/event* are root:input mode 0660 with no ACL for this account,
+#     so the session has no keyboard and no pointer. The desktop draws and is
+#     stable but cannot be driven. A real VT login (non-remote session) would
+#     give a seat and device access; the alternative being evaluated is
+#     org.freedesktop.portal.RemoteDesktop, which the private session's portal
+#     advertises together with InputCapture, ScreenCast and GlobalShortcuts on
+#     /org/freedesktop/portal/desktop (measured), because kwin authorized
+#     xdg-desktop-portal-kde for org_kde_kwin_fake_input.
+#
+# 6.2 No screencast or screen recording.
+#     kwin's screencast needs a PipeWire graph and the system bus; both were
+#     deliberately removed by the NoopSession bypass in 2.2. grim fails as in
+#     5.4 and spectacle's video mode aborts with rc 134. Still images through
+#     spectacle's own capture path do work.
+#
+# 6.3 The VRAM readback window was capped at 256 KiB / 68 scanlines until 0.6.6.
+#     A full 1920x1080 XRGB8888 frame is 8294400 bytes. In 0.6.5 the module
+#     parameter crc_window_bytes had mode 0444, so root could not widen it
+#     either. 0.6.6 makes it 0644 and the reader's existing clamp bounds any
+#     write by the visible scanout area (docs/DEFECTS.md A46).
+#
+# ---------------------------------------------------------------------------
+# 7. X11 comparison (same measurement family)
+# ---------------------------------------------------------------------------
+# - X11 works: /usr/libexec/Xorg :1 with the shipped OutputClass config drives
+#   card0 at 1920x1080; plasmashell and kwin_x11 run and window management
+#   works (wmctrl moved a window on request).
+# - X11 compositing is impossible: the server's GLX is DRISWRAST and lacks
+#   GLX_EXT_texture_from_pixmap, so kwin_x11 aborts with
+#   "No provider of glXBindTexImageEXT found".
+# - glamor refuses llvmpipe in this Xorg build: /usr/lib64/xorg/modules/
+#   libglamoregl.so prints "Refusing to try glamor on llvmpipe", and no
+#   environment variable reaches the "Allowing glamor on llvmpipe for PRIME"
+#   string.
+#
+# ---------------------------------------------------------------------------
+# 8. NOT MEASURED
+# ---------------------------------------------------------------------------
+# - Input: no keyboard, pointer or touch event was tested, because no input
+#   device is readable by this account.
+# - Screencast: no recording was produced and no portal ScreenCast session was
+#   established.
+# - Full-frame readback: no readback beyond the 256 KiB crc_window_bytes window
+#   was attempted, so the 0.6.6 writable window is delivered but NOT exercised
+#   here (the running module was still 0.6.5 during these measurements).
+# - Interaction latency: no latency or frame-pacing measurement was taken; the
+#   session was not driven at all.
+# - Multi-monitor: one output only.
+# - VT switch during the session: not attempted.
+# - Sustained load: the observation covers a static desktop, not a long run.
+#
+# ---------------------------------------------------------------------------
+# 9. Where the prose record is
+# ---------------------------------------------------------------------------
+# docs/PLASMA-WAYLAND.md holds the verdict, the recipe, the proof section, the
+# limits and the clean-boot checklist. This file is the raw record; where the
+# two disagree, the values above win.

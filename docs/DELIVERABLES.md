@@ -127,7 +127,7 @@ to `src/*.c` or `src/*.h` (`docs/evidence/builds/11-warnings-scan.log`).
 ```
 
 Expected: exit 0. The script rebuilds the noarch RPM from a fresh `_topdir`,
-asserts the payload against `git ls-files` (143 payload files in the current
+asserts the payload against `git ls-files` (144 payload files in the current
 tree; the same command the script uses is `git ls-files -- . ':(exclude)docs/plan'
 ':(exclude)docs/evidence' ':(exclude)docs/images' ':(exclude)docs/notes' |
 wc -l`), the `%files` list
@@ -193,9 +193,12 @@ bodies and the recovery recipe for a broken allowlist are in
 
 The KMS row no longer needs a privilege step: `/etc/udev/rules.d/99-sm750-coder-acl.rules`
 grants `u:coder:rw` on the card node at every probe. The SM750 also registers a
-render node from 0.6.5 on (`/dev/dri/renderD131`, 226:131), but a render node
-carries no KMS objects, so `/dev/dri/renderD128` (the NVIDIA card at `02:00.0`)
-is still not a substitute for the card node. The three access mechanisms and
+render node from 0.6.5 on, but a render node
+carries no KMS objects, so the render node of any
+other card is still not a substitute for the card node. The SM750's own render
+node minor number is not stable across reboots (`renderD131` before the
+2026-11-25 19:29 reboot, `renderD128` after); resolve it through
+`/dev/dri/by-path/pci-0000:01:00.0-render`. The three access mechanisms and
 their state are recorded in `docs/ENVIRONMENT.md` section 5.1.
 
 ### 3.1 Second output: the console on the SM750 HDMI port
@@ -412,6 +415,7 @@ list.
 | `docs/STAGING-BENCHMARK.md` | DMA batch benchmark procedure and analysis rules |
 | `docs/TESTING.md` | validation scope, recovery, live reload |
 | `docs/VBLANK.md` | private vblank timer and its locking |
+| `docs/PLASMA-WAYLAND.md` | the measured Plasma Wayland session on this driver: verdict, the two blocks (render-device preference, logind seat) with the code-level reason each was surmountable, the environment recipe, the scanout proof with its values, the three remaining limits, the clean-boot checklist and the X11 comparison |
 | `docs/VBIOS-REVERSE-ENGINEERING.md` | option-ROM structure map, the bit-exact 16-bit reconstruction, and the execution-trace comparison of both images, with their limits |
 | `docs/DECK.md` | ten-slide presentation deck in Marp-flavoured Markdown: what the driver is, the architecture, the panel path, the test card, defects, tests, packaging, open items, verified citations |
 | `docs/deck/index.html` | the same ten slides as one standalone page: hand-written reveal-style JavaScript, inline SVG architecture diagram, hash routing (`#/3`), print stylesheet, no-script fallback, zero external requests |
@@ -422,7 +426,7 @@ list.
 | --- | --- |
 | `docs/AUDIT.md` | repository audit, 24 defects with reproduction and evidence |
 | `docs/DEFECTS.md` | one disposition per defect: fixed, accepted or deferred |
-| `docs/TEST-STRATEGY.md` | suites S1-S21, recorded results, remaining gaps |
+| `docs/TEST-STRATEGY.md` | suites S1-S22, recorded results, remaining gaps |
 | `docs/STATIC-ANALYSIS.md` | static-analysis gate, per-tool counts, triage of every finding, tool configuration and limits |
 | `docs/PACKAGING-RPM.md` | spec purpose, build recipe, install, verify, rollback |
 | `docs/ENVIRONMENT.md` | host, header trees, tool matrix, privilege state |
@@ -530,6 +534,7 @@ list.
 | `docs/evidence/packaging/05-dkms-sandbox.log` | sandbox DKMS `built` with a real module, captured under `LC_ALL=C` and ASCII-gated |
 | `docs/evidence/runtime/28-dangling-kernel-link.txt` | T42: the three dangling `/var/lib/dkms/sm750hdmifb/kernel-<kernel>-x86_64` symlinks verbatim, the `/usr/sbin/dkms` lines that turn one into `die 6`, the transcript excerpt of the abort, the fix with spec line numbers, the six-control gate transcript, and an explicit `NOT YET OBSERVED ON THE HOST` section |
 | `docs/evidence/runtime/36-render-node.txt` | T57: the render node from missing to observed - the gate assertions and its three planted controls, the earlier `NOT YET OBSERVED` section kept as history, and the 2026-11-25 observation on module 0.6.5: `/dev/dri/renderD131` as `crw-rw-rw- root:render 226:131` with its sysfs counterpart, the `DRM_IOCTL_VERSION` identity of both nodes and the shadow-driver description it returns, the kwin 6.7.5 refusal with its exact log lines and the strace showing card0 is stat-ed but never opened, the two remaining barriers (no Mesa SM750 driver, no logind seat), and the X11 route where Plasma runs with compositing off |
+| `docs/evidence/runtime/37-plasma-wayland.txt` | T58: a full Plasma 6.7.5 Wayland session on the SM750 - the session context and the empty Seat, the two blocks with their code-level mechanism (`KWin::GpuManager::addDevice` filtering render devices only, `session_device_new()` returning `-EPERM` without a seat) and the measured bypass of each (`KWIN_DRM_DEVICES` plus an accelerated render node; `DBUS_SYSTEM_BUS_ADDRESS` pointing at a nonexistent socket so kwin falls through to `KWin::NoopSession`), the exact environment block, the five verbatim session-log lines and the five processes, the `sm750-regs` values, the `sm750-crc dump` result (`offset 4147200`, `nonzero 262144`, `crc32 0x976e751b` stable over three dumps) against the earlier kwin-only all-zero dump (`crc32 0xe20eea22`), the `grim` refusal and the 1920x1080 `spectacle` screenshot with its structural (not bit-exact) correspondence test and the three reasons it cannot be more, the three remaining limits (no input devices, no screencast, the 256 KiB `crc_window_bytes` window), the X11 comparison, and an explicit `NOT MEASURED` list |
 | `docs/evidence/packaging/06-posttrans-missing-headers.log` | missing-header branch of `%posttrans`, plus the stale-purge run whose `dkms remove` fails (exit 4) and the dangling-link run (A40) |
 | `docs/evidence/packaging/07-check-rpm-dkms.log` | full `tests/check-rpm-dkms.sh` run |
 | `docs/evidence/packaging/0.5.9/01-rpmbuild.log` | `rpmbuild -ba` at 0.5.9, exit 0, frozen: produced before the T45 `LC_ALL=C` capture, non-ASCII lines left unedited as the historical record |

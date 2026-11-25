@@ -9,6 +9,13 @@
 # with EIO/EINVAL. The gate therefore requires the three callbacks and forbids
 # any CRC debugfs file in src/.
 #
+# The readback window is a module parameter so a whole visible frame can be
+# read: crc_window_bytes must stay writable (mode 0644), the reader must keep
+# sampling it at use time and must keep clamping it to the visible scanout
+# area, and the release that promises this must be the version every packaging
+# site carries. Asserted here so a later edit cannot quietly pin the window
+# back to 0444 or drop the clamp.
+#
 # Usage: tests/check-crc-uapi.sh [source file]
 #        tests/check-crc-uapi.sh --single [source file]   (no self-test)
 
@@ -239,6 +246,99 @@ check_stream() {
 		fail "sm750_pipe_disable stops the CRC source instead of parking it"
 }
 
+# A whole 1920x1080 XRGB8888 frame is 8294400 bytes, so the window has to be
+# growable at runtime; a 0444 parameter makes the default the hard ceiling.
+# The reader must sample the live value and keep its min() against the visible
+# frame, which is what stops a nonsensical write from reading past it.
+check_window() {
+	local file=$1
+	local body line
+
+	grep -F 'module_param(crc_window_bytes, uint, 0644);' "$file" >/dev/null ||
+		fail "$file: crc_window_bytes is not writable (expected mode 0644)"
+	! grep -F 'module_param(crc_window_bytes, uint, 0444);' "$file" >/dev/null ||
+		fail "$file: crc_window_bytes is still read-only (mode 0444)"
+	grep -F 'static unsigned int crc_window_bytes = 262144;' "$file" >/dev/null ||
+		fail "$file: the crc_window_bytes default is no longer 262144"
+
+	body=$(fn_body "$file" 'static bool sm750_crc_region(')
+	[ -n "$body" ] || fail "$file: sm750_crc_region not found"
+	grep -F 'READ_ONCE(crc_window_bytes)' <<<"$body" >/dev/null ||
+		fail "sm750_crc_region does not sample the live crc_window_bytes value"
+	# Writing a huge value is safe only because of this clamp; without it the
+	# dump would walk past the visible frame into whatever follows in VRAM.
+	grep -F 'window = round_down(min(window, visible), 4);' <<<"$body" >/dev/null ||
+		fail "sm750_crc_region no longer clamps the window to the visible frame"
+	line=$(first_line "$body" 'visible = min_t(u64, sdev->scanout_frame_size,')
+	[ -n "$line" ] || fail "sm750_crc_region does not bound visible by the frame size"
+}
+
+# The writable window is a property of the release that carries it, so every
+# packaging site must name the same, bumped version in the same tree.
+check_release() {
+	local file=$1
+	local builder=$project_dir/build-package.sh
+	local dkms_config=$project_dir/dkms.conf
+	local spec=$project_dir/packaging/sm750hdmifb.spec
+	local tools_spec=$project_dir/packaging/sm750hdmifb-tools.spec
+	local ci_recipe=$project_dir/docs/ci/build.yml
+	local version module_version reported spec_version tools_version spec_dkms
+	local major minor patch
+
+	version=$(sed -n 's/^readonly version=//p' "$builder")
+	[ -n "$version" ] || fail "$builder: no readonly version="
+	# The read-only window belonged to 0.6.5; claiming it again means the bump
+	# was forgotten and the release notes would describe the wrong behaviour.
+	test "$version" != "0.6.5" ||
+		fail "build-package.sh still says 0.6.5; the writable window needs a release of its own"
+
+	module_version=$(sed -n \
+		's/^#define SM750_DRM_VERSION "\([^"]*\)"/\1/p' "$file")
+	test "$module_version" = "$version" ||
+		fail "$file: SM750_DRM_VERSION '$module_version' does not match build-package.sh '$version'"
+
+	major=$(sed -n 's/^#define DRIVER_MAJOR \([0-9]\+\)$/\1/p' "$file")
+	minor=$(sed -n 's/^#define DRIVER_MINOR \([0-9]\+\)$/\1/p' "$file")
+	patch=$(sed -n 's/^#define DRIVER_PATCHLEVEL \([0-9]\+\)$/\1/p' "$file")
+	reported="$major.$minor.$patch"
+	test "$reported" = "$version" ||
+		fail "$file: DRIVER_* report '$reported', build-package.sh says '$version'"
+
+	grep -F "PACKAGE_VERSION=\"$version\"" "$dkms_config" >/dev/null ||
+		fail "$dkms_config: PACKAGE_VERSION does not match '$version'"
+
+	spec_dkms=$(sed -n \
+		's/^%global dkms_version[[:space:]]*\([^[:space:]]*\)$/\1/p' "$spec")
+	test "$spec_dkms" = "$version" ||
+		fail "$spec: %global dkms_version '$spec_dkms' does not match '$version'"
+	spec_version=$(sed -n 's/^Version:[[:space:]]*\([^[:space:]]*\)$/\1/p' "$spec")
+	test "$spec_version" = "$version" ||
+		fail "$spec: Version '$spec_version' does not match '$version'"
+	tools_version=$(sed -n 's/^Version:[[:space:]]*\([^[:space:]]*\)$/\1/p' "$tools_spec")
+	test "$tools_version" = "$version" ||
+		fail "$tools_spec: Version '$tools_version' does not match '$version'"
+
+	# CI artifact names are how the release is collected, so they carry the
+	# same version; a stale name uploads nothing.
+	grep -F "sm750hdmifb-$version-source.tar.gz" "$ci_recipe" >/dev/null ||
+		fail "$ci_recipe: no source-up archive named for '$version'"
+	grep -F "sm750hdmifb_${version}_all.deb" "$ci_recipe" >/dev/null ||
+		fail "$ci_recipe: no module .deb named for '$version'"
+}
+
+plant_window_readonly() {
+	sed -i 's/module_param(crc_window_bytes, uint, 0644);/module_param(crc_window_bytes, uint, 0444);/' "$1"
+}
+# A dropped clamp turns a large write into a read past the visible frame.
+plant_clamp_dropped() {
+	sed -i 's/window = round_down(min(window, visible), 4);/window = round_down(window, 4);/' "$1"
+}
+plant_version_drift() {
+	sed -i 's/^#define SM750_DRM_VERSION ".*"$/#define SM750_DRM_VERSION "0.6.5"/' "$1"
+}
+
+check_window "$source_file"
+check_release "$source_file"
 check_file "$source_file"
 check_stream "$source_file"
 if [ "$mode" = full ]; then
@@ -294,5 +394,8 @@ control enable_without_region plant_enable_no_validate
 control no_frame_counter plant_no_frame_counter
 control no_auto_source plant_no_auto
 control two_values plant_two_values
+control window_readonly plant_window_readonly
+control clamp_dropped plant_clamp_dropped
+control version_drift plant_version_drift
 
 echo "CRC uapi gate and negative controls passed"

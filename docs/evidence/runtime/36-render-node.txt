@@ -200,6 +200,19 @@
 # renderD131. The other render nodes on the host (renderD128, 129, 130) still
 # belong to the NVIDIA cards and are unchanged.
 #
+# Correction (same day, after the 19:29 reboot): the minor numbers are assigned
+# in probe order and are NOT stable. After the reboot the SM750 slot holds
+# card0 + controlD64 + renderD128, and renderD129..renderD131 belong to the
+# NVIDIA cards - the opposite of the mapping above. Everything measured in this
+# section stays true of the SM750 node; only its number moved. Resolve it by
+# /dev/dri/by-path/pci-0000:01:00.0-render (or by the device/driver symlink),
+# never by the renderD number.
+#
+#   $ readlink -f /dev/dri/by-path/pci-0000:01:00.0-render
+#   /dev/dri/renderD128
+#   $ ls -l /sys/class/drm/card0/device/drm/
+#   card0  controlD64  renderD128
+#
 # 8.2 Identity of each node
 # -------------------------
 # A python3 ctypes probe issued DRM_IOCTL_VERSION (0xC0406400) against both

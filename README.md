@@ -81,8 +81,8 @@ packaged tarball.
 | IGT KMS subset | 26 pass, 14 skip, 1 fail by design |
 | GL path | `kmscube`, 299 frames in 5.07 s, 59.01 fps on llvmpipe |
 | Vblank rate | 60.43 per second measured over 120 events |
-| Evidence | 43 runtime transcripts, 28 build transcripts and 7 packaging transcripts under `docs/evidence/` |
-| Documentation | 21 documents under `docs/`, plus the specification archive and the deck |
+| Evidence | 44 runtime transcripts, 28 build transcripts and 7 packaging transcripts under `docs/evidence/` |
+| Documentation | 22 documents under `docs/`, plus the specification archive and the deck |
 
 ### How a claim is checked
 
@@ -105,6 +105,7 @@ enforce:
 | --- | --- |
 | [Acceptance report](docs/ACCEPTANCE-REPORT.md) | Criterion-by-criterion verdict with the command and the evidence path behind each row |
 | [Test strategy](docs/TEST-STRATEGY.md) | Every suite, its selection rationale, pass criteria and recorded results |
+| [Plasma on this driver](docs/PLASMA-WAYLAND.md) | The measured Wayland session, its two working bypasses, the scanout proof, and what is still missing |
 | [Defects](docs/DEFECTS.md) | Findings with ids, root causes, dispositions and the gate that guards each fix |
 | [Repository audit](docs/AUDIT.md) | Point-in-time audit of the tree, with dated path notes where the tree moved on |
 | [Deliverables](docs/DELIVERABLES.md) | What ships, how it is rebuilt, and the exact reproduction commands |
@@ -880,7 +881,12 @@ instruction:
   `kwin_wayland` running against it; `card0` has no userspace DRM master.
 
 So the SM750 is a second, permanent output that shows the console, and the
-graphical session is unaffected by anything done to it. A modeset on `card0`
+graphical session is unaffected by anything done to it.
+
+That is this host's arrangement, not a limit of the driver. A full Plasma
+Wayland session does run on `card0` with two environment workarounds and no
+root privileges; the measured session, the recipe and the remaining gaps are in
+[Plasma on this driver](docs/PLASMA-WAYLAND.md). A modeset on `card0`
 from a test tool temporarily replaces the console; closing the tool lets the
 fbdev client restore its own 1920x1080 mode.
 
@@ -919,6 +925,7 @@ limitations are in
 - [Build environment](docs/ENVIRONMENT.md)
 - [Deliverables index and reproduction](docs/DELIVERABLES.md)
 - [Static analysis](docs/STATIC-ANALYSIS.md) - sparse, smatch, cppcheck, coccinelle, pahole
+- [Plasma on this driver](docs/PLASMA-WAYLAND.md) - the measured Wayland session, the bypasses, the limits
 - [VBIOS reconstruction](docs/VBIOS-REVERSE-ENGINEERING.md) - 239-region map and the C model of the option ROM
 - [Acceptance report](docs/ACCEPTANCE-REPORT.md) - criterion-by-criterion verdict with evidence paths
 - [Project logbook](docs/LOGBOOK.md) - chronological record, newest entry last

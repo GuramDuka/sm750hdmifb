@@ -3524,3 +3524,40 @@ Lesson: an audit that compares the archive against `git ls-files` cannot see
 an untracked file, so it passes right up to the moment of the commit; staging
 first and then re-reading every count is the only way the numbers in the docs
 match the tree that gets pushed.
+
+### 2026-11-25T21:10Z | orchestrator | 0.6.6 writable readback window, and the Wayland result recorded
+
+T58 (recording) and T59 (0.6.6) land together. The Plasma 6.7.5 Wayland
+session on the SM750 was measured yesterday and lived only in scratch; it is
+now `docs/PLASMA-WAYLAND.md` plus `docs/evidence/runtime/37-plasma-wayland.txt`,
+with both barriers explained from code paths rather than from symptoms (kwin
+filters render devices only, so the card node is exempt; logind refuses a
+session_device for a session with no seat, and the unreachable system bus makes
+`KWin::Session::create()` fall back to `NoopSession`). Input, screencast,
+full-frame readback and interaction latency are listed as not measured.
+
+T59 closes the third limit as far as the driver can: `crc_window_bytes` was
+mode `0444`, so `262144` bytes was a hard ceiling for both the CRC source and
+the `sm750_scanout` dump, and a 1920x1080 frame is `8294400` bytes. The
+parameter is now `0644` and the reader still clamps every value to the visible
+scanout area, so a large write is bounded by the geometry. A46 records it, and
+says what it is not: one 256 KiB dump already costs about `1.24 s` on this
+host, so a full frame is far slower than any frame rate and cannot stand in for
+a capture API. The existing CRC gate gained a mode assertion, a clamp
+assertion and three planted controls.
+
+Three stale claims were corrected instead of being left to rot: the render node
+minor number is not stable across reboots (`renderD131` before the 2026-11-25
+19:29 reboot, `renderD128` after), so `docs/DEFECTS.md` A45,
+`docs/DELIVERABLES.md` and `docs/evidence/runtime/36-render-node.txt` now say to
+resolve the node through `/dev/dri/by-path/pci-0000:01:00.0-render`; the
+`crc_window_bytes` default is at `src/sm750_drm.c:243`, not `:235`, so
+`docs/DECK.md` is fixed; and every "install 0.6.5" line about the render-node
+gate became "install 0.6.5 or newer".
+
+Counts re-measured after staging: 144 payload files, 30 gate scripts, 44
+runtime transcripts. Gates: `make check` 18 commands, `check-crc-uapi.sh`,
+`check-rpm-dkms.sh` (8 planted controls, 8 root-only steps skipped),
+`check-render-node.sh`, `check-drm-module.sh` with a live vblank measurement of
+`60.44` vblanks/s, `build-package.sh`, and `audit-release.sh` all exit 0,
+`git diff --check` clean.

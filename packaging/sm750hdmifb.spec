@@ -19,11 +19,11 @@
 #   tests/check-rpm-dkms.sh
 
 %global dkms_name     sm750hdmifb
-%global dkms_version  0.6.5
+%global dkms_version  0.6.6
 %global module_name   sm750hdmidrm
 
 Name:           sm750hdmifb
-Version:        0.6.5
+Version:        0.6.6
 Release:        1%{?dist}
 Summary:        DKMS source for the SM750G10 SiI9024A HDMI DRM-KMS driver
 License:        GPL-2.0-only
@@ -357,6 +357,13 @@ exit 0
 %doc README.md LICENSE docs/RELEASE-NOTES.md docs/TESTING.md packaging/copyright
 
 %changelog
+* Wed Nov 25 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.6-1
+- Release 0.6.6: crc_window_bytes is writable at runtime (mode 0644), so the
+  scanout CRC source and the sm750_scanout debugfs dump can read back a whole
+  visible frame instead of the 262144-byte default. The reader still clamps the
+  window to the visible frame, so a large write cannot read past it. A full
+  1920x1080 XRGB8888 frame is 8294400 bytes: the dump becomes a diagnostic
+  action, not something to poll.
 * Wed Nov 25 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.5-1
 - Release 0.6.5: the driver advertises DRIVER_RENDER, so the card registers a
   render node (/dev/dri/renderDN) alongside card0. kwin 6.7.5 skips a DRM

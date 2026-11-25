@@ -103,7 +103,8 @@ exports `TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}`), never to `/tmp`.
 | S18 | In-repo `tests/check-kunit-drm.sh` (`make check-kunit`, opt-in) | DRM KUnit sweep: discovers the DRM KUnit suites under `/lib/modules/$(uname -r)/internal/drivers/gpu/drm/tests/` (floor of 8 so an empty directory fails), modprobes each (KUnit autorun runs it at load), parses the TAP output (`# Subtest:`, `ok N - name`, `not ok N - name`, `# Totals: pass:N fail:N skip:N`) from the kernel log via `DMESG_CMD`, fails naming the suite and subtest, and unloads every module in an EXIT trap. Needs root, or the allowlisted loader of `docs/ROOT-ACTIONS.md` section 3.9 (`MODPROBE_CMD='sudo -n /usr/bin/modprobe'`); without either an unprivileged run exits 77 with one SKIP line. Four planted parser defects rejected plus two negative controls in `--self-test` | Live on 2026-11-22 through the installed per-module allowlist: 23 modules discovered, 21 suites loaded and unloaded, all 21 printed only `kunit: disabled` because `# CONFIG_KUNIT_DEFAULT_ENABLED is not set` on this kernel, so the gate skips with exit 77 naming that prerequisite (`docs/ROOT-ACTIONS.md` section 3.10) instead of passing; self-test PASS; the suites' real pass/fail census is NOT YET OBSERVED |
 | S19 | In-repo `tests/check-oops-delta.sh` (`make check-oops`, opt-in; standalone `-- <command...>`) | Reusable oops detector: snapshots the kernel log before and after the wrapped command through `DMESG_CMD` (default `dmesg`, this host `sudo -n dmesg`), diffs the delta, filters `--allow` regexes or `OOPS_ALLOW_FILE`, and fails on any new `BUG:`, `WARNING:`, `Oops`, `general protection fault`, `kernel NULL pointer dereference`, `lockdep`, `call trace` or `RIP:` line; exits 77 when the log is unreadable. Three planted defects rejected (new `WARNING:`, new `BUG:`, wrapped command failing) plus four negative controls (unchanged log, allow-filtered warning, allow wins over BUG, allowlist file) in `--self-test`; exercised live by wrapping `tests/check-drm-policy.sh` and `tests/check-sm750-pkg.sh` | PASS (2026-11-22, `sudo -n dmesg` reader, both wrapped gates clean) |
 | S20 | In-repo `tests/check-headless-helper.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the operator helper `tools/sm750-headless.sh`: POSIX `sh` that passes `sh -n`, the five modes `probe`, `diagnose`, `weston`, `cage` and `kmscube` with a usage path that exits 2 for anything else, the `0000:01:00.0` and `sm750hdmidrm` driver binding test, `LIBSEAT_BACKEND=noop` exported and never `builtin`, the weston arm carrying `--backend=drm`, `--drm-device=card0` and `--shell=kiosk-shell.so`, the cage arm without `-s` (which would permit VT switching) and the kmscube arm with `-c` and without `-n` (which is a connector id), the `SECONDS` numeric test and the 1..600 clamp, the verdict failing on a died compositor and on a vblank delta `<= 0`, TERM before KILL on an EXIT trap, and no local absolute path or non-ASCII byte. Static only: it runs no compositor, needs no root and never touches the card | PASS (2026-11-25); ten planted defects rejected (the `LIBSEAT_BACKEND` export deleted, `noop` changed to `builtin`, `-s` added to cage, `-c` changed to `-n` in kmscube, the survivor check deleted, the vblank check deleted, a clean kmscube completion reported as a failure, a kmscube exit code ignored, an absolute local path appended, the lower clamp loosened to 0) plus a pristine control accepted, in `--self-test` |
-| S21 | In-repo `tests/check-render-node.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the render node: both `driver_features` lines in `src/sm750_drm.c` carry `DRIVER_RENDER` on the same line as `DRIVER_MODESET`, no executable line carries `DRIVER_RENDER` without `DRIVER_MODESET` (a render-only device would lose card0 and every mode), and `SM750_DRM_VERSION` agrees with the `readonly version=` line of `build-package.sh`. The live half walks `/sys/class/drm/renderD*`, keeps the node whose `device/driver` basename is `sm750hdmidrm`, and requires the matching `/dev/dri/renderDN` character device and write access for the invoking user; with no such node it prints one `SKIP:` line and still exits 0, which is the state before a 0.6.5 module is loaded | PASS (2026-11-25); five assertions, four source-level and one live on `/dev/dri/renderD131`, plus three planted defects rejected (`render_dropped`, `render_only`, `version_drift`) in `--self-test` |
+| S21 | In-repo `tests/check-render-node.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the render node: both `driver_features` lines in `src/sm750_drm.c` carry `DRIVER_RENDER` on the same line as `DRIVER_MODESET`, no executable line carries `DRIVER_RENDER` without `DRIVER_MODESET` (a render-only device would lose card0 and every mode), and `SM750_DRM_VERSION` agrees with the `readonly version=` line of `build-package.sh`. The live half walks `/sys/class/drm/renderD*`, keeps the node whose `device/driver` basename is `sm750hdmidrm`, and requires the matching `/dev/dri/renderDN` character device and write access for the invoking user; with no such node it prints one `SKIP:` line and still exits 0, which is the state before a 0.6.5 module is loaded | PASS (2026-11-25); five assertions, four source-level and one live on the render node resolved by driver name, plus three planted defects rejected (`render_dropped`, `render_only`, `version_drift`) in `--self-test` |
+| S22 | None (observed by hand; no script, no gate) | Session-level result: a full Plasma 6.7.5 Wayland session on `card0`, recorded as evidence rather than enforced, because the session needs a live seatless remote login, a private bus and a real panel | OBSERVED 2026-11-25: the compositor initializes, plasmashell presents, and the panel reads a non-zero scanout window; input and screencast are NOT measured |
 ### S1: in-repo `make check`
 
 - Package/version: the repository itself at 0.5.9; no external package. The
@@ -637,7 +638,7 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   `device/driver` resolves to `sm750hdmidrm` and requires the matching
   `/dev/dri/renderDN` to be a character device writable by the invoking user.
   When no such node exists the live half prints
-  `SKIP: the running module does not advertise a render node yet: install 0.6.5`
+  `SKIP: the running module does not advertise a render node yet: install 0.6.5 or newer`
   and the gate still exits 0, so the gate is useful before the module is
   installed and becomes a real assertion the moment a 0.6.5 module is loaded.
 - Planted controls: `render_dropped` (the `DRIVER_RENDER` flag removed from one
@@ -651,6 +652,35 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   `--self-test`. The gate adds no recipe command, so `make check` still runs 18
   commands. The observed node and the kwin outcome are in
   `docs/evidence/runtime/36-render-node.txt`.
+
+### S22: a full Plasma Wayland session (observed by hand, not gated)
+
+- Command: none. There is no script and no `make` target for this scenario, and
+  no automated gate exists for it or is proposed; the recipe is the environment
+  block of `docs/PLASMA-WAYLAND.md` section 4 and of
+  `docs/evidence/runtime/37-plasma-wayland.txt` section 3, ending in
+  `startplasma-wayland` as uid 1005 with no root.
+- Holds: a full Plasma session (startplasma-wayland, kwin_wayland with
+  `--socket wayland-0`, Xwayland `:1` and plasmashell) runs on `/dev/dri/card0`
+  in a remote session that has no logind seat, with the SM750's own render node
+  as `KWIN_RENDER_NODES`, and the panel scans a composited frame: `sm750-regs`
+  reports `PANEL_FB_ADDRESS 0x003f4800`, pitch 3840, RGB565, and
+  `sm750-crc dump` returns `offset 4147200`, `length 262144`,
+  `nonzero 262144`, `crc32 0x976e751b` unchanged over three dumps of a static
+  desktop. The earlier kwin-only run read `nonzero 0`, `crc32 0xe20eea22` and
+  `PANEL_FB_ADDRESS 0x00000000`, so the difference is the presence of a
+  presenting session, not a sampling artefact.
+- Planted controls: none. Nothing is mutated and nothing is asserted
+  mechanically; the two contrast states (a presenting session and a kwin-only
+  session) are the comparison, and both are archived.
+- Status: OBSERVED, 2026-11-25, module 0.6.5 on kernel `7.3.4-100.fc43.x86_64`
+  with kwin and Plasma `6.7.5` and Mesa `25.3.6`. This is evidence, not a gate:
+  it cannot be re-run by `make check` and no CI job reproduces it. The session
+  could not be driven -- no input device is readable by this account -- and
+  screencast, full-frame readback, interaction latency, multi-monitor and VT
+  switching are unmeasured. The X11 contrast is in the same file: X11 runs but
+  cannot composite, because the server's GLX is DRISWRAST without
+  `GLX_EXT_texture_from_pixmap`.
 
 ## 3. `make check`: the recipe commands
 

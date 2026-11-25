@@ -70,7 +70,7 @@ Every modeset funnels through `sm750_program_mode()` (`src/sm750_drm.c:1356`), w
 
 - The driver paces vblank with its own hrtimer, `sm750_vblank_timer_fn()` (`src/sm750_drm.c:468`, set up at `:4445`), not the generic DRM timer (`docs/VBLANK.md:1-12`)
 - One CRC entry per vblank: `sm750_crc_work_fn()` (`src/sm750_drm.c:3311`) reads the window and calls `drm_crtc_add_crc_entry()` (`:3329`), then re-arms unconditionally
-- `sm750_scanout_crc32()` (`src/sm750_drm.c:3147`) is `crc32_le` over `crc_window_bytes`, default 262144 bytes (`:235`), starting at the visible scanout offset
+- `sm750_scanout_crc32()` (`src/sm750_drm.c:3147`) is `crc32_le` over `crc_window_bytes`, default 262144 bytes (`:243`), starting at the visible scanout offset
 - `crc/control` and `crc/data` are created and owned by DRM core; the driver only supplies `.get_crc_sources` (`:4009`) and `.set_crc_source` (`:4011`)
 - The value proves the VRAM buffer handed to the display engine, not the pixels the panel emits (`docs/TEST-STRATEGY.md:597-599`)
 

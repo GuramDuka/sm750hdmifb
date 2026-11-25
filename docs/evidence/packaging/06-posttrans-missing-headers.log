@@ -1,4 +1,4 @@
-# utc: 2026-11-22T14:10:14Z
+# utc: 2026-11-25T18:09:14Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
 # command: sh posttrans.sh with SM750_RPM_MODULES_ROOT (rootless)
@@ -7,15 +7,15 @@
 --- output ---
 --- no supported kernel with headers ---
 warning: skipping 6.18.13-200.fc43.x86_64: matching kernel headers are absent
-warning: no kernel received the module; check the warnings above and run: dkms install -m sm750hdmifb -v 0.6.4 -k <kernel>
+warning: no kernel received the module; check the warnings above and run: dkms install -m sm750hdmifb -v 0.6.6 -k <kernel>
 exit: 0
 --- one usable kernel, one header-less kernel ---
 warning: skipping 6.18.13-200.fc43.x86_64: matching kernel headers are absent
 exit: 0
 --- recorded calls (mixed root) ---
 dkms status
-dkms build -m sm750hdmifb -v 0.6.4 -k 7.3.4-100.fc43.x86_64
-dkms install -m sm750hdmifb -v 0.6.4 -k 7.3.4-100.fc43.x86_64 --force
+dkms build -m sm750hdmifb -v 0.6.6 -k 7.3.4-100.fc43.x86_64
+dkms install -m sm750hdmifb -v 0.6.6 -k 7.3.4-100.fc43.x86_64 --force
 depmod -a 7.3.4-100.fc43.x86_64
 --- stale registrations handed to the purge ---
 sm750hdmifb/0.5.9, 7.3.3-100.fc43.x86_64, x86_64: built
@@ -23,15 +23,15 @@ sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: built
 sm750hdmifb/0.6.0, 7.2.15-100.fc43.x86_64, x86_64: installed
 sm750hdmifb/0.6.0, 7.3.3-100.fc43.x86_64, x86_64: installed
 sm750hdmifb/0.6.0: added
-sm750hdmifb/0.6.4, 7.3.4-100.fc43.x86_64, x86_64: installed
-sm750hdmifb/0.6.4: added
+sm750hdmifb/0.6.6, 7.3.4-100.fc43.x86_64, x86_64: installed
+sm750hdmifb/0.6.6: added
 sm750hdmifb-ng/0.9.0, 7.3.4-100.fc43.x86_64, x86_64: built
 othermodule/1.0, 7.3.4-100.fc43.x86_64, x86_64: installed
 --- purge run (no usable kernel, canned status) ---
 removing stale DKMS registration: sm750hdmifb/0.5.9
 removing stale DKMS registration: sm750hdmifb/0.6.0
 warning: skipping 6.18.13-200.fc43.x86_64: matching kernel headers are absent
-warning: no kernel received the module; check the warnings above and run: dkms install -m sm750hdmifb -v 0.6.4 -k <kernel>
+warning: no kernel received the module; check the warnings above and run: dkms install -m sm750hdmifb -v 0.6.6 -k <kernel>
 exit: 0
 --- recorded calls (purge run) ---
 dkms status
@@ -48,7 +48,7 @@ File: /var/lib/dkms/sm750hdmifb/0.5.9/source/dkms.conf does not exist.
 warning: dkms remove sm750hdmifb/0.5.9 failed; remove it by hand
 removing stale DKMS registration: sm750hdmifb/0.6.0
 warning: skipping 6.18.13-200.fc43.x86_64: matching kernel headers are absent
-warning: no kernel received the module; check the warnings above and run: dkms install -m sm750hdmifb -v 0.6.4 -k <kernel>
+warning: no kernel received the module; check the warnings above and run: dkms install -m sm750hdmifb -v 0.6.6 -k <kernel>
 exit: 0
 --- recorded calls (failed-removal run) ---
 dkms status
@@ -58,7 +58,7 @@ dkms remove -m sm750hdmifb -v 0.6.0 --all
 purge line: 90, build loop line: 127
 --- broken 0.6.1 registration (A37), dkms root in the sandbox ---
 state: /var/lib/dkms/sm750hdmifb/0.6.1 registered for the running
-kernel with no source/dkms.conf, so dkms install 0.6.4 aborts while
+kernel with no source/dkms.conf, so dkms install 0.6.6 aborts while
 uninstalling 0.6.1 (SHIM_FAIL_REMOVE=0.6.1). The purge must delete
 the tree and the install must still be attempted.
 removing stale DKMS registration: sm750hdmifb/0.6.1
@@ -69,15 +69,15 @@ warning: removing broken DKMS registration tree: /mega/tmp/sm750/t6/posttrans/br
 --- recorded calls (broken-tree run) ---
 dkms status
 dkms remove -m sm750hdmifb -v 0.6.1 --all
-dkms build -m sm750hdmifb -v 0.6.4 -k 7.3.4-100.fc43.x86_64
-dkms install -m sm750hdmifb -v 0.6.4 -k 7.3.4-100.fc43.x86_64 --force
+dkms build -m sm750hdmifb -v 0.6.6 -k 7.3.4-100.fc43.x86_64
+dkms install -m sm750hdmifb -v 0.6.6 -k 7.3.4-100.fc43.x86_64 --force
 depmod -a 7.3.4-100.fc43.x86_64
 --- status fields that are not release tokens (A37) ---
 sm750hdmifb/../etc, 6.17.0-1.fc43.x86_64, x86_64: installed
 sm750hdmifb/.., 6.17.0-1.fc43.x86_64, x86_64: installed
 sm750hdmifb/., 6.17.0-1.fc43.x86_64, x86_64: installed
 sm750hdmifb/0.6.1~x, 6.17.0-1.fc43.x86_64, x86_64: installed
-warning: no kernel received the module; check the warnings above and run: dkms install -m sm750hdmifb -v 0.6.4 -k <kernel>
+warning: no kernel received the module; check the warnings above and run: dkms install -m sm750hdmifb -v 0.6.6 -k <kernel>
 --- recorded calls (unsafe-version run) ---
 dkms status
 --- dangling DKMS kernel link (A40), dkms root in the sandbox ---
@@ -89,7 +89,7 @@ must remove both links, keep the resolvable one and the version purge.
 removing stale DKMS registration: sm750hdmifb/0.6.0
 removing dangling DKMS kernel link: /mega/tmp/sm750/t6/posttrans/dangling/dkmsroot/sm750hdmifb/kernel-7.2.15-100.fc43.x86_64-x86_64
 removing dangling DKMS kernel link: /mega/tmp/sm750/t6/posttrans/dangling/dkmsroot/sm750hdmifb/kernel-7.3.3-100.fc43.x86_64-x86_64
-warning: no kernel received the module; check the warnings above and run: dkms install -m sm750hdmifb -v 0.6.4 -k <kernel>
+warning: no kernel received the module; check the warnings above and run: dkms install -m sm750hdmifb -v 0.6.6 -k <kernel>
 --- recorded calls (dangling-link run) ---
 dkms status
 dkms remove -m sm750hdmifb -v 0.6.0 --all

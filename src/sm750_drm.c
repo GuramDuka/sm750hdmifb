@@ -76,12 +76,12 @@ typedef struct drm_atomic_state sm750_atomic_commit;
 #define SM750_DRM_NAME "sm750hdmidrm"
 /* Keep in step with the package version in build-package.sh and dkms.conf;
  * tests/check-release-version.sh fails when the three disagree. */
-#define SM750_DRM_VERSION "0.6.5"
+#define SM750_DRM_VERSION "0.6.6"
 /* modetest reports these as the driver version, so they must track the release
  * number above; tests/check-release-version.sh fails when they drift. */
 #define DRIVER_MAJOR 0
 #define DRIVER_MINOR 6
-#define DRIVER_PATCHLEVEL 5
+#define DRIVER_PATCHLEVEL 6
 #define SM750_DRM_MAX_WIDTH 2560
 #define SM750_DRM_PHYSICAL_MAX_WIDTH 2048
 #define SM750_DRM_PLL PRIMARY_PLL
@@ -262,7 +262,9 @@ MODULE_PARM_DESC(dma_batch_rows,
 MODULE_PARM_DESC(staging_timing,
 	"Log complete-frame upload and presentation timing for benchmarking");
 module_param(shadow_dma_min_bytes, uint, 0444);
-module_param(crc_window_bytes, uint, 0444);
+/* Writable so a full frame can be read back; the reader clamps to the
+ * visible scanout area, so a larger value is bounded by the geometry. */
+module_param(crc_window_bytes, uint, 0644);
 MODULE_PARM_DESC(scanout_format,
 	"Scanout backend: xrgb8888, rgb565, or rgb565-bbdither");
 MODULE_PARM_DESC(dither_green_gain,
@@ -286,7 +288,7 @@ MODULE_PARM_DESC(backbuffer_staging,
 MODULE_PARM_DESC(shadow_dma_min_bytes,
 	"Minimum aligned shadow span for DMA (default 4096 bytes)");
 MODULE_PARM_DESC(crc_window_bytes,
-	"Bytes of the visible scanout region read per CRC (default 262144, minimum 4096)");
+	"Bytes of the visible scanout region read per CRC (default 262144, minimum 4096, clamped to the visible frame; writable at runtime)");
 module_param(test_pattern, charp, 0644);
 module_param(test_pattern_period_ms, uint, 0644);
 module_param(test_pattern_anim_ms, uint, 0644);
@@ -3122,7 +3124,9 @@ static const char *sm750_crc_region_missing(struct sm750_drm_device *sdev)
 	return NULL;
 }
 
-/* Bounded window: crc_window_bytes from the visible scanout offset. */
+/* Bounded window: crc_window_bytes from the visible scanout offset. The
+ * min() below drops any write larger than the visible frame, so a
+ * full-frame grow is the only effect of a huge parameter value. */
 static bool sm750_crc_region(struct sm750_drm_device *sdev, u32 *offset,
 			     size_t *length, const char **missing)
 {

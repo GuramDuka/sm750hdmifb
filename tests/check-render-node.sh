@@ -148,7 +148,7 @@ check_live() {
 	done
 
 	if [ "$seen" -eq 0 ]; then
-		printf 'SKIP: %s\n' "the running module does not advertise a render node yet: install 0.6.5"
+		printf 'SKIP: %s\n' "the running module does not advertise a render node yet: install 0.6.5 or newer"
 	fi
 }
 

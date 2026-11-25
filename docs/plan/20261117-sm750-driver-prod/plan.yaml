@@ -127,6 +127,8 @@ decisions:
   - "T56 accepted: the headless compositor helper, the vblank-expectation gate and the kmscube verdict model. tools/sm750-headless.sh (source 9223 bytes, sha256 137c665b7f60c17a95a6bdcd7948fb7064239eb62a6a108932e60315ce80913c, 276 lines) runs five modes through one root-side NOPASSWD line: probe takes DRM master (0x641E) and drops it (0x641F) to prove the card is free, diagnose names the fd-table holders of the card inode plus the module refcount and the fbcon bind, and weston/cage/kmscube run one named compositor for a bounded time with LIBSEAT_BACKEND=noop, cage without -s and kmscube with -c. Measured through the installed 8759-byte revision on 2026-11-25: probe PASS, diagnose PASS (no holders, refcount 0, fbcon bind 1), weston 30 PASS 333 frames 21248->21581, cage 20 PASS 341 frames 21966->22307, kmscube 15 finished rc=0 with 443 frames 22692->23135. A43 records the six ways the helper mis-modelled a run before that: LIBSEAT_BACKEND=builtin does not exist in libseat 0.9.3; a frame count alone passed an exited compositor; wlroots splits WLR_DRM_DEVICES on ':' so the by-path symlink yielded zero GPUs; kmscube -n is a connector id; cage -s permits VT switching on seat0; and a clean kmscube exit with -c was reported as FAIL. A44 records the gate defect the same work exposed: tests/check-drm-module.sh:88 hardcoded a 60 Hz expectation, so make check failed on a panel the driver had programmed to 75 Hz with 'vblank rate is outside the 5% tolerance / Measured 75.21 DRM vblanks/s over 120 events (expected 60.00)'. The driver is cleared: a frozen vblank_count on an idle pipe is DRM core vblankoffdelay (default 5000 ms) disabling the source, measured freezing 5.51 s after the last WAIT_VBLANK returned and resuming immediately for a new waiter, so sm750_vblank_timer_fn() at src/sm750_drm.c:488-506 was not at fault and no src/ file changed. tests/check-drm-module.sh now derives the expectation (SM750_DRM_EXPECTED_HZ > /sys/class/drm/<card>/device/active_mode_refresh_hz > /sys/bus/pci/devices/0000:01:00.0/active_mode_refresh_hz > 60 with a stderr note) and gained --self-test with three planted controls. make check is green end to end (18 commands, rc 0) for the first time since the panel moved to 75 Hz. Evidence: docs/evidence/runtime/34-vblank-idle-freeze.txt and 35-kmscube-exit-semantics.txt. Residual: the installed helper was one revision behind at acceptance, so the source-level kmscube PASS path has not been observed on the host yet."
   - "T56 residual closed: the host owner installed the current headless helper, verified by hash pair rather than by report - /usr/local/sbin/sm750-headless and tools/sm750-headless.sh are both 9223 bytes with sha256 137c665b7f60c17a95a6bdcd7948fb7064239eb62a6a108932e60315ce80913c, mtime 2026-11-25T17:26. All five modes then passed through the installed copy: probe (master acquired and dropped), diagnose (no card0 fd holders, module refcount 0, fbcon bind 1), weston 15 PASS, cage 15 PASS, kmscube 15 PASS with 428 vblank frames and rc=0. The kmscube line is the observable proof of the sixth A43 defect: the same command against the previous 8759-byte revision printed 'RESULT: FAIL kmscube did not survive 12s' for a clean rc=0 exit, while the per-mode rule now passes it only because the pipe advanced. docs/ROOT-ACTIONS.md 3.11 is restated as INSTALLED, CURRENT with the 9223-byte hash, and its measured-run paragraph deliberately keeps both run lists - the 13:41Z runs on the 8759-byte revision (kmscube FAIL) and the 14:27Z runs on the 9223-byte revision (all pass) - because deleting the FAIL would leave A43 resting on a claim instead of a run. Logbook entry 2026-11-25T14:30Z records the same, and repeats the fourth occurrence of the stale-install lesson: sudo install is not allowlisted, so only the hash pair distinguishes refreshed from reported as refreshed."
   - "T57 render node closed with a measured verdict: DRIVER_RENDER now sits on both driver_features lines in src/sm750_drm.c (:4527 TTM struct, :4542 shadow struct) and 0.6.5 was built, installed by /usr/local/sbin/sm750-pkg and loaded, after which /sys/module/sm750hdmidrm/version reads 0.6.5 and the node appears as /dev/dri/renderD131 (crw-rw-rw- root:render 226:131) with the sysfs counterpart /sys/class/drm/card0/device/drm/renderD131; a DRM_IOCTL_VERSION probe (0xC0406400) returns driver='sm750hdmidrm', ver=0.6.5 and desc='SM750G10 SiI9024A HDMI DRM shadow driver' for BOTH /dev/dri/renderD131 and /dev/dri/card0, which also proves the instantiated struct is the shadow one, not the TTM one. The node does NOT unblock kwin_wayland: kwin 6.7.5 still refuses with 'kwin_core: Ignoring render device /dev/dri/renderD131 without hardware acceleration' and 'kwin_core: Failed to open /dev/dri/card0 device (Operation not permitted)' then 'kwin_wayland_drm: No suitable DRM devices have been found' rc 1, and that message is a library-level permission-model verdict rather than a failed syscall because strace shows the whole trace contains one unrelated EPERM (futex FUTEX_UNLOCK_PI_PRIVATE) and kwin never opens card0 at all, only newfstatat and readlink of its sysfs path, opening renderD131/130/129/128 only. Two independent barriers remain and both are measured, not assumed: no Mesa driver for SM750 (no sm750/smi/silicon entry under /usr/lib64/dri, only swrast and kms_swrast, and eglQueryDevicesEXT returns zero devices), and no logind seat (loginctl list-seats lists only seat0 while libkwin carries KWin::LogindSession, DBusLogindSeat and 'The session is not active'; KWIN_WAYLAND_NO_PERMISSION_CHECKS=1 with KWIN_DRM_DEVICES and LIBSEAT_BACKEND=noop changed nothing, and kwin 6.7.5 has no --drm-device option). Consequence for the m06990 objective: Plasma runs on this driver through X11 only, at 1920x1080 with plasmashell and kwin_x11 window management proven, and X11 compositing stays off because the server's GLX is DRISWRAST and lacks GLX_EXT_texture_from_pixmap, which aborts kwin_x11 with 'No provider of glXBindTexImageEXT found.'; the render node is therefore delivered as a capability with an honest scope note, not as a Plasma enabler."
+  - "Decision 80 (T58, m07395): record the Plasma 6 Wayland result in the repository instead of only in scratch. docs/PLASMA-WAYLAND.md states both barriers with their measured mechanism (kwin filters RENDER devices only, so the card node is exempt; logind session_device_new() returns -EPERM when the session has no seat, bypassed by making the system bus unreachable so KWin::Session::create() falls back to KWin::NoopSession), the reproducible recipe (private runtime dir, private session bus, KWIN_DRM_DEVICES=/dev/dri/card0, KWIN_RENDER_NODES by path, startplasma-wayland), and the scanout proof (PANEL_FB_ADDRESS 0x003f4800, nonzero 262144, crc32 0x976e751b against the earlier all-zero 0xe20eea22). Evidence: docs/evidence/runtime/37-plasma-wayland.txt. The three remaining limits are named there as limits, not as defects, and docs/TEST-STRATEGY.md S22 marks them observed by hand with no gate because the session needs a seatless remote login and a real panel."
+  - "Decision 81 (T59, m07395): the scanout readback window becomes writable at runtime so a whole frame can be dumped. crc_window_bytes was 0444, so 262144 bytes (68 of 1080 scanlines at pitch 3840) was a hard ceiling for both the CRC source and the sm750_scanout debugfs file; it is now 0644 and the reader keeps clamping any value to the visible scanout area, so an oversized write is bounded by the geometry rather than by the permission bits. Release 0.6.6. The existing CRC gate gained a mode assertion, a clamp assertion and three planted controls. A46 records the defect and states plainly that the widened window is a diagnostic action and not a poll: one 256 KiB dump already costs about 1.24 s, so the full 8294400-byte frame is far slower than any frame rate and cannot substitute for a capture API."
 assumptions:
   - "Primary RPM target Fedora 43 x86_64 (current host), spec written EL9-portable where macros allow: prefer portable macro equivalents over Fedora-only macros, and record any EL9 divergence as a comment in the spec rather than treating it as a blocker. dkms, rpmbuild 6.0.2, rpmdev-setuptree and spectool are present; ~/rpmbuild now EXISTS, so clean-buildroot work uses a fresh _topdir via --define."
   - "Kernel floor remains 6.17 per dkms.conf BUILD_EXCLUSIVE_KERNEL; the EL9 portability target does not lower it, so EL9 kernels below 6.17 are documented as unsupported in the spec comment rather than accommodated."
@@ -1060,3 +1062,46 @@ tasks:
       - src/sm750_drm.c
       - tests/check-render-node.sh
       - docs/evidence/runtime/36-render-node.txt
+
+  - id: T58
+    title: Record the Plasma 6 Wayland result on the SM750
+    description: |
+      Rung: record, not code. A full Plasma 6.7.5 Wayland session was run
+      against the installed driver as the service account, with no seat and no
+      root, and its frames reach the panel. The result existed only in scratch,
+      so it is written into the repository with the mechanism, the recipe, the
+      scanout proof, and an explicit list of what was NOT measured.
+    status: completed
+    owner: gem-documentation-writer
+    wave: 11
+    objective: Publish the Wayland result as a document plus an evidence transcript, with the limits stated as limits.
+    acceptance_criteria:
+      - Both barriers are explained from measurements, with the exact kwin and logind code paths that produce them.
+      - The recipe is reproducible from a clean boot and names no absolute home path.
+      - The proof distinguishes the all-zero scanout of the earlier run from the non-zero scanout of the full session.
+      - Input, screencast, full-frame readback and interaction latency are listed as not measured rather than implied.
+    deliverables:
+      - docs/PLASMA-WAYLAND.md
+      - docs/evidence/runtime/37-plasma-wayland.txt
+  - id: T59
+    title: Writable scanout readback window (0.6.6)
+    description: |
+      Rung: new capability. crc_window_bytes was mode 0444, so neither the
+      service account nor root could widen the 262144-byte window that feeds
+      both the CRC source and the sm750_scanout dump, and a 1920x1080 frame is
+      8294400 bytes. The parameter becomes 0644 while the reader keeps clamping
+      every value to the visible scanout area, so an oversized write cannot read
+      past the frame or past VRAM.
+    status: completed
+    owner: gem-implementer
+    wave: 11
+    objective: Make the readback window runtime-writable, bump the release to 0.6.6, and gate the mode and the clamp.
+    acceptance_criteria:
+      - crc_window_bytes has mode 0644 and the reader still clamps to the visible scanout area.
+      - The version is 0.6.6 at every bump site and every gate that hardcodes it agrees.
+      - The CRC gate fails when the mode reverts to 0444 or the clamp is dropped.
+      - docs/PARAMETERS.md and docs/DEFECTS.md A46 state that a full-frame dump is a diagnostic, not a poll.
+    deliverables:
+      - src/sm750_drm.c
+      - tests/check-crc-uapi.sh
+      - docs/PARAMETERS.md
