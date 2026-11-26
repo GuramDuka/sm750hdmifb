@@ -3,7 +3,7 @@
 #
 # Gate for tools/sm750-smi.  No GPU and no root are needed: every field is
 # driven from a synthetic sysfs tree under $TMPDIR, the card node is a plain
-# file, and the process table is a synthetic <proc> root.  Four defects are
+# file, and the process table is a synthetic <proc> root.  Five defects are
 # planted into copies of the source and must each be rejected, so the gate
 # cannot pass by accident.
 #
@@ -300,6 +300,40 @@ set -e
 grep -qF "malformed" <<<"$out" ||
 	complain "malformed fixture: reason does not say malformed"
 
+# F8b: the driver's documented -1 means "no CRTC is enabled", not garbage.
+f8b=$scratch/f8b-inactive-crtc
+fixture "$f8b"
+echo -1 >"$f8b/sys/class/drm/card0/device/active_crtc"
+[ "$(value "$f8b" crtc.index)" = "n/a" ] ||
+	complain "inactive-crtc fixture: crtc.index is not n/a"
+set +e
+out=$(run "$f8b" --query=crtc.index --strict 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 3 ] || complain "inactive-crtc fixture: --strict exit $rc, expected 3"
+grep -qF "n/a (no active CRTC)" <<<"$out" ||
+	complain "inactive-crtc fixture: reason is not 'n/a (no active CRTC)'"
+if grep -qF "malformed" <<<"$out"; then
+	complain "inactive-crtc fixture: -1 was reported as malformed"
+fi
+
+# F8c: a value that really is garbage is still malformed, not "no CRTC".
+f8c=$scratch/f8c-garbage-crtc
+fixture "$f8c"
+echo bogus >"$f8c/sys/class/drm/card0/device/active_crtc"
+[ "$(value "$f8c" crtc.index)" = "n/a" ] ||
+	complain "garbage-crtc fixture: crtc.index is not n/a"
+set +e
+out=$(run "$f8c" --query=crtc.index --strict 2>&1)
+rc=$?
+set -e
+[ "$rc" -eq 3 ] || complain "garbage-crtc fixture: --strict exit $rc, expected 3"
+grep -qF "malformed active_crtc attribute" <<<"$out" ||
+	complain "garbage-crtc fixture: reason does not say malformed"
+if grep -qF "no active CRTC" <<<"$out"; then
+	complain "garbage-crtc fixture: garbage was reported as no active CRTC"
+fi
+
 # F9: card node missing -> PCI-only view and exit 2.
 f9=$scratch/f9-no-card
 fixture "$f9"
@@ -482,5 +516,34 @@ else
 	fi
 fi
 
+# 5. The driver's -1 ("no CRTC enabled") treated as a malformed attribute.
+p5=$scratch/plant5
+mkdir -p "$p5/tools"
+cp "$src" "$p5/tools/sm750-smi.c"
+python3 - "$p5/tools/sm750-smi.c" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+needle = '\t\tif (strcmp(buf, "-1") == 0) {\n'
+assert needle in s, "planted control anchor missing"
+open(p, "w").write(s.replace(needle, '\t\tif (0) {\n', 1))
+PY
+if ! build_copy "$p5" "$scratch/plant5.bin"; then
+	complain "planted control 'minus-one-is-malformed' did not build"
+else
+	set +e
+	out=$("$scratch/plant5.bin" --sysfs-root "$f8b/sys" \
+		--card "$f8b/dev/dri/card0" --proc-root "$f8b/proc" \
+		--no-color --query=crtc.index --strict 2>&1)
+	rc=$?
+	set -e
+	if grep -qF "malformed" <<<"$out"; then
+		report_rejected minus-one-is-malformed \
+			"active_crtc -1 reported as malformed (exit $rc): '$(head -n 1 <<<"$out")'"
+	else
+		complain "planted control 'minus-one-is-malformed' was not rejected: $out"
+	fi
+fi
+
 [ "$fail" -eq 0 ] || exit 1
-echo "sm750-smi checks passed (${#fields[@]} fields, 9 fixtures, 4 planted controls)"
+echo "sm750-smi checks passed (${#fields[@]} fields, 11 fixtures, 5 planted controls)"

@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Defect dispositions
 
-One row per defect inventoried in [AUDIT.md](AUDIT.md), plus nineteen found
+One row per defect inventoried in [AUDIT.md](AUDIT.md), plus twenty-three found
 later:
 `A25`, in the kernel log of the running 0.5.9 build, `A26`, in the IGT
 `kms_addfb_basic` run, `A27`, isolated by a targeted reproduction of the
@@ -28,7 +28,16 @@ investigation that unblocked `make check`
 render-node work, which delivered the node and observed it live on the host
 (`docs/evidence/runtime/36-render-node.txt`), and `A46`, by the 0.6.6
 scanout readback window work (`docs/evidence/runtime/37-plasma-wayland.txt`
-records the 256 KiB / 68-scanline limit it removes).
+records the 256 KiB / 68-scanline limit it removes), and `A47`, by the
+0.6.7 compositor work: KWin 6.7.5 logged AddFB2 EINVAL 359 times on a
+plane a direct probe proved correct, which the driver answers by
+withdrawing the framebuffer-modifier capability, and `A48`, by the 0.6.7
+monitoring-tool review of the live `sm750-smi` view on the target host,
+where `crtc.index` was rendered `n/a (malformed active_crtc attribute)` on
+an idle pipe (`docs/evidence/runtime/39-smi-inactive-crtc.txt`), and `A49`, by
+the headless-helper incident of 2026-11-26, where a weston run took the
+machine owner's physical keyboard and mouse
+(`docs/evidence/runtime/40-headless-input-isolation.txt`).
 They are
 recorded here because this
 table is the current defect state, not a copy of the audit. [AUDIT.md](AUDIT.md)
@@ -91,6 +100,9 @@ after (working tree) form of every fixed item. All logs were produced unprivileg
 | A44 | S4 | The live vblank gate asserted a hardcoded 60 Hz expectation, so `make check` failed on a panel the driver had programmed to 75 Hz: `vblank rate is outside the 5% tolerance / Measured 75.21 DRM vblanks/s over 120 events (expected 60.00)`. The same investigation cleared the driver: a frozen `vblank_count` on an idle pipe is DRM core's `vblankoffdelay` (default 5000 ms) disabling the source, measured freezing 5.51 s after the last `WAIT_VBLANK` returned and resuming immediately for a new waiter, so it is not a driver defect and no `src/` file was touched | fixed; `make check` exits 0 | `tests/check-drm-module.sh:30-31` attribute paths, `:39-41` `plausible_refresh()` awk range 20..250, `:43-47` `fallback_refresh()` with a stderr note, `:49-75` `resolve_expected_refresh()` with the preference `SM750_DRM_EXPECTED_HZ` > `/sys/class/drm/<card>/device/active_mode_refresh_hz` > `/sys/bus/pci/devices/0000:01:00.0/active_mode_refresh_hz` > fallback 60, `:208-216` `--self-test` with three planted controls; `tests/check-vblank.c` untouched | `docs/evidence/runtime/34-vblank-idle-freeze.txt` |
 | A45 | S4 | The driver advertised no render node, so a userspace compositor that refuses a card-only device skipped the SM750 entirely. The string `Skipping device %s without a render node` is present in the installed `/usr/lib64/libkwin.so.6.7.5`, and the strace of a kwin 6.7.5 run shows it never opens card0 - it only `newfstatat`s `/dev/dri/card0` and `readlink`s the DRM class entry - so the skip is a library-level verdict formed before any open, not a permission failure. The device was therefore unusable to that compositor no matter what the node permissions were | fixed; node delivered and observed live, not sufficient on its own for kwin_wayland | `DRIVER_RENDER` added to both `drm_driver` instances, on the same line as `DRIVER_MODESET`: `src/sm750_drm.c:4527` (TTM/VRAM) and `:4542` (shmem shadow); the rationale block above them states that the node carries dumb-buffer and PRIME primitives only and is not a claim of GL. A render-only device would lose card0 and every mode, so the gate rejects any line that sets `DRIVER_RENDER` without `DRIVER_MODESET`. Guards: `tests/check-render-node.sh` (five assertions - both `driver_features` lines carry `DRIVER_RENDER`, no line carries it without `DRIVER_MODESET`, `SM750_DRM_VERSION` agrees with `build-package.sh`, and the live render node resolved from `/sys/class/drm/renderD*` by its `device/driver` basename exists and is writable - plus three planted controls `render_dropped`, `render_only`, `version_drift` under `--self-test`); registered at `tests/check-drm-policy.sh:270-276` and counted in the `tests/check-scratch-policy.sh:46` census (19 -> 20 scripts); it adds no `make check` recipe command, so the count stays 18. Measured on the installed 0.6.5: the node was `/dev/dri/renderD131`, `crw-rw-rw- root:render 226:131`, present in sysfs as `/sys/class/drm/card0/device/drm/renderD131`, and `DRM_IOCTL_VERSION` on it reported `sm750hdmidrm` 0.6.5 - after the 2026-11-25 19:29 reboot the same device is `/dev/dri/renderD128`, so a minor number is never a stable handle; use `/dev/dri/by-path/pci-0000:01:00.0-render` with the shadow driver's description, proving the shmem driver struct is the one instantiated. Two independent barriers remain and neither is fixed here: Mesa ships no SM750 driver (`ls /usr/lib64/dri/` has no sm750/smi entry, and `eglQueryDevicesEXT` returns zero devices), so the node has no acceleration; and the service account has no logind seat (`loginctl list-seats` lists only seat0), which kwin checks separately. `KWIN_WAYLAND_NO_PERMISSION_CHECKS=1` with `KWIN_DRM_DEVICES` and `LIBSEAT_BACKEND=noop` changed nothing, and kwin 6.7.5 has no `--drm-device` option. Plasma runs on this driver through X11 instead (`/usr/libexec/Xorg :1` on card0 at 1920x1080, kwin_x11 managing windows), with compositing off because the server's GLX is DRISWRAST without `GLX_EXT_texture_from_pixmap` | `docs/evidence/runtime/36-render-node.txt` |
 | A46 | S4 | The scanout readback window could not be widened at runtime: `crc_window_bytes` was exposed with mode `0444` (`src/sm750_drm.c:265` before this change), so the 262144-byte default was the hard ceiling. At 1920x1080 with XRGB8888 pitch 7680 the visible frame is 8294400 bytes, so the `sm750_scanout` dump and the CRC source could only reach 262144 bytes, 68 of 1080 scanlines, and reading back a whole frame required a module reload with a command-line parameter. The clamp arithmetic was already correct and needed no change; only the file mode and the documented description were wrong. | fixed in 0.6.6 | `module_param(crc_window_bytes, uint, 0644)` with one comment line stating that the reader's `min()` bounds any oversized write (`src/sm750_drm.c:265-267`); `MODULE_PARM_DESC` now reads `Bytes of the visible scanout region read per CRC (default 262144, minimum 4096, clamped to the visible frame; writable at runtime)` (`src/sm750_drm.c:290-291`); the default stays 262144 and the reader is untouched apart from one comment (`src/sm750_drm.c:3127-3129`, clamp still `window = round_down(min(window, visible), 4)` at `:3144`). The CRC source and the debugfs dump share the window through `sm750_crc_region()`, so a write changes both. Guards: `tests/check-crc-uapi.sh` gained `check_window()` (parameter mode 0644, default 262144, `READ_ONCE` at use time, the `min(window, visible)` clamp and the `min_t` frame-size bound) and `check_release()` (version 0.6.6 agreeing across `build-package.sh`, `dkms.conf`, `SM750_DRM_VERSION`, `DRIVER_MAJOR/MINOR/PATCHLEVEL`, both spec files and the CI artifact names), with three planted controls `window_readonly`, `clamp_dropped`, `version_drift`; the gate adds no `make check` recipe command. Honest limit: a full-frame dump is 8294400 bytes printed as hex, so it is a diagnostic action, not something to poll | `docs/evidence/runtime/37-plasma-wayland.txt` |
+| A47 | S2 | KWin 6.7.5 on `/dev/dri/card0` could not create a framebuffer: `kwin_wayland_drm: Failed to create framebuffer` (EINVAL) appeared **359** times in one session, after which the scanout died - `PANEL_CURRENT_LINE` froze at `0x00000000` and the panel showed nothing. The driver is not buggy here: `drm_simple_display_pipe_init()` is called with a NULL `format_modifiers` argument (`src/sm750_drm.c:4625-4626`), which per `include/drm/drm_plane.h:885` and `:929` makes the plane advertise exactly `DRM_FORMAT_MOD_LINEAR`. A direct probe confirmed the plane is correct: `CAP_ADDFB2_MODIFIERS=1`, plane 36 formats `0x34325258` with an IN_FORMATS blob of `[0x34325258 LINEAR]`, AddFB2 succeeding both with no flag and with `DRM_FORMAT_MOD_LINEAR`, and failing `errno 22` only for `MOD_INVALID` and bogus modifiers, which is correct core behaviour (the NVIDIA card on this host behaves identically). KWin therefore submits a modifier the plane does not advertise, most likely `DRM_FORMAT_MOD_INVALID` on its CPU-import path, so the advertisement and the client disagree rather than the driver mis-executing an operation | fixed in 0.6.7; observed on KWin 6.7.5 only | the device withdraws the modifier capability: `drm->mode_config.fb_modifiers_not_supported = 1;` set unconditionally in `sm750_modeset_init()` directly after the `drm->mode_config.funcs` selection (`src/sm750_drm.c:4606`), with the reason in the comment above the two `drm_mode_config_funcs` structs (`:4344-4350`). The flag is a `struct drm_mode_config` field, not a `drm_mode_config_funcs` member (`include/drm/drm_mode_config.h:943-951`), so a single assignment covers both the VRAM/TTM and the shmem shadow device; the NULL `format_modifiers` argument is deliberately kept, since the plane still advertises LINEAR and nothing invents a modifier list. Core then reports `DRM_CAP_ADDFB2_MODIFIERS=0` and every client, not just kwin with an environment variable, takes the modifiers-free AddFB2. Guards: `tests/check-render-node.sh` gained `check_fb_modifiers()` (both funcs structs defined and installed, the flag present, and the flag on the line immediately after the two-line funcs selection so a guard cannot withdraw it for one device only) with two planted controls `fb_modifiers_dropped` and `fb_modifiers_branched` | `docs/evidence/runtime/38-modifier-rejection.txt` (the session that produced the 359 lines is `docs/evidence/runtime/37-plasma-wayland.txt`) |
+| A48 | S3 | The monitoring tool misread the driver's own "no output enabled" marker. `active_crtc_show()` (`src/sm750_drm.c:4933-4949`) emits `drm_crtc_index()` only while `crtc->enabled`, and `-1` otherwise, but `get_crtc_index()` (`tools/sm750-smi.c:1106-1140`) passed the raw string to `parse_u64()`, which rejects a leading `-` by design for every other attribute. An idle pipe therefore rendered `crtc.index  n/a (malformed active_crtc attribute)` instead of an honest "nothing is enabled", which sends an operator hunting a driver bug that does not exist. Measured on the target host before the fix: `cat /sys/class/drm/card0/device/active_crtc` = `-1`, `sm750-smi | grep crtc` = `n/a (malformed active_crtc attribute)` | fixed in 0.6.7 | `get_crtc_index()` recognises exactly the literal `-1` before the numeric parse and reports the new `reason_no_active_crtc` constant (`tools/sm750-smi.c:107`), which renders `n/a (no active CRTC)`; the libdrm fallback reaches the same reason when `drm_crtc_index()` returns `< 0`, so sysfs and DRM agree and the old `no active CRTC exposed by sysfs or DRM` string survives only for the "neither source readable" case. The check is not weakened: any other non-numeric or signed value still fails `parse_u64()` and stays `malformed active_crtc attribute`. Guards: `tests/check-sm750-smi.sh` fixtures F8b (`-1` must be `n/a (no active CRTC)` and must not contain `malformed`) and F8c (`bogus` must be `malformed active_crtc attribute` and must not contain `no active CRTC`), plus planted control 5 `minus-one-is-malformed`, which rewrites the `strcmp(buf, "-1")` guard to `if (0)` and must be rejected; the gate adds no `make check` recipe command | `docs/evidence/runtime/39-smi-inactive-crtc.txt` |
+| A49 | S2 | A headless compositor run took the machine owner's input devices. `sm750-headless weston 600` started weston as root with `--backend=drm`, whose DRM backend opens libinput directly, so the `WLR_LIBINPUT_NO_DEVICES=1` the helper exported - a wlroots variable - had no effect. The run log of `20261126T033248Z-weston` records the grab: `[06:32:48.349] event2  - HID 04f3:0103: device is a keyboard`, `[06:32:48.355] event6  - HID 0557:2419: device is a keyboard`, `[06:32:48.357] event7  - HID 0557:2419: device is a pointer`, `[06:32:48.359] event5  - Genius Optical Mouse: device is a pointer`, and eight `libinput: configuring device` lines in total. The owner lost keyboard and mouse for ten minutes and powered the machine off. Weston exited with `rc=0` at 06:42:51, so the helper's own verdict was FAIL for the wrong reason (`weston did not survive 600s`) and said nothing about the grab. No argument can prevent this: in weston 14.0.2 `--no-input` is documented only under `Options for x11:`, and the DRM backend's options are `--seat`, `--drm-device`, `--additional-devices`, `--use-pixman`, `--current-mode` and `--continue-without-input`, the last meaning only that weston starts with zero input devices and not that it stops opening devices it finds. cage 0.2.x has no input-related option at all (`-d`, `-m`, `-s`, `-v`, `-h`). Root cause chain: `coder` has no logind seat (`loginctl list-sessions` shows seat0 only for the owner's session, and that session has `Seat=` empty, `Remote=yes`), so the helper's `LIBSEAT_BACKEND=noop` - the only usable libseat backend here, since `seatd` is not installed - opens the evdev node directly with nobody arbitrating | fixed | `tools/sm750-headless.sh` starts both compositor arms inside a private mount namespace whose `/dev/input` is an empty tmpfs: `isolate()` at `tools/sm750-headless.sh:244-253` runs `exec /usr/bin/unshare --mount --propagation private /bin/sh -c '... mount -t tmpfs -o size=1M,mode=0755 tmpfs /dev/input ...; exec "$@"'`, so the mount exists only for the compositor's own namespace and disappears with it. `--propagation private` is mandatory because `/dev` on this host is a shared mount (`/proc/self/mountinfo` field 7 = `shared:2`), and a mount made under shared propagation can reach the host; the pre-exec guards refuse to start a compositor if `/usr/bin/unshare` or `/usr/bin/mount` is missing (`:85-114`), the isolation is announced once on the console and recorded in `$out/00-plan.txt`, and kmscube keeps its plain `exec` because it takes no input. The `WLR_LIBINPUT_NO_DEVICES=1` export is kept with a comment stating it is a wlroots variable that weston never reads (`:221-224`), so the namespace is the real guard. Guards: `tests/check-headless-helper.sh` section k asserts the private namespace, the exact tmpfs mount, the announcement, `00-plan.txt`, `isolate` in both the weston and the cage arm, its absence from the kmscube arm, and that the mount line precedes both compositor calls; two planted controls, `input-isolation-dropped` (both arms exec directly) and `isolation-one-mode-only` (cage unprotected), must be rejected. Gate count 11 assertions / 12 planted controls (section k added one assertion to the pre-existing ten and two controls to the pre-existing ten) | `docs/evidence/runtime/40-headless-input-isolation.txt` |
 
 ## Deferred and accepted items in detail
 
@@ -880,3 +892,165 @@ tree that still says 0.6.5. Three planted controls (`window_readonly`,
 `clamp_dropped`, `version_drift`) prove each new assertion can fail. The gate is
 reached through `tests/check-drm-policy.sh:232`, so it adds no `make check`
 recipe command.
+
+### A47 - KWin 6.7.5 could not create a framebuffer, so the panel stopped scanning (fixed in 0.6.7)
+
+A KWin 6.7.5 session on `/dev/dri/card0` logged
+`kwin_wayland_drm: Failed to create framebuffer` with EINVAL **359** times and
+then stopped scanning: `PANEL_CURRENT_LINE` stayed at `0x00000000`, so the panel
+showed nothing. The failure was in the compositor's AddFB2, not in a driver
+operation that returned the wrong thing.
+
+The driver passes NULL as the `format_modifiers` argument of
+`drm_simple_display_pipe_init()` (`src/sm750_drm.c:4625-4626`). Per
+`include/drm/drm_plane.h:885` and `:929` that makes the plane advertise exactly
+`DRM_FORMAT_MOD_LINEAR` and nothing else, which is the intended advertisement
+for a scanout engine that takes only linear buffers. A direct probe confirmed
+the plane behaves correctly: `CAP_ADDFB2_MODIFIERS` was 1, plane 36 listed
+format `0x34325258` with an IN_FORMATS blob of `[0x34325258 LINEAR]`, AddFB2
+succeeded both with no flag and with `DRM_FORMAT_MOD_LINEAR`, and it failed with
+`errno 22` only for `DRM_FORMAT_MOD_INVALID` and bogus modifier values, which is
+the correct core behaviour - the NVIDIA card on the same host rejects the same
+set. The client therefore submitted a modifier the plane does not advertise,
+most likely `DRM_FORMAT_MOD_INVALID` on its CPU-import path, and the mismatch
+between the advertised list and the client's choice is what produced EINVAL.
+
+The workaround that proved the diagnosis was environmental: launching kwin with
+`KWIN_DRM_USE_MODIFIERS=0` produced
+`kwin_wayland_drm: modifier support disabled by environment variable`, zero
+framebuffer failures, a rasterizing panel and a live nonzero scanout. That only
+fixes one compositor started in one particular way, so the production fix is
+device-level: `drm->mode_config.fb_modifiers_not_supported = 1;`
+(`src/sm750_drm.c:4606`), set unconditionally in `sm750_modeset_init()`
+immediately after the `drm->mode_config.funcs` selection so both the VRAM/TTM
+and the shmem shadow configuration reach it. The reason is recorded in the
+comment above the two `drm_mode_config_funcs` structs (`:4344-4350`).
+
+The flag is a `struct drm_mode_config` field, not a `drm_mode_config_funcs`
+member (`include/drm/drm_mode_config.h:943-951`); it is not a per-struct
+initialiser and an attempt to set it inside either funcs struct does not
+compile (`error: 'const struct drm_mode_config_funcs' has no member named
+'fb_modifiers_not_supported'`, measured on this host). With it set, core reports
+`DRM_CAP_ADDFB2_MODIFIERS=0`, so every client - not only a kwin started with the
+environment variable - takes the modifiers-free AddFB2 path that the plane
+accepts. The existing NULL `format_modifiers` argument is deliberately
+unchanged: the plane still advertises LINEAR and no modifier list is invented.
+
+Guard: `tests/check-render-node.sh` gained `check_fb_modifiers()`, which
+requires both funcs structs to be defined and installed, requires
+`drm->mode_config.fb_modifiers_not_supported = 1;` to be present, and requires
+it on the line immediately after the two-line funcs-selection ternary so a
+guard between them cannot withdraw the capability for one device only. Two
+planted controls prove the assertion can fail: `fb_modifiers_dropped` (the
+assignment deleted) and `fb_modifiers_branched` (the assignment moved inside
+`if (sdev->shadow_scanout)`, which compiles and fixes the shadow device while
+leaving the VRAM/TTM device advertising modifiers).
+
+Evidence: `docs/evidence/runtime/38-modifier-rejection.txt` records the symptom,
+the plane probe, the `KWIN_DRM_USE_MODIFIERS=0` workaround and its four-minute
+durability run, and the NOT YET OBSERVED list. The session that produced the 359
+lines and the frozen scanout is `docs/evidence/runtime/37-plasma-wayland.txt`.
+
+Honest limits: the compositor failure was observed on KWin 6.7.5 only. No other
+compositor was tested against the withdrawn capability on this host, and
+`KWIN_DRM_USE_MODIFIERS=0` remains a valid workaround for an older module. The
+device-level fix was built and gated here but not loaded: `make check` and the
+gate run against the source, and the live module on this host is still the
+previous release.
+
+### A49 - a headless compositor run took the owner's keyboard and mouse (fixed; isolated run not yet observed)
+
+At 2026-11-26T06:32:48 the helper `sm750-headless weston 600` started weston
+on the SM750 and weston opened the machine owner's physical input devices. The
+sudo record is unambiguous about who launched what:
+
+```text
+2026-11-26 06:32:48 <host> sudo[16436]: coder : PWD=<repository root> ; USER=root ;
+  COMMAND=/usr/local/sbin/sm750-headless weston 600
+```
+
+(The journal renders the month as its localised abbreviation, so the timestamp
+is quoted here in ISO form because this repository is ASCII only. The host name
+and the working directory are replaced with placeholders for the same reason
+the release audit rejects absolute local paths. The minute and second, the pid,
+the user and the command line are verbatim.)
+
+and `/proc/self/loginuid` in that session was `1005`, the service account, not
+the owner. The weston log of that run (`weston.log`, 249 lines, in
+`/mega/tmp/sm750/headless/20261126T033248Z-weston`) records the grab:
+
+```text
+[06:32:48.349] event2  - HID 04f3:0103: device is a keyboard
+[06:32:48.353] event4  - HID 04f3:0103 System Control: device is a keyboard
+[06:32:48.355] event6  - HID 0557:2419: device is a keyboard
+[06:32:48.357] event7  - HID 0557:2419: device is a pointer
+[06:32:48.359] event5  - Genius Optical Mouse: device is a pointer
+[06:32:48.393] libinput: configuring device "HID 04f3:0103".
+```
+
+The owner lost the keyboard and the mouse for the ten minutes the run lasted
+and powered the machine off. Weston exited with `rc=0` at
+`[06:42:51.252] caught signal 15`, and the helper's own verdict read
+`RESULT: FAIL weston did not survive 600s`, which is true and says nothing
+about what the run did to the seat.
+
+Root cause, in order of causation. Weston's DRM backend opens libinput itself,
+so the `WLR_LIBINPUT_NO_DEVICES=1` the helper exports has no effect: that is a
+wlroots variable and weston does not read it. No argument replaces it. In
+weston 14.0.2 `--no-input` appears only under `Options for x11:`, and the DRM
+backend's options are `--seat`, `--drm-device`, `--additional-devices`,
+`--use-pixman`, `--current-mode` and `--continue-without-input`; the last only
+means weston starts when zero input devices appear, it does not stop the open
+of the ones that are there. cage 0.2.x has no input option at all - `-d`,
+`-m extend|last`, `-s`, `-v`, `-h` - so it needed the same answer. Underneath
+that, `seatd` is not installed on this host (`/usr/bin/seatd` and
+`/usr/sbin/seatd` absent, no `seatd*` systemd unit, no `/run/seatd.sock`), while
+`libseat.so.1` is, and libseat 0.9.x offers exactly three backends: `logind`,
+`seatd` and `noop`. The service account has no seat, so `noop` is the only
+backend the helper can use, and `noop` is precisely the backend that opens the
+device node directly with no manager arbitrating.
+
+The fix is to remove the device nodes from the compositor's view rather than to
+ask the compositor to behave. `isolate()` (`tools/sm750-headless.sh:244-253`)
+execs the compositor inside `unshare --mount --propagation private` after
+mounting `tmpfs -o size=1M,mode=0755` over `/dev/input`, so no `event*` node
+exists in that namespace and no compositor, of any version, can open one. The
+namespace is private to the process, so the host `/dev/input` is untouched
+after the run. `--propagation private` is required, not cosmetic: `/dev` here
+is a shared mount, and a mount created under shared propagation may propagate
+to the host. The intermediate `sh` is replaced by the compositor through
+`exec`, so the pid the EXIT trap kills is still the compositor's. Both arms are
+isolated; kmscube is not, because it opens the card only.
+
+Guard: `tests/check-headless-helper.sh` section k, with assertions for the
+private namespace, the exact tmpfs mount over `/dev/input`, the announcement,
+`00-plan.txt`, `isolate` in the weston arm and in the cage arm, its absence
+from the kmscube arm, the mount-before-compositor line ordering, and the
+`wlroots` documentation of `WLR_LIBINPUT_NO_DEVICES`; plus planted controls
+`input-isolation-dropped` and `isolation-one-mode-only`, which must be
+rejected. The manual proof that the mount does not leak, run as the service
+account with `unshare -rm` because `/usr/bin/unshare` is not on the sudoers
+allowlist, is recorded in the evidence file.
+
+Why the devices cannot simply be shared with the owner, stated so the next
+reader does not reopen it: on Linux a physical input device belongs to exactly
+one seat at a time, and within a seat logind hands it to the active session
+only (`TakeDevice` plus the uaccess ACL), so two sessions cannot both read one
+keyboard through the seat model. Simultaneous sharing needs an evdev
+multiplexer that grabs and re-injects through `/dev/uinput` (`evsieve`,
+`input-remapper`, or a custom grabber), which is a privileged root daemon and
+far outside a test harness; `loginctl attach <seat> <device>` can move a device
+to a different seat, which takes it away from the owner rather than sharing it.
+For a headless harness the correct behaviour is zero input, and that is what
+the namespace delivers.
+
+Residual note, explicitly out of scope: a compositor that runs on a real VT
+under logind is supposed to take the seat's devices - that is what a session
+is - and nothing here changes or should change that. The isolation is a
+property of this helper's two compositor arms, not a policy for the host.
+
+Evidence: `docs/evidence/runtime/40-headless-input-isolation.txt` records the
+incident timeline, the quoted log lines, the loginuid proof, the namespace
+rationale, the non-leak measurement and an explicit NOT YET OBSERVED section:
+the isolated run has not been executed on the host because the installed copy
+must be refreshed first.

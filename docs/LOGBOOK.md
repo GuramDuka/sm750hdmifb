@@ -3525,6 +3525,53 @@ an untracked file, so it passes right up to the moment of the commit; staging
 first and then re-reading every count is the only way the numbers in the docs
 match the tree that gets pushed.
 
+### 2026-11-26T06:35Z | orchestrator | 0.6.7: the device withdraws framebuffer modifiers, and A48
+
+The black panel was never the driver. A C probe against
+`/mega/tmp/sm750/wayland-barriers/addfb2-probe.c` showed the plane advertising
+`CAP_ADDFB2_MODIFIERS=1`, format `0x34325258` with `IN_FORMATS blob 37` holding
+exactly `[0x34325258 LINEAR]`, `ADDFB2` succeeding with no flag and with
+`DRM_FORMAT_MOD_LINEAR`, and `errno 22` only for `MOD_INVALID` or a bogus
+modifier. KWin 6.7.5 submits a modifier the plane never advertised, gets
+`EINVAL` from `AddFB2`, and stops scanning out: 359 `Failed to create
+framebuffer` lines, `PANEL_CURRENT_LINE 0x00000000`, a frame equal to 256 KiB of
+zeros. `KWIN_DRM_USE_MODIFIERS=0` was measured as a workaround and survived four
+minutes with eight samples at crc32 `0x976e751b` and zero framebuffer failures.
+
+0.6.7 fixes it in the device rather than in a shell profile:
+`drm->mode_config.fb_modifiers_not_supported = 1` at
+`src/sm750_drm.c:4606`, directly after the two-line funcs selection, so both the
+VRAM/TTM and the shmem shadow devices report `DRM_CAP_ADDFB2_MODIFIERS=0` and
+every client takes the modifiers-free path. The field does not exist on
+`drm_mode_config_funcs`, so the first two-struct form did not compile
+(`has no member named 'fb_modifiers_not_supported'`) and one assignment stands.
+A47 records the chain and its honest limits, `docs/evidence/runtime/38-modifier-rejection.txt`
+carries the probe and the durability table, S23 is the gate row, and
+`check-render-node.sh` grew `check_fb_modifiers()` with planted controls
+`fb_modifiers_dropped` and `fb_modifiers_branched`.
+
+A48 came from reading a live `sm750-smi` instead of a test: `crtc.index` said
+`n/a (malformed active_crtc attribute)` for the driver's legitimate `-1`, which
+`active_crtc_show()` emits when no CRTC is enabled. The utility used a strict
+unsigned parse; it now recognises the literal `-1` as `n/a (no active CRTC)`,
+keeps garbage malformed, and the gate gained fixtures F8b/F8c plus a fifth
+planted control `minus-one-is-malformed` (27 fields, 11 fixtures, 5 controls).
+
+The live vblank probe in `check-drm-module.sh` is environment-dependent rather
+than flaky: with only fbcon painting, `card0-HDMI-A-1` reads `disabled`, there is
+no CRTC and `DRM_IOCTL_WAIT_VBLANK` correctly returns `EINVAL`. Run while a
+compositor holds DRM master it reads `enabled` / `1024x768` and passes. Gates
+re-run green: `check-render-node.sh` (7 assertions, 12 under `--self-test` with 5
+controls), `check-release-version.sh` 0.6.7, `check-drm-packaging.sh`,
+`check-crc-uapi.sh`, `check-static.sh`, `check-rpm-dkms.sh`,
+`check-drm-policy.sh`, `check-scratch-policy.sh`, `check-sm750-smi.sh`,
+`build-package.sh`, `audit-release.sh`, `git diff --check`. The board still runs
+0.6.5: `modprobe -r` answers `FATAL: Module sm750hdmidrm is in use.` because fbcon
+holds it, so 0.6.7 needs the owner's install before a KWin session can be run
+against it. Counts after staging: 144 payload files, 30 gate scripts, 46 runtime
+transcripts; `README.md` was stale at 0.6.4 and now says 0.6.7 while the runtime
+row keeps the truth that the host runs 0.6.5.
+
 ### 2026-11-25T21:10Z | orchestrator | 0.6.6 writable readback window, and the Wayland result recorded
 
 T58 (recording) and T59 (0.6.6) land together. The Plasma 6.7.5 Wayland
@@ -3561,3 +3608,60 @@ runtime transcripts. Gates: `make check` 18 commands, `check-crc-uapi.sh`,
 `check-render-node.sh`, `check-drm-module.sh` with a live vblank measurement of
 `60.44` vblanks/s, `build-package.sh`, and `audit-release.sh` all exit 0,
 `git diff --check` clean.
+
+### 2026-11-26T07:15Z | orchestrator | A49: the headless helper took the owner's input, and is now sealed
+
+The owner reported at 06:38 that the keyboard and mouse appeared blocked (report
+paraphrased here because this file is ASCII only). Verified cause: my own
+`make check` harness ran `sudo -n /usr/local/sbin/sm750-headless weston 600`,
+weston 14.0.2 with `--backend=drm` opened libinput directly and grabbed the
+physical devices, and the owner powered the machine off. The process was mine,
+not the owner's: `/proc/16475/loginuid` read `1005` (the service account) while
+uid was 0, and `pgrep -u duka -c .` stayed at 109 throughout, so no owner
+process was touched.
+
+Evidence, weston log 2026-11-26T06:32:48: `event2 - HID 04f3:0103: device is a
+keyboard`, `event3`/`event4 - HID 04f3:0103 ... is a keyboard`, `event6 - HID
+0557:2419: device is a keyboard`, `event7 - HID 0557:2419: device is a pointer`,
+`event5 - Genius Optical Mouse: device is a pointer`. The run died on its own
+600 s timeout at 06:42:48 with `device removed` lines and a FAIL verdict.
+
+Root cause chain: the service account has no seat (`loginctl list-sessions`
+shows seat0 only for the owner, and `Seat=` empty with `Remote=yes` for the
+service session), so the helper must set `LIBSEAT_BACKEND=noop`, and the noop
+backend opens the device nodes directly instead of letting logind arbitrate.
+The `WLR_LIBINPUT_NO_DEVICES=1` already in the script is a wlroots variable and
+weston ignores it.
+
+A flag cannot fix it: weston documents `--no-input` only under "Options for
+x11:", its DRM options are `--seat`, `--drm-device`, `--additional-devices`,
+`--use-pixman`, `--current-mode` and `--continue-without-input`, and the last
+only means "start even with zero input devices". cage 0.2.x has no input option
+at all. Sharing one device between two sessions is also refused by the Linux
+seat model: a device belongs to one seat, logind hands it to the active session
+only, `loginctl attach` moves rather than shares, and true concurrent sharing
+needs an evdev grab plus `/dev/uinput` re-injection daemon, out of scope here.
+
+Fix: `isolate()` in `tools/sm750-headless.sh` execs both compositor arms
+through `/usr/bin/unshare --mount --propagation private` and mounts
+`tmpfs -o size=1M,mode=0755` over `/dev/input` inside the child namespace only;
+`--propagation private` is mandatory because `/dev` is a `shared:2` mount on
+this host. kmscube keeps its plain exec. Measured: inside the namespace
+`/dev/input` had 0 entries, and the host still had 13 event nodes and 18 entries
+afterwards. Guards: section k of `tests/check-headless-helper.sh` plus planted
+controls `input-isolation-dropped` and `isolation-one-mode-only`, now 11
+assertions and 12 planted controls.
+
+Recorded: defect A49 row `docs/DEFECTS.md:105` and detail `:961`, gate S20 in
+`docs/TEST-STRATEGY.md`, evidence
+`docs/evidence/runtime/40-headless-input-isolation.txt`, decision 85 in the plan
+of record, and the helper's installed-copy staleness in `docs/ROOT-ACTIONS.md`
+section 3.11. Nothing is committed yet: this entry joins the 0.6.7 and A48
+batch.
+
+Still open and belonging to the owner: reinstall the helper with
+`sudo install -m 0755 -o root -g root tools/sm750-headless.sh /usr/local/sbin/sm750-headless`
+(the installed copy is 9223 bytes / sha256 137c665b..., the source is 12020
+bytes / sha256 bc1d3a06...), then install 0.6.7. The isolated compositor run
+itself is NOT YET OBSERVED and I will not run a compositor while the owner's
+session is live.

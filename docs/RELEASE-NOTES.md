@@ -1,6 +1,22 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Release notes
 
+## 0.6.7 - The device withdraws framebuffer modifiers
+
+- **KWin 6.7.5 can present instead of failing AddFB2.** A kwin session on
+  `card0` logged `kwin_wayland_drm: Failed to create framebuffer` with EINVAL
+  359 times and then stopped scanning. The plane was not at fault: the driver
+  passes NULL as the `format_modifiers` argument of
+  `drm_simple_display_pipe_init()`, so the plane advertises
+  `DRM_FORMAT_MOD_LINEAR` alone, and a probe showed AddFB2 succeeding with no
+  flag and with that modifier, and failing only for modifiers the plane does
+  not list. The device now sets `fb_modifiers_not_supported` in
+  `sm750_modeset_init()`, so core reports `DRM_CAP_ADDFB2_MODIFIERS=0` and
+  every client takes the modifiers-free AddFB2. `KWIN_DRM_USE_MODIFIERS=0`
+  still works on this and older modules. Defect A47, gate S23.
+- **Nothing else changed.** No new parameter, no new modifier list, and the
+  NULL `format_modifiers` argument is kept.
+
 ## 0.6.4 - Sysfs attributes for sm750-smi
 
 - **`sm750-smi` reads the driver instead of guessing.** The module now

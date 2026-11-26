@@ -207,6 +207,49 @@ if grep -nP '/home/[[:alnum:]_.-]' "$helper" >"$scratch/homepath.txt"; then
 fi
 ok "i. no absolute local path and no non-ASCII byte in the helper"
 
+# --- k. both compositors run with an empty /dev/input ---------------------
+# A49: at 2026-11-26T06:32:48 weston's DRM backend opened the owner's keyboard
+# and mouse because --no-input exists only for its x11 backend and cage has no
+# input option at all, so no argument can stop the grab. The guard is a private
+# mount namespace with a tmpfs over /dev/input. A compositor arm that reaches
+# exec without passing through isolate() is unprotected, so both arms are
+# checked, not one.
+has "$body" '--mount --propagation private' \
+	"k: the compositor must run in a private mount namespace (unshare --mount --propagation private)"
+has "$body" '-t tmpfs -o size=1M,mode=0755 tmpfs /dev/input' \
+	"k: an empty tmpfs must be mounted over /dev/input before the compositor starts"
+has "$body" 'input devices are isolated in a private mount namespace (empty /dev/input)' \
+	"k: the run must announce that input devices are isolated"
+has "$body" '00-plan.txt' \
+	"k: the isolation must be recorded in 00-plan.txt"
+has "$weston_arm" 'isolate ' \
+	"k: weston must be started through the input isolation, not exec'd directly"
+has "$cage_arm" 'isolate ' \
+	"k: cage must be started through the input isolation, not exec'd directly"
+if printf '%s\n' "$kmscube_arm" | grep -qF 'isolate '; then
+	bad "k: kmscube must keep its plain exec; it takes no input and is not isolated"
+fi
+# The namespace must be entered and the tmpfs mounted before either compositor
+# execs. mount/isolate are the only two lines that can satisfy this, so the
+# order is checked on their line numbers rather than on their text alone.
+mount_line=$(grep -nF -e '-t tmpfs -o size=1M,mode=0755 tmpfs /dev/input' "$helper" | head -n 1 | cut -d: -f1)
+weston_call=$(grep -nF 'isolate "$prog" --backend=drm' "$helper" | head -n 1 | cut -d: -f1)
+cage_call=$(grep -nF 'isolate "$prog" -d -- /usr/bin/weston-terminal' "$helper" | head -n 1 | cut -d: -f1)
+if [ -z "$mount_line" ] || [ -z "$weston_call" ] || [ -z "$cage_call" ]; then
+	bad "k: the /dev/input mount and both compositor launches must all be present"
+elif [ "$mount_line" -ge "$weston_call" ] || [ "$mount_line" -ge "$cage_call" ]; then
+	bad "k: the /dev/input mount at :$mount_line must precede the weston call at :$weston_call and the cage call at :$cage_call"
+fi
+# WLR_LIBINPUT_NO_DEVICES is a wlroots variable. It is kept because cage is
+# wlroots-based, but the comment must say so, otherwise its presence reads as
+# the guard and the namespace gets removed as redundant.
+has "$body" 'export WLR_LIBINPUT_NO_DEVICES=1' \
+	"k: WLR_LIBINPUT_NO_DEVICES=1 must stay exported for cage"
+if ! grep -qF 'wlroots' "$helper"; then
+	bad "k: WLR_LIBINPUT_NO_DEVICES must be documented as a wlroots-only variable"
+fi
+ok "k. weston and cage both run in a private mount namespace with an empty /dev/input, mounted before the exec"
+
 [ "$fail" -eq 0 ] || exit 1
 
 if [ "$single" -eq 1 ]; then
@@ -267,6 +310,14 @@ plant_local_path() { # a local absolute path in a committed script
 plant_seconds_zero() { # the lower clamp opened to zero
 	sed -i 's/"\$seconds" -ge 1/"$seconds" -ge 0/' "$1"
 }
+plant_input_isolation_dropped() { # both compositors exec without the namespace
+	# A weston that reads /dev/input directly grabs the owner's keyboard, which
+	# is the A49 incident: the compositor must not be reachable without isolate.
+	sed -i 's|isolate "\$prog"|exec "$prog"|g' "$1"
+}
+plant_isolation_one_mode_only() { # cage left unprotected while weston is sealed
+	sed -i 's|isolate "\$prog" -d -- /usr/bin/weston-terminal|exec "$prog" -d -- /usr/bin/weston-terminal|' "$1"
+}
 
 control() {
 	local name=$1
@@ -295,6 +346,8 @@ control kmscube-exit-is-failure plant_kmscube_exit_is_failure
 control kmscube-rc-ignored plant_kmscube_rc_ignored
 control local-path plant_local_path
 control seconds-zero-clamp plant_seconds_zero
+control input-isolation-dropped plant_input_isolation_dropped
+control isolation-one-mode-only plant_isolation_one_mode_only
 
 # The pristine copy must still pass, otherwise the controls prove nothing.
 cp "$helper" "$scratch/pristine.sh"
@@ -304,7 +357,7 @@ fi
 printf 'negative control pristine: accepted\n'
 
 [ "$fail" -eq 0 ] || exit 1
-controls=10
+controls=12
 if [ "$self_test" -eq 1 ]; then
 	printf 'Headless helper checks passed (%s assertions, %s planted controls, self-test)\n' "$assertions" "$controls"
 else

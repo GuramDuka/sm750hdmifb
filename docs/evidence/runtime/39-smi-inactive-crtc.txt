@@ -1,0 +1,66 @@
+sm750-smi: the driver's -1 active_crtc is "no active CRTC", not malformed
+==========================================================================
+Host: Fedora 43, kernel 7.3.4-100.fc43.x86_64
+Tool: tools/sm750-smi.c, module sm750hdmidrm
+Date: 2026-11-25
+All commands unprivileged, CC=/usr/bin/gcc (GCC 15.3.1), libdrm from the
+rootless pkg-config root /mega/tmp/sm750/t3/libdrm.
+
+1. The driver contract
+----------------------
+src/sm750_drm.c:4933-4949, active_crtc_show():
+
+    int index = -1;
+    ...
+    if (READ_ONCE(crtc->enabled))
+        index = drm_crtc_index(crtc);
+    ...
+    return sysfs_emit(buf, "%d\n", index);
+
+So -1 is the documented "no CRTC is enabled" value, not bad data.
+
+2. Before the fix (git show HEAD:tools/sm750-smi.c)
+---------------------------------------------------
+$ cat /sys/class/drm/card0/device/active_crtc
+-1
+$ /mega/tmp/sm750/t59/before | grep crtc.index
+  crtc.index                   n/a (malformed active_crtc attribute)
+
+3. After the fix (working tree, tools/sm750-smi.c:1106-1140)
+-----------------------------------------------------------
+$ /home/coder/sm750hdmifb/tools/sm750-smi | grep crtc.index
+  crtc.index                   n/a (no active CRTC)
+$ /home/coder/sm750hdmifb/tools/sm750-smi --query=crtc.index --strict; echo $?
+crtc.index: n/a (no active CRTC)
+n/a
+3
+
+The value is still unresolved (n/a, --strict exit 3) - what changed is the
+reason, and the malformed verdict is gone for a legitimate -1.
+
+4. A genuinely malformed value is still malformed
+-------------------------------------------------
+Fixture tests/check-sm750-smi.sh F8c (active_crtc = "bogus"):
+
+    crtc.index: n/a (malformed active_crtc attribute)   [--strict exit 3]
+
+and F8b (-1) must not contain the word "malformed". Both assertions are in
+the gate.
+
+5. Gate run
+-----------
+$ make CC=/usr/bin/gcc KDIR=/usr/src/kernels/7.3.4-100.fc43.x86_64 tools
+exit 0
+$ ./tests/check-sm750-smi.sh
+planted control 'field-without-getter' rejected: ... exit 1, 'sm750-smi: internal error: field table entry 27 has no getter or metadata'
+planted control 'hardcoded-version' rejected: fixture version 9.9.9, planted tool printed '0.6.2'
+planted control 'zero-instead-of-na' rejected: attribute absent, planted tool printed '0', expected n/a
+planted control 'ansi-with-no-color' rejected: --no-color output carried an ESC byte (exit 0)
+planted control 'minus-one-is-malformed' rejected: active_crtc -1 reported as malformed (exit 3): 'crtc.index: n/a (malformed active_crtc attribute)'
+sm750-smi checks passed (27 fields, 11 fixtures, 5 planted controls)
+exit 0
+
+The fifth control re-plants the defect: it rewrites the `strcmp(buf, "-1")`
+branch to `if (0)`, so the copy parses -1 through parse_u64() again and must
+report "malformed". If the gate's F8b assertion stopped distinguishing the two
+reasons the control would go unrejected and the gate would fail.

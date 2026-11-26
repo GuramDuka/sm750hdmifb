@@ -19,11 +19,11 @@
 #   tests/check-rpm-dkms.sh
 
 %global dkms_name     sm750hdmifb
-%global dkms_version  0.6.6
+%global dkms_version  0.6.7
 %global module_name   sm750hdmidrm
 
 Name:           sm750hdmifb
-Version:        0.6.6
+Version:        0.6.7
 Release:        1%{?dist}
 Summary:        DKMS source for the SM750G10 SiI9024A HDMI DRM-KMS driver
 License:        GPL-2.0-only
@@ -357,6 +357,13 @@ exit 0
 %doc README.md LICENSE docs/RELEASE-NOTES.md docs/TESTING.md packaging/copyright
 
 %changelog
+* Wed Nov 25 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.7-1
+- Release 0.6.7: the device withdraws the framebuffer-modifier capability
+  (.fb_modifiers_not_supported on both mode_config function structs), because
+  the simple display pipe advertises DRM_FORMAT_MOD_LINEAR alone. KWin 6.7.5
+  submitted a modifier the plane did not advertise, AddFB2 failed with EINVAL
+  and the panel stopped scanning; DRM_CAP_ADDFB2_MODIFIERS now reports 0 and
+  every client submits a modifiers-free AddFB2.
 * Wed Nov 25 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.6-1
 - Release 0.6.6: crc_window_bytes is writable at runtime (mode 0644), so the
   scanout CRC source and the sm750_scanout debugfs dump can read back a whole

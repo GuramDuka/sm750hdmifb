@@ -42,7 +42,7 @@ project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 spec=$project_dir/packaging/sm750hdmifb.spec
 name=sm750hdmifb
 module=sm750hdmidrm
-version=0.6.6
+version=0.6.7
 kernel=$(uname -r)
 arch=$(uname -m)
 cc=/usr/bin/gcc
@@ -665,13 +665,13 @@ printf '%s\n' "$mixed_output" | grep -F 'no kernel received the module' >/dev/nu
 	fail "%posttrans warned despite one usable kernel"
 # The purge is first on purpose (A37): it sees the canned listing (empty here)
 # before the build loop runs.
-expected_calls=$'dkms status\ndkms build -m sm750hdmifb -v 0.6.6 -k 7.3.4-100.fc43.x86_64\ndkms install -m sm750hdmifb -v 0.6.6 -k 7.3.4-100.fc43.x86_64 --force\ndepmod -a 7.3.4-100.fc43.x86_64'
+expected_calls=$'dkms status\ndkms build -m sm750hdmifb -v 0.6.7 -k 7.3.4-100.fc43.x86_64\ndkms install -m sm750hdmifb -v 0.6.7 -k 7.3.4-100.fc43.x86_64 --force\ndepmod -a 7.3.4-100.fc43.x86_64'
 [ "$(cat "$sandbox/calls.log")" = "$expected_calls" ] ||
 	fail "unexpected dkms/depmod call sequence: $(tr '\n' '|' <"$sandbox/calls.log")"
 mixed_calls=$(cat "$sandbox/calls.log")
 
 # Stale-registration purge, rootless: the canned listing is the host state
-# before this task (two 0.5.9 kernels, 0.6.0 installed, 0.6.6 added by %post,
+# before this task (two 0.5.9 kernels, 0.6.0 installed, 0.6.7 added by %post,
 # plus rows that must not be touched). Dropping the purge from %posttrans
 # leaves calls.log at "dkms status" and fails the equality below.
 cat >"$sandbox/status-stale.txt" <<'EOF'
@@ -680,8 +680,8 @@ sm750hdmifb/0.5.9, 7.3.4-100.fc43.x86_64, x86_64: built
 sm750hdmifb/0.6.0, 7.2.15-100.fc43.x86_64, x86_64: installed
 sm750hdmifb/0.6.0, 7.3.3-100.fc43.x86_64, x86_64: installed
 sm750hdmifb/0.6.0: added
-sm750hdmifb/0.6.6, 7.3.4-100.fc43.x86_64, x86_64: installed
-sm750hdmifb/0.6.6: added
+sm750hdmifb/0.6.7, 7.3.4-100.fc43.x86_64, x86_64: installed
+sm750hdmifb/0.6.7: added
 sm750hdmifb-ng/0.9.0, 7.3.4-100.fc43.x86_64, x86_64: built
 othermodule/1.0, 7.3.4-100.fc43.x86_64, x86_64: installed
 EOF
@@ -699,7 +699,7 @@ printf '%s\n' "$purge_output" |
 	grep -F 'removing stale DKMS registration: sm750hdmifb/0.6.0' >/dev/null ||
 	fail "the purge did not announce the removal of 0.6.0"
 printf '%s\n' "$purge_output" |
-	grep -F 'removing stale DKMS registration: sm750hdmifb/0.6.6' >/dev/null &&
+	grep -F 'removing stale DKMS registration: sm750hdmifb/0.6.7' >/dev/null &&
 	fail "the purge tried to remove the version being installed"
 expected_purge=$'dkms status\ndkms remove -m sm750hdmifb -v 0.5.9 --all\ndkms remove -m sm750hdmifb -v 0.6.0 --all'
 [ "$(cat "$sandbox/calls.log")" = "$expected_purge" ] ||
@@ -738,7 +738,7 @@ cont_line=$(grep -nF 'dkms remove -m sm750hdmifb -v 0.6.0 --all' \
 	fail "the loop aborted after the failed removal; 0.6.0 was never attempted"
 [ "$cont_line" -gt "$fail_line" ] ||
 	fail "the loop removed 0.6.0 before the failed 0.5.9 removal"
-grep -F 'dkms remove -m sm750hdmifb -v 0.6.6' "$sandbox/calls.log" >/dev/null &&
+grep -F 'dkms remove -m sm750hdmifb -v 0.6.7' "$sandbox/calls.log" >/dev/null &&
 	fail "the failing-removal run tried to remove the version being installed"
 expected_failpurge=$'dkms status\ndkms remove -m sm750hdmifb -v 0.5.9 --all\ndkms remove -m sm750hdmifb -v 0.6.0 --all'
 [ "$(cat "$sandbox/calls.log")" = "$expected_failpurge" ] ||
@@ -779,12 +779,12 @@ EOF
 		{ echo "the purge deleted another module's tree"; return 1; }
 	printf '%s\n' "$out" | grep -F 'dkms install failed' >/dev/null &&
 		{ echo "dkms install failed"; return 1; }
-	grep -F 'dkms install -m sm750hdmifb -v 0.6.6 -k 7.3.4-100.fc43.x86_64 --force' \
+	grep -F 'dkms install -m sm750hdmifb -v 0.6.7 -k 7.3.4-100.fc43.x86_64 --force' \
 		"$root/calls.log" >/dev/null ||
 		{ echo "dkms install was not attempted"; return 1; }
 	remove_line=$(grep -nF 'dkms remove -m sm750hdmifb -v 0.6.1 --all' \
 		"$root/calls.log" | cut -d: -f1)
-	install_line=$(grep -nF 'dkms install -m sm750hdmifb -v 0.6.6' \
+	install_line=$(grep -nF 'dkms install -m sm750hdmifb -v 0.6.7' \
 		"$root/calls.log" | cut -d: -f1)
 	[ -n "$remove_line" ] && [ -n "$install_line" ] &&
 		[ "$remove_line" -lt "$install_line" ] ||
@@ -1047,7 +1047,7 @@ plant trailing_whitespace "$evidence/01-rpmbuild.log" \
 	printf 'purge line: %s, build loop line: %s\n' "$purge_line" "$build_loop_line"
 	printf '%s\n' '--- broken 0.6.1 registration (A37), dkms root in the sandbox ---'
 	printf '%s\n' 'state: /var/lib/dkms/sm750hdmifb/0.6.1 registered for the running'
-	printf '%s\n' 'kernel with no source/dkms.conf, so dkms install 0.6.6 aborts while'
+	printf '%s\n' 'kernel with no source/dkms.conf, so dkms install 0.6.7 aborts while'
 	printf '%s\n' 'uninstalling 0.6.1 (SHIM_FAIL_REMOVE=0.6.1). The purge must delete'
 	printf '%s\n' 'the tree and the install must still be attempted.'
 	printf '%s\n' "$broken_transcript"
@@ -1071,7 +1071,7 @@ plant trailing_whitespace "$evidence/01-rpmbuild.log" \
 	printf 'rejected:%s\ntotal: %s\n' "$control_lines" "$controls"
 } >"$evidence/06-posttrans-missing-headers.log" 2>&1
 note "missing headers: warning on stderr, exit 0; purge, build, install, depmod sequence verified"
-note "stale purge: sm750hdmifb/0.5.9 and 0.6.0 removed, 0.6.6 and other module names untouched"
+note "stale purge: sm750hdmifb/0.5.9 and 0.6.0 removed, 0.6.7 and other module names untouched"
 note "failed removal: dkms exit 4 downgraded to the spec warning, exit 0, loop continued"
 note "broken 0.6.1 tree: deleted before the build loop, install still attempted, exit 0"
 note "unsafe status field: skipped before any path is formed, dkms root intact"

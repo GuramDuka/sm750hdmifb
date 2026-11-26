@@ -1,0 +1,143 @@
+# 38 - the compositor freeze was a rejected framebuffer modifier, not a driver bug
+
+Measured on 2026-11-25 on the reference host, PCI 0000:01:00.0, module
+sm750hdmidrm 0.6.5 (the running module during the investigation; the fix ships
+in 0.6.7).
+
+This transcript records a diagnosis and a workaround, and it explicitly marks
+what is NOT yet observed.
+
+## 1. Symptom
+
+A full Plasma 6.7.5 Wayland session on card0 starts normally: KWin logs
+`kwin_core: OpenGL compositing has been successfully initialized` and
+`New output on GPU /dev/dri/card0: PHL 243V7`. Some time later the panel goes
+black while every session process stays alive.
+
+KWin's own log repeats, 359 times in one session:
+
+```
+kwin_wayland_drm: Failed to create framebuffer: <strerror(22) of the session locale>
+```
+
+`strerror(22)` is EINVAL. The driver logs nothing on rejection, so the failure
+is invisible on the kernel side.
+
+Scanout state during the black period:
+
+```
+PANEL_DISPLAY_CTRL   0x0f010001
+PANEL_FB_ADDRESS     0x003f4800
+PANEL_CURRENT_LINE   0x00000000     (not advancing; 0x000002a2 earlier)
+```
+
+Readback of the 262144-byte window: `nonzero 0`, `crc32 0xe20eea22`, which is
+crc32 of 256 KiB of zeros - the same signature as a frame nobody painted.
+
+Process census at the same moment: kwin_wayland, kwin_wayland_wrapper,
+startplasma-wayland, plasmashell and the session bus all alive.
+
+## 2. What the driver advertises (probe, not inference)
+
+`drm_simple_display_pipe_init()` is called with a NULL format_modifiers
+argument. Per include/drm/drm_plane.h:885 and :929 of the installed kernel
+headers, a driver that supports only DRM_FORMAT_MOD_LINEAR may pass NULL, and
+the plane then advertises exactly that modifier.
+
+A direct libdrm probe against /dev/dri/card0 confirmed the result:
+
+```
+DRM_CAP_ADDFB2_MODIFIERS: ret=0 value=1
+planes: 2
+plane 36: 1 formats: 0x34325258 (XRGB8888)
+plane 36: IN_FORMATS blob 37: [0x34325258 LINEAR] (pairs 1)
+plane 40: 1 formats: 0x34325241 (ARGB8888)
+plane 40: IN_FORMATS blob 41: (pairs 0)
+ADDFB2 no flag                       OK    fb_id=44
+ADDFB2 MODIFIERS + LINEAR            OK    fb_id=44
+ADDFB2 MODIFIERS + INVALID           FAIL  errno=22
+ADDFB2 MODIFIERS + bogus             FAIL  errno=22
+```
+
+The same probe on card1 (an NVIDIA adapter) returns errno 22 for an
+unadvertised modifier as well, so rejecting it is correct DRM core behaviour
+and not an SM750 quirk.
+
+Format coverage of the plane: XRGB8888 and ARGB8888 accept no-flag and LINEAR
+and reject an unadvertised modifier; RGB565, XBGR8888 and ABGR8888 are rejected
+for every modifier combination because they are not in the plane format list.
+
+Conclusion: the driver's modifier handling is correct. The EINVAL comes from
+what the client submits - KWin asks for a modifier that was never advertised.
+
+## 3. Workaround, measured
+
+Launching the session with `KWIN_DRM_USE_MODIFIERS=0` makes KWin log:
+
+```
+kwin_wayland_drm: modifier support disabled by environment variable
+```
+
+and the failure disappears. A four-minute run sampled every 30 s:
+
+```
+# durability run started 2026-11-25T19:18:07Z
+kwin compositing ready after 1s
+plasmashell up after 0s
+framebuffer failures in this run: 0
+t=30s  line=0x00000205 crc32=0x976e751b nonzero=262144 fb_failures=0
+t=60s  line=0x00000171 crc32=0x976e751b nonzero=262144 fb_failures=0
+t=90s  line=0x00000139 crc32=0x976e751b nonzero=262144 fb_failures=0
+t=120s line=0x00000381 crc32=0x976e751b nonzero=262144 fb_failures=0
+t=150s line=0x00000202 crc32=0x976e751b nonzero=262144 fb_failures=0
+t=180s line=0x00000062 crc32=0x976e751b nonzero=262144 fb_failures=0
+t=210s line=0x0000024e crc32=0x976e751b nonzero=262144 fb_failures=0
+t=240s line=0x000002d0 crc32=0x976e751b nonzero=262144 fb_failures=0
+# durability run finished 2026-11-25T19:22:36Z
+```
+
+Every sample shows the raster advancing (PANEL_CURRENT_LINE takes a different
+value each time) and a non-zero frame in the readback window. The compositor
+did not freeze once in four minutes on this path.
+
+An earlier two-sample check on the same configuration read
+`crc32 0xe00643f1` with `nonzero 262144`, a different non-zero frame, which is
+expected because the desktop content differed.
+
+## 4. The fix
+
+0.6.7 sets `drm->mode_config.fb_modifiers_not_supported = 1` next to the
+mode_config funcs selection in sm750_modeset_init(), so the kernel reports
+DRM_CAP_ADDFB2_MODIFIERS=0 to userspace and every client takes the
+modifiers-free path. The NULL format_modifiers argument stays as it is: the
+plane still advertises LINEAR, and the capability withdrawal is what stops a
+client from offering a modifier the driver cannot honour.
+
+With that flag, `KWIN_DRM_USE_MODIFIERS=0` becomes redundant. It remains
+harmless, and it is still the right knob for a host running a module older than
+0.6.7.
+
+## 5. NOT YET OBSERVED (do not read this as a verified result)
+
+- The 0.6.7 module has NOT been installed or reloaded on the reference host at
+  the time of writing. The fix is source-level plus gate-level only.
+- A KWin session against a 0.6.7 module has NOT been run. What has been
+  measured is the workaround on a 0.6.5 module.
+- The exact modifier value KWin submits has NOT been captured. An LD_PRELOAD
+  shim interposing drmModeAddFB2 and drmModeAddFB2WithModifiers was written,
+  but KWin re-execs and sanitises its environment, so the shim did not load and
+  the shim log stayed empty. strace cannot be attached to kwin on this host
+  (ptrace PTRACE_SEIZE is denied despite ptrace_scope=0).
+- The freeze was observed with KWin 6.7.5 only. Other compositors were not
+  tested.
+
+## 6. How to tell which case a host is in
+
+```
+grep -c 'Failed to create framebuffer' "$XDG_RUNTIME_DIR/../session.log"
+cat /sys/module/sm750hdmidrm/version
+sudo -n /usr/local/sbin/sm750-regs | grep PANEL_CURRENT_LINE
+```
+
+A non-zero failure count with a frozen PANEL_CURRENT_LINE is this defect. The
+first command needs the path to the session log the launch script wrote.

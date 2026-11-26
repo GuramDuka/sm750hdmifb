@@ -76,12 +76,12 @@ typedef struct drm_atomic_state sm750_atomic_commit;
 #define SM750_DRM_NAME "sm750hdmidrm"
 /* Keep in step with the package version in build-package.sh and dkms.conf;
  * tests/check-release-version.sh fails when the three disagree. */
-#define SM750_DRM_VERSION "0.6.6"
+#define SM750_DRM_VERSION "0.6.7"
 /* modetest reports these as the driver version, so they must track the release
  * number above; tests/check-release-version.sh fails when they drift. */
 #define DRIVER_MAJOR 0
 #define DRIVER_MINOR 6
-#define DRIVER_PATCHLEVEL 6
+#define DRIVER_PATCHLEVEL 7
 #define SM750_DRM_MAX_WIDTH 2560
 #define SM750_DRM_PHYSICAL_MAX_WIDTH 2048
 #define SM750_DRM_PLL PRIMARY_PLL
@@ -4340,6 +4340,13 @@ static const struct drm_crtc_funcs sm750_crtc_funcs = {
 };
 #endif
 
+/* This device's simple display pipe advertises DRM_FORMAT_MOD_LINEAR alone:
+ * the format_modifiers argument of drm_simple_display_pipe_init is NULL, which
+ * pins the plane to the linear modifier. KWin 6.7.5 submits a framebuffer with
+ * a modifier it cannot match against that list, AddFB2 fails with EINVAL and
+ * the panel stops scanning, so the device withdraws the modifier capability -
+ * see the fb_modifiers_not_supported assignment in sm750_modeset_init(). The
+ * flag lives on struct drm_mode_config, not on this funcs struct. */
 static const struct drm_mode_config_funcs sm750_mode_config_funcs = {
 	.fb_create = drm_gem_fb_create,
 	.atomic_check = drm_atomic_helper_check,
@@ -4596,6 +4603,7 @@ static int sm750_modeset_init(struct sm750_drm_device *sdev)
 		return ret;
 	drm->mode_config.funcs = sdev->shadow_scanout ?
 		&sm750_shadow_mode_config_funcs : &sm750_mode_config_funcs;
+	drm->mode_config.fb_modifiers_not_supported = 1;
 	drm->mode_config.min_width = 320;
 	drm->mode_config.min_height = 200;
 	drm->mode_config.max_width = SM750_DRM_MAX_WIDTH;

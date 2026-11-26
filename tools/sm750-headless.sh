@@ -15,7 +15,13 @@
 #   - the only programs it can start are the ones named below, with a fixed
 #     argument list; there is no passthrough argument, so this entry cannot be
 #     turned into a root shell;
-#   - a fixed run time with a hard kill, and master is always dropped again.
+#   - a fixed run time with a hard kill, and master is always dropped again;
+#   - the card's compositors run inside a private mount namespace with a tmpfs
+#     over /dev/input, so weston's DRM backend and cage's wlroots backend
+#     physically cannot open or grab the owner's keyboard or mouse. There is no
+#     compositor option that does this: weston's --no-input exists only for its
+#     x11 backend and cage has no input option at all. See DEFECTS.md A49 for
+#     the 2026-11-26 incident this guard closes.
 #
 # Exit codes:
 #   0  the requested run completed and every expectation held
@@ -34,6 +40,8 @@ CARD=/dev/dri/by-path/pci-0000:01:00.0-card
 # The by-path link is still the right handle for everything else: it names
 # the card by PCI address instead of by the order the driver probed in.
 CARD_NODE=$(readlink -f "$CARD" 2>/dev/null || true)
+UNSHARE=/usr/bin/unshare
+MOUNT=/usr/bin/mount
 DRIVER_ATTR=/sys/bus/pci/devices/$BDF/driver
 DEV_ATTRS=/sys/bus/pci/devices/$BDF
 CONNECTOR=/sys/class/drm/card0-HDMI-A-1
@@ -73,6 +81,38 @@ mkdir -p "$out"
 runtime=$out/runtime
 mkdir -p "$runtime"
 chmod 700 "$runtime"
+
+# Input isolation. weston 14.0.2 documents --no-input under "Options for x11:"
+# only; its DRM backend options are --seat, --drm-device, --additional-devices,
+# --use-pixman, --current-mode and --continue-without-input, and
+# --continue-without-input only means "start even with zero input devices", so
+# the DRM backend still opens every /dev/input/event* it finds. cage 0.2.x has
+# no input option at all. The only lever left is the device nodes themselves:
+# start the compositor in a private mount namespace and put an empty tmpfs over
+# /dev/input before the exec. The namespace dies with the compositor, so the
+# host /dev/input is never modified.
+case $mode in
+weston|cage)
+	[ -x "$UNSHARE" ] || {
+		echo "$PROG: $UNSHARE is missing; refusing to start a compositor without input isolation" >&2
+		exit 1
+	}
+	[ -x "$MOUNT" ] || {
+		echo "$PROG: $MOUNT is missing; refusing to start a compositor without input isolation" >&2
+		exit 1
+	}
+	isolation="input devices are isolated in a private mount namespace (empty /dev/input)"
+	printf '%s: %s\n' "$PROG" "$isolation"
+	{
+		printf '%s\n' "$isolation"
+		printf '%-10s %s --mount --propagation private\n' namespace "$UNSHARE"
+		printf '%-10s %s -t tmpfs -o size=1M,mode=0755 tmpfs /dev/input\n' mount "$MOUNT"
+		printf '%-10s %s\n' mode "$mode"
+		printf '%-10s %s\n' seconds "$seconds"
+	} >"$out/00-plan.txt"
+	;;
+esac
+
 
 snapshot() {
 	label=$1
@@ -178,6 +218,10 @@ export LIBGL_ALWAYS_SOFTWARE=1
 export LIBSEAT_BACKEND=noop
 export WLR_RENDERER=pixman
 export WLR_DRM_DEVICES=$CARD_NODE
+# wlroots variable only: cage is wlroots-based and honours it, weston does not
+# read it at all (its DRM backend opens libinput directly). It is kept for cage
+# as a second, cheap guard, but the private mount namespace below is the one
+# that actually binds both compositors.
 export WLR_LIBINPUT_NO_DEVICES=1
 export WLR_BACKENDS=drm
 export KWIN_COMPOSE=Q
@@ -192,16 +236,32 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# isolate CMD... - exec CMD in a private mount namespace whose /dev/input is an
+# empty tmpfs. The intermediate sh is replaced by CMD, so the pid stays the
+# compositor's and the EXIT trap above still reaches it. --propagation private
+# is required: /dev on this host is a shared mount, so a mount made in a
+# namespace that kept shared propagation would propagate back to the host.
+isolate() {
+	exec "$UNSHARE" --mount --propagation private /bin/sh -c '
+		"$1" -t tmpfs -o size=1M,mode=0755 tmpfs /dev/input || {
+			echo "sm750-headless: cannot seal /dev/input in the private namespace" >&2
+			exit 1
+		}
+		shift
+		exec "$@"
+	' sm750-headless "$MOUNT" "$@"
+}
+
 (
 	case $mode in
 	weston)
-		exec "$prog" --backend=drm --drm-device=card0 --renderer=pixman \
+		isolate "$prog" --backend=drm --drm-device=card0 --renderer=pixman \
 			--shell=kiosk-shell.so --continue-without-input --idle-time=0 \
 			--log="$out/weston.log"
 		;;
 	cage)
 		# -d only: -s would allow VT switching, and seat0 is the owner's.
-		exec "$prog" -d -- /usr/bin/weston-terminal
+		isolate "$prog" -d -- /usr/bin/weston-terminal
 		;;
 	kmscube)
 		# -c is the frame count; -n is a connector id, so it is left out

@@ -12,10 +12,15 @@ is still missing. The transcript behind every number here is
 **Verdict: yes.** A full Plasma 6.7.5 Wayland session (kwin 6.7.5, Mesa
 25.3.6, Fedora 43, kernel 7.3.4-100) runs on this driver and its frames reach
 the panel, with the two workarounds in section 3 and the limits in section 5.
+There is one more condition that a session may meet: kwin can start, log
+`Failed to create framebuffer` with errno 22 and freeze the scanout, because it
+asks for a buffer modifier the plane never advertised - a compositor
+capability problem, not a driver defect. It is covered in sections 4.4 to 4.6,
+with a one-variable workaround and a device-level fix in 0.6.7.
 
 | Path | State | Detail |
 | --- | --- | --- |
-| Wayland session | yes | `startplasma-wayland` brings up kwin_wayland, Xwayland and plasmashell on the SM750 card node; the panel scans the composited frame (section 4) |
+| Wayland session | yes, with the section 4.5 caveat | `startplasma-wayland` brings up kwin_wayland, Xwayland and plasmashell on the SM750 card node; the panel scans the composited frame (section 4). On a driver older than 0.6.7 a session can freeze the scanout through a rejected buffer modifier unless `KWIN_DRM_USE_MODIFIERS=0` is exported (section 4.4) |
 | X11 session | yes | Xorg on `:1` drives the same card at 1920x1080, kwin_x11 manages windows |
 | X11 compositing | no | the server's GLX is DRISWRAST and lacks `GLX_EXT_texture_from_pixmap`; kwin_x11 aborts its compositor (section 7) |
 | Input | no | no `/dev/input/event*` access for this account, so the session draws but cannot be driven (section 5) |
@@ -112,6 +117,10 @@ Everything runs as the service account, with no root and no privilege helper.
    suggests, so resolve the node by
    `/dev/dri/by-path/pci-0000:01:00.0-render` rather than by number.
 
+   On a module older than 0.6.7 add `KWIN_DRM_USE_MODIFIERS=0` to that
+   environment; section 4.5 records what it changes and why it becomes
+   redundant on 0.6.7.
+
 4. Measured outcome in the session log:
 
    ```text
@@ -129,7 +138,9 @@ Everything runs as the service account, with no root and no privilege helper.
 ## 4. Proof that the panel scans the composited frame
 
 Three independent readings. The first two come from the root helpers, the third
-from a userspace screenshot.
+from a userspace screenshot. Sections 4.4 to 4.6 record the opposite outcome -
+a session whose scanout dies - because it is the failure most easily mistaken
+for a driver fault.
 
 ### 4.1 Panel registers (`sm750-regs`)
 
@@ -185,6 +196,83 @@ until 0.6.6 made it writable; the dump's start offset alternates between 0 and
 driver double-buffers; and RGB565 with blue-noise dithering is not byte
 identical to an RGB888 screenshot, so the comparison is **structural, not
 bit-exact**.
+
+### 4.4 The other outcome: compositing starts, then the scanout freezes
+
+Sections 4.1 to 4.3 prove the healthy case. The same card, the same panel and a
+session launched the same way also produced the opposite outcome once, and that
+case is recorded here because it looks like a driver failure and is not.
+
+kwin 6.7.5 initialised compositing, the screen went black while every process
+stayed alive, and the session log filled with **359** lines of the shape
+
+```text
+kwin_wayland_drm: Failed to create framebuffer: <strerror(EINVAL) text>
+```
+
+The suffix is the localised `strerror(22)` text of the locale kwin runs in; the
+errno is **22**, `EINVAL`. While those lines repeated, `PANEL_CURRENT_LINE` read
+`0x00000000` and every screenshot region read `nonblack=0.0`: the compositor
+process, plasmashell and Xwayland were all running, and the raster was dead
+because the kernel rejected every framebuffer kwin asked it to create.
+
+The driver is not the cause. It passes `NULL` as the `format_modifiers` argument
+of `drm_simple_display_pipe_init()` at `src/sm750_drm.c:4617-4619`, and the
+kernel documents that a driver which supports only the linear modifier may pass
+NULL, in which case the plane advertises exactly `DRM_FORMAT_MOD_LINEAR`
+(`/usr/src/kernels/7.3.4-100.fc43.x86_64/include/drm/drm_plane.h:885-886` and
+`:929-930`). A direct probe confirmed that the plane is correct:
+
+- `DRM_CAP_ADDFB2_MODIFIERS` reads `1`.
+- The plane lists one format, `0x34325258`, and its `IN_FORMATS` blob contains
+  `LINEAR`.
+- `AddFB2` succeeds both with no modifier flag and with `LINEAR`.
+- `AddFB2` fails with errno 22 only for a modifier the plane does not
+  advertise, which is the correct answer; the NVIDIA card on this host answers
+  the same way for the same request.
+
+So the capability the driver advertises is right, and what kwin submits is a
+modifier the plane never advertised. The kernel therefore refuses each
+framebuffer, and the scanout keeps the buffer it already had, which is the black
+one.
+
+### 4.5 Workaround, and the 0.6.7 device-level fix
+
+Measured workaround: launch the session with `KWIN_DRM_USE_MODIFIERS=0` in the
+environment of section 3. kwin then logs
+
+```text
+kwin_wayland_drm: modifier support disabled by environment variable
+```
+
+the framebuffer failures are **zero**, and the scanout is live:
+`PANEL_CURRENT_LINE` advances and the readback window reports `nonzero 262144`
+with `crc32 0xe00643f1`, not the all-zero frame signature `0xe20eea22`.
+
+The device-level fix, in 0.6.7, removes the need for the variable: the driver
+sets `.fb_modifiers_not_supported = 1` in both mode config structs, so the
+kernel reports `DRM_CAP_ADDFB2_MODIFIERS` as **0** to userspace, and every
+client - kwin and any other that hits the same path - takes the modifiers-free
+route by itself. On 0.6.7 or newer the environment variable is redundant, not
+wrong: the capability it suppresses is no longer offered, so exporting it
+changes nothing and a launcher that still sets it needs no change.
+
+### 4.6 How to tell which case you are in
+
+1. The session log names it: `grep 'Failed to create framebuffer' <session log>`
+   is empty when the scanout is healthy and repeats the line of section 4.4 when
+   it is not.
+2. `cat /sys/module/sm750hdmidrm/version` says which driver answers: 0.6.7 or
+   newer carries the device-level fix, older modules need the environment
+   variable.
+3. `sudo -n /usr/local/sbin/sm750-regs | grep CURRENT_LINE` says whether the
+   raster is moving: a value that stays `0x00000000` across two reads is the
+   freeze of section 4.4, an advancing value is a live scanout.
+
+Diagnosis here is done from kwin's own log because `strace` cannot be attached
+to kwin on this host: `ptrace(PTRACE_SEIZE, ...)` fails with the localised
+`strerror(EPERM)` text, errno **1**. The compositor's log is the only trace
+available, which is why the framebuffer line is worth knowing by name.
 
 ## 5. Limits that remain
 
@@ -258,5 +346,9 @@ composited desktop on this driver, X11 gives an uncomposited one.
   composition happens in kwin on another card's render node.
 - It does not claim the scanout dump is byte-identical to the panel image; the
   correspondence test is structural and the window is 68 lines.
+- It does not claim the buffer-modifier freeze is driver-side. The plane
+  advertises exactly `DRM_FORMAT_MOD_LINEAR` and answers the probe correctly;
+  what fails is a request kwin makes for a modifier that was never advertised
+  (section 4.4).
 - It does not claim this works on any other board, panel or host. One card, one
   panel, one host, one session.

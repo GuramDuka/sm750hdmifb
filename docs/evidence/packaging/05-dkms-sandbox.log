@@ -1,4 +1,4 @@
-# utc: 2026-11-25T18:09:14Z
+# utc: 2026-11-25T19:46:34Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
 # command: host headers for 7.3.4-100.fc43.x86_64
@@ -11,37 +11,37 @@ sandbox header link: /mega/tmp/sm750/t6/dkms/install/7.3.4-100.fc43.x86_64/build
 note: the header tree is present on this host; an earlier failure of
 this script was an installtree-relative lookup artifact, not a
 missing kernel-devel package.
-# utc: 2026-11-25T18:09:14Z
+# utc: 2026-11-25T19:46:34Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
-# command: dkms --dkmstree /mega/tmp/sm750/t6/dkms --sourcetree /mega/tmp/sm750/t6/dkms/src --installtree /mega/tmp/sm750/t6/dkms/install -m sm750hdmifb -v 0.6.6 add (running kernel 7.3.4-100.fc43.x86_64)
+# command: dkms --dkmstree /mega/tmp/sm750/t6/dkms --sourcetree /mega/tmp/sm750/t6/dkms/src --installtree /mega/tmp/sm750/t6/dkms/install -m sm750hdmifb -v 0.6.7 add (running kernel 7.3.4-100.fc43.x86_64)
 # workdir: /home/coder/sm750hdmifb
 
 --- output ---
-Creating symlink /mega/tmp/sm750/t6/dkms/sm750hdmifb/0.6.6/source -> /mega/tmp/sm750/t6/dkms/src/sm750hdmifb-0.6.6
+Creating symlink /mega/tmp/sm750/t6/dkms/sm750hdmifb/0.6.7/source -> /mega/tmp/sm750/t6/dkms/src/sm750hdmifb-0.6.7
 
---- dkms --dkmstree /mega/tmp/sm750/t6/dkms --sourcetree /mega/tmp/sm750/t6/dkms/src --installtree /mega/tmp/sm750/t6/dkms/install -m sm750hdmifb -v 0.6.6 build -k 7.3.4-100.fc43.x86_64  ---
+--- dkms --dkmstree /mega/tmp/sm750/t6/dkms --sourcetree /mega/tmp/sm750/t6/dkms/src --installtree /mega/tmp/sm750/t6/dkms/install -m sm750hdmifb -v 0.6.7 build -k 7.3.4-100.fc43.x86_64  ---
 Sign command: /mega/tmp/sm750/t6/dkms/install/7.3.4-100.fc43.x86_64/build/scripts/sign-file
 Signing key: /var/lib/dkms/mok.key
 Public certificate (MOK): /var/lib/dkms/mok.pub
 
 Building module(s).... done.
-Signing module /mega/tmp/sm750/t6/dkms/sm750hdmifb/0.6.6/build/src/sm750hdmidrm.ko
-Warning: Failed to sign module '/mega/tmp/sm750/t6/dkms/sm750hdmifb/0.6.6/build/src/sm750hdmidrm.ko'!
+Signing module /mega/tmp/sm750/t6/dkms/sm750hdmifb/0.6.7/build/src/sm750hdmidrm.ko
+Warning: Failed to sign module '/mega/tmp/sm750/t6/dkms/sm750hdmifb/0.6.7/build/src/sm750hdmidrm.ko'!
 At main.c:137:
 - SSL error:FFFFFFFF8000000D:system library::Permission denied: crypto/bio/bss_file.c:67
 - SSL error:10080002:BIO routines::system lib: crypto/bio/bss_file.c:77
 sign-file: /var/lib/dkms/mok.key
 
---- dkms --dkmstree /mega/tmp/sm750/t6/dkms --sourcetree /mega/tmp/sm750/t6/dkms/src --installtree /mega/tmp/sm750/t6/dkms/install -m sm750hdmifb -v 0.6.6 install -k 7.3.4-100.fc43.x86_64 --force --no-depmod (refusal expected) ---
+--- dkms --dkmstree /mega/tmp/sm750/t6/dkms --sourcetree /mega/tmp/sm750/t6/dkms/src --installtree /mega/tmp/sm750/t6/dkms/install -m sm750hdmifb -v 0.6.7 install -k 7.3.4-100.fc43.x86_64 --force --no-depmod (refusal expected) ---
 
 Error! You must be root to use this command.
 
---- dkms --dkmstree /mega/tmp/sm750/t6/dkms --sourcetree /mega/tmp/sm750/t6/dkms/src --installtree /mega/tmp/sm750/t6/dkms/install -m sm750hdmifb -v 0.6.6 status ---
-sm750hdmifb/0.6.6, 7.3.4-100.fc43.x86_64, x86_64: built
+--- dkms --dkmstree /mega/tmp/sm750/t6/dkms --sourcetree /mega/tmp/sm750/t6/dkms/src --installtree /mega/tmp/sm750/t6/dkms/install -m sm750hdmifb -v 0.6.7 status ---
+sm750hdmifb/0.6.7, 7.3.4-100.fc43.x86_64, x86_64: built
 
 --- built object (sandbox tree, install is root-only) ---
--rw-r--r-- 1 coder coder 384352 Nov 25 21:09 /mega/tmp/sm750/t6/dkms/sm750hdmifb/0.6.6/7.3.4-100.fc43.x86_64/x86_64/module/sm750hdmidrm.ko
+-rw-r--r-- 1 coder coder 384352 Nov 25 22:46 /mega/tmp/sm750/t6/dkms/sm750hdmifb/0.6.7/7.3.4-100.fc43.x86_64/x86_64/module/sm750hdmidrm.ko
 --- host module tree (must be absent) ---
 absent: /lib/modules/7.3.4-100.fc43.x86_64/updates/dkms/sm750hdmidrm.ko
 --- vermagic ---

@@ -14,7 +14,13 @@
 # A render-only device would lose modesetting, so the gate rejects any line
 # that sets DRIVER_RENDER without DRIVER_MODESET. It also pins the two
 # driver_features lines and the version define, and it re-runs itself against
-# three planted controls so it cannot pass by accident.
+# five planted controls so it cannot pass by accident.
+#
+# It also pins drm->mode_config.fb_modifiers_not_supported = 1: the simple
+# display pipe advertises DRM_FORMAT_MOD_LINEAR alone, and a compositor that
+# submits any other modifier gets EINVAL from AddFB2 (KWin 6.7.5 does, 359
+# times in one session), so the device withdraws the capability and every
+# client takes the modifiers-free path.
 #
 # The live half is opportunistic: the running module on this host predates
 # this change, so when no sm750hdmidrm render node exists the live half prints
@@ -100,6 +106,55 @@ check_modeset_kept() {
 	pass "$source_rel never sets DRIVER_RENDER without DRIVER_MODESET"
 }
 
+# --- static: the device withdraws the modifier capability ----------------
+# drm_simple_display_pipe_init() is called with a NULL format_modifiers array
+# (src/sm750_drm.c, the call in sm750_modeset_init), so the plane advertises
+# DRM_FORMAT_MOD_LINEAR and nothing else. KWin 6.7.5 submits a framebuffer
+# whose modifier it cannot match against that list and AddFB2 fails with
+# EINVAL 359 times in one session, leaving the panel scanning nothing.
+#
+# The capability is not a drm_mode_config_funcs member but a
+# struct drm_mode_config field (include/drm/drm_mode_config.h:943-951), so it
+# is set once on the device, immediately after the funcs struct is chosen.
+# Setting it makes DRM_CAP_ADDFB2_MODIFIERS report 0, which sends every client
+# down the modifiers-free path. Both configurations - the VRAM/TTM device and
+# the shmem shadow device - go through that one assignment, so the assertion is
+# that it is unconditional and adjacent to the selection rather than inside a
+# branch that only one of them reaches.
+check_fb_modifiers() {
+	tree=$1
+	source=$tree/$source_rel
+
+	[ -f "$source" ] || fail "missing $source_rel under $tree"
+
+	for name in sm750_mode_config_funcs sm750_shadow_mode_config_funcs; do
+		grep -F "static const struct drm_mode_config_funcs $name = {" \
+			"$source" >/dev/null ||
+			fail "$source_rel has no drm_mode_config_funcs $name definition"
+		grep -F "&$name" "$source" >/dev/null ||
+			fail "$name is defined but never installed; one of the two devices would lose the withdrawn capability"
+	done
+	pass "both mode_config funcs structs exist and are installed"
+
+	funcs_line=$(grep -n 'drm->mode_config.funcs = ' "$source" |
+		cut -d: -f1 | head -n 1)
+	[ -n "$funcs_line" ] ||
+		fail "$source_rel never assigns drm->mode_config.funcs"
+	flag_line=$(grep -n 'drm->mode_config.fb_modifiers_not_supported = 1;' \
+		"$source" | cut -d: -f1 | head -n 1)
+	[ -n "$flag_line" ] ||
+		fail "$source_rel does not set drm->mode_config.fb_modifiers_not_supported = 1: the plane advertises LINEAR only, so a compositor that submits any other modifier gets EINVAL from AddFB2"
+
+	# The selection spans two lines (ternary); the flag must follow it with no
+	# branch in between, so both devices reach it.
+	grep -F 'sm750_shadow_mode_config_funcs : &sm750_mode_config_funcs;' \
+		"$source" >/dev/null ||
+		fail "$source_rel: the funcs selection is not the expected two-line ternary; revisit this gate"
+	[ "$flag_line" -eq "$((funcs_line + 2))" ] ||
+		fail "$source_rel sets fb_modifiers_not_supported at line $flag_line, not directly after the funcs selection that ends at line $((funcs_line + 1)): a guard between them would withdraw the capability for one device only"
+	pass "drm->mode_config.fb_modifiers_not_supported = 1 follows the funcs selection (lines $funcs_line-$flag_line)"
+}
+
 # --- static: the version define matches build-package.sh ------------------
 # check-release-version.sh checks the same pair, but a bump that edits only
 # one of them is the mistake this gate is most likely to meet.
@@ -125,6 +180,7 @@ check_version() {
 check_tree() {
 	check_features "$1"
 	check_modeset_kept "$1"
+	check_fb_modifiers "$1"
 	check_version "$1"
 }
 
@@ -233,9 +289,48 @@ open(p, 'w', encoding='ascii', newline='').write(s)
 PY
 }
 
+# (d) The modifier capability restored for the device: a compositor that
+# submits a non-linear modifier gets EINVAL from AddFB2 again.
+drop_fb_modifiers() {
+	python3 - "$1/$source_rel" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='ascii').read()
+flag = "\tdrm->mode_config.fb_modifiers_not_supported = 1;\n"
+assert s.count(flag) == 1, s.count(flag)
+s = s.replace(flag, "", 1)
+open(p, 'w', encoding='ascii', newline='').write(s)
+PY
+}
+
+# (e) The flag moved inside the shadow branch, which is the plausible mistake:
+# it still compiles and still withdraws the capability for the shmem device,
+# but the VRAM/TTM device keeps advertising modifiers.
+branch_fb_modifiers() {
+	python3 - "$1/$source_rel" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='ascii').read()
+old = ("\tdrm->mode_config.funcs = sdev->shadow_scanout ?\n"
+       "\t\t&sm750_shadow_mode_config_funcs : &sm750_mode_config_funcs;\n"
+       "\tdrm->mode_config.fb_modifiers_not_supported = 1;\n")
+new = ("\tdrm->mode_config.funcs = sdev->shadow_scanout ?\n"
+       "\t\t&sm750_shadow_mode_config_funcs : &sm750_mode_config_funcs;\n"
+       "\tif (sdev->shadow_scanout)\n"
+       "\t\tdrm->mode_config.fb_modifiers_not_supported = 1;\n")
+assert s.count(old) == 1, s.count(old)
+s = s.replace(old, new, 1)
+open(p, 'w', encoding='ascii', newline='').write(s)
+PY
+}
+
 plant render_dropped 'without DRIVER_RENDER' drop_render
 plant render_only 'without DRIVER_MODESET' add_render_only
 plant version_drift 'the two disagree' drift_version
+plant fb_modifiers_dropped 'does not set drm->mode_config.fb_modifiers_not_supported' \
+	drop_fb_modifiers
+plant fb_modifiers_branched 'not directly after the funcs selection' \
+	branch_fb_modifiers
 
-printf 'Render node checks passed (%d assertions, 3 planted controls)\n' \
+printf 'Render node checks passed (%d assertions, 5 planted controls)\n' \
 	"$assertions"

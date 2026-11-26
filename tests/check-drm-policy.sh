@@ -264,8 +264,10 @@ test "$stage_count" -ge 6 || {
 # program list, the card pinned to 0000:01:00.0 bound to sm750hdmidrm,
 # LIBSEAT_BACKEND=noop so no VT is touched, cage without -s, kmscube with -c
 # and without -n, a clamped run time, a verdict that needs a survivor and a
-# vblank delta, TERM then KILL cleanup). Source-level; it never runs the
-# helper and needs no root.
+# vblank delta, TERM then KILL cleanup, and input isolation: weston and cage
+# both exec inside a private mount namespace whose /dev/input is an empty
+# tmpfs, so neither can take the owner's keyboard or mouse - A49). Source-level;
+# it never runs the helper and needs no root.
 ./tests/check-headless-helper.sh
 # T57: the render node. kwin 6.7.5 skips a DRM device whose node set has no
 # render node, so the driver advertises DRIVER_RENDER on the same

@@ -970,13 +970,27 @@ suites ran for real, 0 failures, in 8.7 s wall clock
 KUNIT ENABLED"). The earlier SKIP for disabled KUnit recorded in that file
 is superseded by that census.
 
-### 3.11 `/usr/local/sbin/sm750-headless` (installed 2026-11-25T14:26Z)
+### 3.11 `/usr/local/sbin/sm750-headless` (installed copy stale since 2026-11-26)
 
-Source `tools/sm750-headless.sh`: 9223 bytes, 276 lines, sha256
-`137c665b7f60c17a95a6bdcd7948fb7064239eb62a6a108932e60315ce80913c` as measured
-2026-11-25T13:49Z; static
+Source `tools/sm750-headless.sh`: 12020 bytes, 336 lines, sha256
+`bc1d3a06fdf59bb25f9b0f572c2be6085731332109a4231a80e3d2076308922f` as measured
+2026-11-26; static
 gate `tests/check-headless-helper.sh` (part of `make check` through
 `tests/check-drm-policy.sh`).
+
+**Installed copy must be refreshed.** The host still carries the previous
+9223-byte revision, which has no input isolation. Refresh it from the
+repository root with exactly:
+
+```sh
+sudo install -m 0755 -o root -g root tools/sm750-headless.sh /usr/local/sbin/sm750-headless
+```
+
+The 12020-byte revision isolates input: both compositor arms run inside a
+private mount namespace with an empty `/dev/input` (`isolate()`,
+`tools/sm750-headless.sh:244-253`), so no compositor can open the owner's
+keyboard or mouse. Defect A49 in `docs/DEFECTS.md` records the
+2026-11-26T06:32:48 incident that made this necessary.
 
 What it is for: a panel that stays black has three candidate owners - the
 driver's mode, the compositor, and whoever holds DRM master. `sm750-console`
@@ -1032,6 +1046,21 @@ allowlist.
 
 What it does not touch:
 
+- **The owner's input devices.** Both compositor arms run inside
+  `unshare --mount --propagation private` with a 1M tmpfs mounted over
+  `/dev/input`, so the namespace the compositor sees contains no `event*` node
+  at all. The mount exists only in that child namespace and dies with the
+  compositor; the host `/dev/input` is never modified. `--propagation private`
+  is required because `/dev` is a shared mount here (`/proc/self/mountinfo`
+  field 7 = `shared:2`), and a mount under shared propagation can reach the
+  host. There is no compositor flag that does this: weston 14.0.2 offers
+  `--no-input` only for its x11 backend, and its DRM backend accepts only
+  `--seat`, `--drm-device`, `--additional-devices`, `--use-pixman`,
+  `--current-mode` and `--continue-without-input`, the last meaning only that
+  weston starts with zero input devices. cage 0.2.x has no input option at all.
+  The run announces `sm750-headless: input devices are isolated in a private
+  mount namespace (empty /dev/input)` on the console and records the same line
+  in `00-plan.txt`.
 - **seat0 and the owner's session.** The compositors are started with
   `LIBSEAT_BACKEND=noop`, which opens the DRM device directly and performs no
   VT operation. libseat 0.9.3 offers exactly three backends - `logind`, `seatd`
@@ -1053,6 +1082,7 @@ Log directory layout, one directory per run, `<UTC stamp>-<mode>`:
 
 | Path | Content |
 | --- | --- |
+| `00-plan.txt` | Weston and cage only: the input isolation line, the `unshare` and `mount` commands used, the mode and `SECONDS` |
 | `01-before.txt` | Driver attributes and connector state before anything ran |
 | `02-master.txt` | The master probe result: acquired, or the errno it failed with |
 | `03-compositor.log` | The compositor's own stdout and stderr (weston also writes `weston.log`) |
@@ -1076,17 +1106,31 @@ Exit codes: 0 the run completed and every expectation held, 1 environment
 problem (not root, wrong driver, program missing), 2 usage, 3 the compositor
 started but an expectation failed, 4 nothing could take master.
 
-Installed state, measured 2026-11-25T13:49Z:
+Installed state, measured 2026-11-25T13:49Z and unchanged on the host on
+2026-11-26:
 
 ```text
 -rwxr-xr-x 1 root root 9223 2026-11-25 17:26 /usr/local/sbin/sm750-headless
 sha256 137c665b7f60c17a95a6bdcd7948fb7064239eb62a6a108932e60315ce80913c
 ```
 
-Status: **INSTALLED, CURRENT.** The allowlist line is present (`sudo -n -l`
-lists `(root) NOPASSWD: /usr/local/sbin/sm750-headless`), and the installed copy
-is byte-identical to `tools/sm750-headless.sh` in the tree - re-measured
-2026-11-25T14:26Z. Re-run the `sha256sum` pair above after every edit of the
+Source in the tree, measured 2026-11-26:
+
+```text
+12020 bytes, 336 lines
+sha256 bc1d3a06fdf59bb25f9b0f572c2be6085731332109a4231a80e3d2076308922f
+```
+
+Status: **INSTALLED, STALE.** The allowlist line is present (`sudo -n -l` lists
+`(root) NOPASSWD: /usr/local/sbin/sm750-headless`), but the installed body is
+the previous revision and **has no input isolation**. Until it is refreshed,
+`/usr/local/sbin/sm750-headless weston` and `... cage` can still take the
+owner's keyboard and mouse - the A49 incident. The installed copy must be
+refreshed with
+`sudo install -m 0755 -o root -g root tools/sm750-headless.sh /usr/local/sbin/sm750-headless`
+from the repository root, after which `sha256sum /usr/local/sbin/sm750-headless`
+must print `bc1d3a06fdf59bb25f9b0f572c2be6085731332109a4231a80e3d2076308922f`
+and `stat -c %s` must print 12020. Re-run that pair after every edit of the
 source: the static gate validates the tree, and it cannot see
 `/usr/local/sbin`.
 
@@ -1107,15 +1151,25 @@ Refresh (host owner, root), from the repository root:
 ```sh
 sudo install -m 0755 -o root -g root tools/sm750-headless.sh /usr/local/sbin/sm750-headless
 sha256sum /usr/local/sbin/sm750-headless
+stat -c '%s bytes, %n' /usr/local/sbin/sm750-headless
 ```
 
-Expected after the refresh:
-`137c665b7f60c17a95a6bdcd7948fb7064239eb62a6a108932e60315ce80913c`, 9223
-bytes - the value the host carried from 2026-11-25T14:26Z. The static gate
+Expected after the refresh: 12020 bytes, 336 lines,
+`bc1d3a06fdf59bb25f9b0f572c2be6085731332109a4231a80e3d2076308922f`. The
+9223-byte / `137c665b...` value the host carried from 2026-11-25T14:26Z is the
+superseded revision and must not be the result. The static gate
 `tests/check-headless-helper.sh` validates the source in the tree; it cannot see
 the installed copy, so the hash pair is the only evidence that the refresh
-happened. `docs/PARAMETERS.md` and this section are the two places that record
-the expected value; update both when the source changes.
+happened. This section is the place that records the expected value; update it
+when the source changes.
+
+After the refresh, the first isolated run writes `00-plan.txt` naming
+`/usr/bin/unshare --mount --propagation private` and the tmpfs mount over
+`/dev/input`, and prints
+`sm750-headless: input devices are isolated in a private mount namespace (empty /dev/input)`.
+That run has **not** been executed yet: it is the owner's action, and the
+evidence file records it as NOT YET OBSERVED
+(`docs/evidence/runtime/40-headless-input-isolation.txt`).
 
 Every mode has been exercised through the installed helper. The runs of
 2026-11-25T13:41Z used the then-installed 8759-byte revision: probe PASS,

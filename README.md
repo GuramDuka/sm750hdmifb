@@ -6,7 +6,7 @@ ultrawide desktop, with bandwidth-saving colour conversion and update
 optimisations for smoother performance.**
 
 Linux display driver for the single-HDMI `SE-DP750A-HDMI` PCIe card. Current
-release **0.6.4**: atomic KMS, dithered 16-bit scanout, hardware cursor, DMA and
+release **0.6.7**: atomic KMS, dithered 16-bit scanout, hardware cursor, DMA and
 polling upload paths, sysfs monitoring attributes, a test-card fallback so a
 panel with no client is never dead-black, DKMS packages for `.deb` and `.rpm`,
 and an acceptance audit of 6 PASS / 0 FAIL / 1 GAP run against the 0.6.0 tree
@@ -25,7 +25,7 @@ read and archived, the option ROM was reconstructed from the image, the driver
 was brought to feature-complete state, every check was written down and turned
 into a gate, and the result was packaged for DKMS on RPM and Debian.
 
-`release 0.6.4` `kernel 6.17 and newer` `x86_64` `GPL-2.0-only` `DKMS`
+`release 0.6.7` `kernel 6.17 and newer` `x86_64` `GPL-2.0-only` `DKMS`
 `no firmware blobs` `no closed libraries`
 
 The signal path this driver owns ends at the transmitter:
@@ -81,7 +81,7 @@ packaged tarball.
 | IGT KMS subset | 26 pass, 14 skip, 1 fail by design |
 | GL path | `kmscube`, 299 frames in 5.07 s, 59.01 fps on llvmpipe |
 | Vblank rate | 60.43 per second measured over 120 events |
-| Evidence | 44 runtime transcripts, 28 build transcripts and 7 packaging transcripts under `docs/evidence/` |
+| Evidence | 47 runtime transcripts, 28 build transcripts and 7 packaging transcripts under `docs/evidence/` |
 | Documentation | 22 documents under `docs/`, plus the specification archive and the deck |
 
 ### How a claim is checked
@@ -105,7 +105,7 @@ enforce:
 | --- | --- |
 | [Acceptance report](docs/ACCEPTANCE-REPORT.md) | Criterion-by-criterion verdict with the command and the evidence path behind each row |
 | [Test strategy](docs/TEST-STRATEGY.md) | Every suite, its selection rationale, pass criteria and recorded results |
-| [Plasma on this driver](docs/PLASMA-WAYLAND.md) | The measured Wayland session, its two working bypasses, the scanout proof, and what is still missing |
+| [Plasma on this driver](docs/PLASMA-WAYLAND.md) | The measured Wayland session, its two working bypasses, the scanout proof, the buffer-modifier freeze and its two remedies, and what is still missing |
 | [Defects](docs/DEFECTS.md) | Findings with ids, root causes, dispositions and the gate that guards each fix |
 | [Repository audit](docs/AUDIT.md) | Point-in-time audit of the tree, with dated path notes where the tree moved on |
 | [Deliverables](docs/DELIVERABLES.md) | What ships, how it is rebuilt, and the exact reproduction commands |
@@ -140,14 +140,14 @@ transmitter, or different GPIO wiring and are not currently supported.
 
 ## Status
 
-Release 0.6.4. The driver is feature-complete for this board and meets the
+Release 0.6.7. The driver is feature-complete for this board and meets the
 project's production criteria except for one item that needs a person at the
 panel; see the [acceptance report](docs/ACCEPTANCE-REPORT.md).
 
 | Area | Verified state |
 |---|---|
-| Module | `sm750hdmidrm` 0.6.4, built by DKMS from one source tree |
-| Runtime | DKMS built and installed 0.6.4 for kernels 7.2.15-100, 7.3.3-100 and 7.3.4-100 (Fedora 43) from this tree, loaded and exercised on 7.3.4-100; the version-free `sm750-pkg` helper performs install and rollback (`docs/ROOT-ACTIONS.md` 3.8) |
+| Module | `sm750hdmidrm` 0.6.7, built by DKMS from one source tree |
+| Runtime | DKMS built and installed 0.6.5 for kernels 7.2.15-100, 7.3.3-100 and 7.3.4-100 (Fedora 43) from this tree, loaded and exercised on 7.3.4-100; the version-free `sm750-pkg` helper performs install and rollback (`docs/ROOT-ACTIONS.md` 3.8) |
 | Test card | seen on the panel; the disc animates and the scanout CRC gate stays green while it runs (`docs/evidence/runtime/26-test-card-crc-fix.txt`) |
 | Build matrix | 9 kernel and scanout-format combinations, 6.17.1 through the 7.4 daily headers |
 | Modeset | atomic commit verified with `modetest`, 1920x1080 at 60 Hz |
@@ -179,6 +179,14 @@ Known limitations, each with an id in [docs/DEFECTS.md](docs/DEFECTS.md):
   emits; AC-3 tier 5 remains partial for that reason.
 - `smatch` reports one shift-versus-mask precedence warning that originates in
   `GENMASK_TYPE()` in the kernel headers, not in this driver (A28).
+- A KWin Wayland session on a module older than 0.6.7 can start compositing and
+  then freeze the scanout: kwin asks for a buffer modifier the plane never
+  advertised and the kernel rejects every framebuffer with errno 22
+  (`kwin_wayland_drm: Failed to create framebuffer`). Exporting
+  `KWIN_DRM_USE_MODIFIERS=0` works around it; 0.6.7 removes the need by
+  reporting `DRM_CAP_ADDFB2_MODIFIERS` as 0. Details, probe results and the
+  three checks that tell which case you are in are in
+  [Plasma on this driver](docs/PLASMA-WAYLAND.md) sections 4.4 to 4.6.
 
 ## Install
 
@@ -193,7 +201,7 @@ git clone https://github.com/GuramDuka/sm750hdmifb.git
 cd sm750hdmifb
 make check
 ./build-package.sh
-sudo apt install ./dist/sm750hdmifb_0.6.4_all.deb ./dist/sm750hdmifb-tools_0.6.4_*.deb
+sudo apt install ./dist/sm750hdmifb_0.6.7_all.deb ./dist/sm750hdmifb-tools_0.6.7_*.deb
 sudo reboot
 ```
 
@@ -225,13 +233,13 @@ mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS}
 . ./packaging/source-excludes.sh
 mapfile -t skip < <(sm750_dev_only_pathspecs)
 git ls-files -z -- . "${skip[@]}" >"$work/tracked"
-tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.4-source.tar.gz" \
-    --transform='s|^|sm750hdmifb-0.6.4/|' --null -T "$work/tracked"
+tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.7-source.tar.gz" \
+    --transform='s|^|sm750hdmifb-0.6.7/|' --null -T "$work/tracked"
 
 rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb.spec
 rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb-tools.spec
-sudo dnf install -y "$topdir"/RPMS/noarch/sm750hdmifb-0.6.4-2.fc43.noarch.rpm \
-    "$topdir"/RPMS/x86_64/sm750hdmifb-tools-0.6.4-2.fc43.x86_64.rpm
+sudo dnf install -y "$topdir"/RPMS/noarch/sm750hdmifb-0.6.7-1.fc43.noarch.rpm \
+    "$topdir"/RPMS/x86_64/sm750hdmifb-tools-0.6.7-1.fc43.x86_64.rpm
 sm750-smi
 sudo reboot
 ```
@@ -273,7 +281,7 @@ module is `sm750hdmidrm.ko` so it cannot be confused with `sm750fb.ko`.
 
 ### Kernel compatibility
 
-**Built on 6.17 through 7.4, runtime-validated on 7.3.4.** Release 0.6.4 is
+**Built on 6.17 through 7.4, runtime-validated on 7.3.4.** Release 0.6.5 is
 installed by DKMS for the Fedora 43 kernels 7.2.15-100, 7.3.3-100 and
 7.3.4-100, and was loaded and exercised on 7.3.4-100, the reference host
 kernel. The other two are built and installed but have not been booted. Linux
@@ -822,6 +830,15 @@ sudo sm750-headless cage 30             # cage around one terminal, 30 s
 sudo sm750-headless kmscube 15          # kmscube, 15 s
 ```
 
+`weston` and `cage` run inside a private mount namespace whose `/dev/input` is
+an empty tmpfs, so neither can open or grab the owner's keyboard and mouse;
+`kmscube` opens only the card and is not isolated. The run prints
+`sm750-headless: input devices are isolated in a private mount namespace (empty /dev/input)`
+and records the same line, with the `unshare` and `mount` commands used, in
+`00-plan.txt`. Defect A49 in `docs/DEFECTS.md` records why a namespace is the
+only guard: weston's DRM backend offers no `--no-input` (that option is x11
+only) and cage has no input option at all.
+
 `SECONDS` defaults to 20 and is clamped to 1..600; no other argument is
 accepted. The compositors run with `LIBSEAT_BACKEND=noop`, so they open the
 DRM device directly and never touch seat0, logind or a VT; `cage` gets no `-s`
@@ -886,7 +903,16 @@ graphical session is unaffected by anything done to it.
 That is this host's arrangement, not a limit of the driver. A full Plasma
 Wayland session does run on `card0` with two environment workarounds and no
 root privileges; the measured session, the recipe and the remaining gaps are in
-[Plasma on this driver](docs/PLASMA-WAYLAND.md). A modeset on `card0`
+[Plasma on this driver](docs/PLASMA-WAYLAND.md). One of those workarounds can be
+a third: on a module older than 0.6.7, kwin may start compositing and then starve
+the scanout because it asks for a buffer modifier the plane never advertised
+(`kwin_wayland_drm: Failed to create framebuffer`, errno 22). Exporting
+`KWIN_DRM_USE_MODIFIERS=0` makes the session use the modifiers-free path;
+driver 0.6.7 and newer makes the variable unnecessary by reporting
+`DRM_CAP_ADDFB2_MODIFIERS` as 0 itself. Sections 4.4 to 4.6 of
+[Plasma on this driver](docs/PLASMA-WAYLAND.md) have the probe results, the
+measured effect of the variable and how to tell which case you are in. A
+modeset on `card0`
 from a test tool temporarily replaces the console; closing the tool lets the
 fbdev client restore its own 1920x1080 mode.
 
@@ -987,9 +1013,9 @@ VBIOS and scanout checks are documented in
 | `tests/check-vblank <card> <hz>` | Live vblank rate against the programmed refresh |
 | `tests/audit-release.sh` | Release tarball contents, version consistency and archive drift |
 | `tests/check-static.sh` | Opt-in static analysis gate with baseline comparison |
-| `tests/check-sm750-smi.sh` | Fixture-driven gate for `tools/sm750-smi`: 27 fields from synthetic sysfs/DRM trees, `--strict` exit codes, CSV/JSON parsing, four planted controls; no GPU or root needed |
+| `tests/check-sm750-smi.sh` | Fixture-driven gate for `tools/sm750-smi`: 27 fields from synthetic sysfs/DRM trees, `--strict` exit codes, CSV/JSON parsing, five planted controls; no GPU or root needed |
 | `tests/check-sysfs-attributes.sh` | Source-level gate for the twelve monitoring attributes `sm750-smi` reads from `/sys/class/drm/cardN/device/`: names and array entries, the group on the PCI device before `drm_dev_register`, `sysfs_emit()` with no sleep and no lock beyond the mode lock in every show function, `clear_events` false on the link-status read; five planted controls |
-| `tests/check-headless-helper.sh` | Source-level gate for `tools/sm750-headless.sh`: POSIX `sh` plus `sh -n`, the five modes and the usage path, the `0000:01:00.0` / `sm750hdmidrm` binding test, `LIBSEAT_BACKEND=noop` and never `builtin`, the weston, cage and kmscube argument sets read out of the executed switch arms (`-s` rejected on cage, `-n` rejected on kmscube), the `SECONDS` numeric test and 1..600 clamp, the survivor and vblank failures, TERM before KILL on an EXIT trap, no local absolute path and no non-ASCII byte; eight planted controls in `--self-test`, no compositor, no root and no card needed |
+| `tests/check-headless-helper.sh` | Source-level gate for `tools/sm750-headless.sh`: POSIX `sh` plus `sh -n`, the five modes and the usage path, the `0000:01:00.0` / `sm750hdmidrm` binding test, `LIBSEAT_BACKEND=noop` and never `builtin`, the weston, cage and kmscube argument sets read out of the executed switch arms (`-s` rejected on cage, `-n` rejected on kmscube), the `SECONDS` numeric test and 1..600 clamp, the survivor and vblank failures, TERM before KILL on an EXIT trap, no local absolute path and no non-ASCII byte, and that both compositor arms run in a private mount namespace with an empty `/dev/input` (`unshare --mount --propagation private` plus a tmpfs over `/dev/input` mounted before the exec, `isolate` in the weston arm and in the cage arm and absent from the kmscube arm, `WLR_LIBINPUT_NO_DEVICES` documented as wlroots-only); twelve planted controls in `--self-test`, no compositor, no root and no card needed |
 | `tests/check-render-node.sh` | Source-level and live gate for the render node: both `driver_features` lines in `src/sm750_drm.c` carry `DRIVER_RENDER` beside `DRIVER_MODESET`, no executable line sets `DRIVER_RENDER` without `DRIVER_MODESET`, `SM750_DRM_VERSION` agrees with `build-package.sh`, and a live `renderD*` node owned by `sm750hdmidrm` must be writable by the invoking user; three planted controls `render_dropped`, `render_only` and `version_drift` in `--self-test`, one `SKIP:` line before a 0.6.5 module is loaded |
 | `make console-check` | Opt-in console reachability: writes to the foreground VT, then requires the `sm750_scanout` window to carry content, to differ from the all-zero sentinel `0xe20eea22` and to report the `PANEL_FB_ADDRESS` offset; exits 77 (a skip) without root, card or a `KD_TEXT` foreground VT |
 | `make crc-check` | Opt-in live scanout readback: enables the CRTC CRC source `scanout`, checks that entries arrive, stay constant for a static frame, change with the content and agree with the `sm750_scanout` debugfs dump; exits 77 (a skip) without root, card or an active CRTC |

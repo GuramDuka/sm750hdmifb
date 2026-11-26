@@ -105,6 +105,8 @@ static const char *const reason_card_missing =
 	"card sysfs node missing";
 static const char *const reason_needs_root =
 	"needs root (debugfs)";
+static const char *const reason_no_active_crtc =
+	"no active CRTC";
 
 static int join2(char *out, size_t cap, const char *a, const char *b)
 {
@@ -1111,6 +1113,11 @@ static int get_crtc_index(struct smi_ctx *c, char *out, size_t cap,
 				 sizeof(buf), &err);
 
 	if (rc > 0) {
+		/* The driver writes -1 when its CRTC is not enabled. */
+		if (strcmp(buf, "-1") == 0) {
+			*reason = reason_no_active_crtc;
+			return 0;
+		}
 		if (parse_u64(buf, &v) != 0) {
 			*reason = "malformed active_crtc attribute";
 			return 0;
@@ -1125,6 +1132,8 @@ static int get_crtc_index(struct smi_ctx *c, char *out, size_t cap,
 			snprintf(out, cap, "%d", idx);
 			return 1;
 		}
+		*reason = reason_no_active_crtc;
+		return 0;
 	}
 	*reason = "no active CRTC exposed by sysfs or DRM";
 	return 0;

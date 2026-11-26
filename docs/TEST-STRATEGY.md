@@ -96,15 +96,16 @@ exports `TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}`), never to `/tmp`.
 | S12 | In-repo `tests/check-test-pattern.sh` (via `make check`) | Source-level test-card gate: the three writable parameters and their defaults and clamps, the bounded painter, the rectangle writer used by both the full card and the animation tick, the pitch-padded row copy, both pixel encodings, the card elements, the disc's motion and reflection, the exact paint message and call ordering, the rotation's cancel sites and tick silence, and the CRC-ownership rules (an armed scanout CRC source owns the window; a userspace master's black frame is a picture) | PASS (source gate); eighteen planted defects rejected. Bars and the 5 s palette jump observed on the panel 2026-11-20; the animated disc is not yet observed |
 | S13 | In-repo `tests/check-rpm-dkms.sh` (outside `make check`) | Evidence-hygiene gate on the packaging transcripts: every captured command runs under `LC_ALL=C LANG=C`, and after the last transcript is written the run fails on any non-ASCII byte in `docs/evidence/packaging/0[1-6]-*.log`, printing the file and its line numbers | PASS; `plant_localized_evidence` (one injected Russian `rpmbuild` line) rejected. 01-06 regenerated ASCII-clean at 0.6.2; the frozen `0.5.9/` archive predates the fix and is not covered |
 | S14 | In-repo `tests/check-sii902x-recovery.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level A42 gate: the readiness wait accumulates the plugged bit (and accepts a stable powered receiver) inside a 500 ms budget, a timed-out TPI write is retried after a software bus clear with only `-ETIMEDOUT` recoverable, the retrying write covers the option-ROM step, the initialization register, the video block, the AVI InfoFrame and the HPD workaround but never a read, a final timeout warns with the stage name and does not fail the enable, and the EDID read is skipped while the transmitter is powered down | PASS (source gate); nine planted defects rejected (readiness keyed on `RX_SENSE`, retry on `-ENXIO`, retry with no bus clear, the helper used on the EDID read, the wrapper returning the timeout, a literal DDC poll interval, a raised grant budget, a third grant attempt, no per-mode-set bus clear). T53 added the DDC grant budget (200 ms poll, 2000 ms budget, one retry after a bus clear) and the per-mode-set software bus clear. Post-fix power-cycle behaviour is not yet observed on hardware |
-| S15 | In-repo `tests/check-sm750-smi.sh` (via `make check`) | Fixture-driven gate for the `sm750-smi` monitoring tool: all 27 fields resolved from synthetic sysfs/DRM trees, nine fixture shapes, `--strict` exit codes, CSV and JSON parsed by `python3`, four planted controls rejected; no GPU and no root needed | PASS (2026-11-22) |
+| S15 | In-repo `tests/check-sm750-smi.sh` (via `make check`) | Fixture-driven gate for the `sm750-smi` monitoring tool: all 27 fields resolved from synthetic sysfs/DRM trees, eleven fixture shapes, `--strict` exit codes, CSV and JSON parsed by `python3`, five planted controls rejected; no GPU and no root needed | PASS (2026-11-25) |
 | S16 | In-repo `tests/check-sysfs-attributes.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the twelve monitoring attributes `sm750-smi` reads from `/sys/class/drm/cardN/device/`: one `DEVICE_ATTR_RO()` and one array entry per name, the group registered on `&pdev->dev` before `drm_dev_register()`, every show function using `dev_get_drvdata()` with a NULL guard and `sysfs_emit()` and neither sleeping nor taking a lock other than the mode lock, `clear_events = false` on the link-status read, and `vblank_count` reading DRM core's counter | PASS (2026-11-22); five planted defects rejected (renamed attribute, `clear_events` true, `msleep` in a show function, group on the DRM class device, spin lock in a show function) |
 | S17 | In-repo `tests/check-sm750-pkg.sh` (`make check-pkg`, opt-in) | Self-tests for the sudo package helper: newest-pair selection, version agreement, symlink refusal, argv refusal, the unprivileged status path, the root requirement, a single `dkms` invocation, missing-tools reporting, and the ownership/mode policy. dnf, dkms, rpm, modprobe and lsmod are stubbed through a temporary PATH, so no package is installed, removed or loaded and no root is needed | PASS (nine groups); added a `check-pkg` make target on 2026-11-22 |
 
 | S18 | In-repo `tests/check-kunit-drm.sh` (`make check-kunit`, opt-in) | DRM KUnit sweep: discovers the DRM KUnit suites under `/lib/modules/$(uname -r)/internal/drivers/gpu/drm/tests/` (floor of 8 so an empty directory fails), modprobes each (KUnit autorun runs it at load), parses the TAP output (`# Subtest:`, `ok N - name`, `not ok N - name`, `# Totals: pass:N fail:N skip:N`) from the kernel log via `DMESG_CMD`, fails naming the suite and subtest, and unloads every module in an EXIT trap. Needs root, or the allowlisted loader of `docs/ROOT-ACTIONS.md` section 3.9 (`MODPROBE_CMD='sudo -n /usr/bin/modprobe'`); without either an unprivileged run exits 77 with one SKIP line. Four planted parser defects rejected plus two negative controls in `--self-test` | Live on 2026-11-22 through the installed per-module allowlist: 23 modules discovered, 21 suites loaded and unloaded, all 21 printed only `kunit: disabled` because `# CONFIG_KUNIT_DEFAULT_ENABLED is not set` on this kernel, so the gate skips with exit 77 naming that prerequisite (`docs/ROOT-ACTIONS.md` section 3.10) instead of passing; self-test PASS; the suites' real pass/fail census is NOT YET OBSERVED |
 | S19 | In-repo `tests/check-oops-delta.sh` (`make check-oops`, opt-in; standalone `-- <command...>`) | Reusable oops detector: snapshots the kernel log before and after the wrapped command through `DMESG_CMD` (default `dmesg`, this host `sudo -n dmesg`), diffs the delta, filters `--allow` regexes or `OOPS_ALLOW_FILE`, and fails on any new `BUG:`, `WARNING:`, `Oops`, `general protection fault`, `kernel NULL pointer dereference`, `lockdep`, `call trace` or `RIP:` line; exits 77 when the log is unreadable. Three planted defects rejected (new `WARNING:`, new `BUG:`, wrapped command failing) plus four negative controls (unchanged log, allow-filtered warning, allow wins over BUG, allowlist file) in `--self-test`; exercised live by wrapping `tests/check-drm-policy.sh` and `tests/check-sm750-pkg.sh` | PASS (2026-11-22, `sudo -n dmesg` reader, both wrapped gates clean) |
-| S20 | In-repo `tests/check-headless-helper.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the operator helper `tools/sm750-headless.sh`: POSIX `sh` that passes `sh -n`, the five modes `probe`, `diagnose`, `weston`, `cage` and `kmscube` with a usage path that exits 2 for anything else, the `0000:01:00.0` and `sm750hdmidrm` driver binding test, `LIBSEAT_BACKEND=noop` exported and never `builtin`, the weston arm carrying `--backend=drm`, `--drm-device=card0` and `--shell=kiosk-shell.so`, the cage arm without `-s` (which would permit VT switching) and the kmscube arm with `-c` and without `-n` (which is a connector id), the `SECONDS` numeric test and the 1..600 clamp, the verdict failing on a died compositor and on a vblank delta `<= 0`, TERM before KILL on an EXIT trap, and no local absolute path or non-ASCII byte. Static only: it runs no compositor, needs no root and never touches the card | PASS (2026-11-25); ten planted defects rejected (the `LIBSEAT_BACKEND` export deleted, `noop` changed to `builtin`, `-s` added to cage, `-c` changed to `-n` in kmscube, the survivor check deleted, the vblank check deleted, a clean kmscube completion reported as a failure, a kmscube exit code ignored, an absolute local path appended, the lower clamp loosened to 0) plus a pristine control accepted, in `--self-test` |
-| S21 | In-repo `tests/check-render-node.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the render node: both `driver_features` lines in `src/sm750_drm.c` carry `DRIVER_RENDER` on the same line as `DRIVER_MODESET`, no executable line carries `DRIVER_RENDER` without `DRIVER_MODESET` (a render-only device would lose card0 and every mode), and `SM750_DRM_VERSION` agrees with the `readonly version=` line of `build-package.sh`. The live half walks `/sys/class/drm/renderD*`, keeps the node whose `device/driver` basename is `sm750hdmidrm`, and requires the matching `/dev/dri/renderDN` character device and write access for the invoking user; with no such node it prints one `SKIP:` line and still exits 0, which is the state before a 0.6.5 module is loaded | PASS (2026-11-25); five assertions, four source-level and one live on the render node resolved by driver name, plus three planted defects rejected (`render_dropped`, `render_only`, `version_drift`) in `--self-test` |
+| S20 | In-repo `tests/check-headless-helper.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the operator helper `tools/sm750-headless.sh`: POSIX `sh` that passes `sh -n`, the five modes `probe`, `diagnose`, `weston`, `cage` and `kmscube` with a usage path that exits 2 for anything else, the `0000:01:00.0` and `sm750hdmidrm` driver binding test, `LIBSEAT_BACKEND=noop` exported and never `builtin`, the weston arm carrying `--backend=drm`, `--drm-device=card0` and `--shell=kiosk-shell.so`, the cage arm without `-s` (which would permit VT switching) and the kmscube arm with `-c` and without `-n` (which is a connector id), the `SECONDS` numeric test and the 1..600 clamp, the verdict failing on a died compositor and on a vblank delta `<= 0`, TERM before KILL on an EXIT trap, no local absolute path or non-ASCII byte, and that **both** compositor arms run inside a private mount namespace with an empty `/dev/input` (A49): `--mount --propagation private`, the exact `tmpfs -o size=1M,mode=0755` mount over `/dev/input`, `isolate ` present in the weston arm and in the cage arm and absent from the kmscube arm, the mount line before both compositor calls, and `WLR_LIBINPUT_NO_DEVICES` documented as wlroots-only. Static only: it runs no compositor, needs no root and never touches the card | PASS (2026-11-26); twelve planted defects rejected (the `LIBSEAT_BACKEND` export deleted, `noop` changed to `builtin`, `-s` added to cage, `-c` changed to `-n` in kmscube, the survivor check deleted, the vblank check deleted, a clean kmscube completion reported as a failure, a kmscube exit code ignored, an absolute local path appended, the lower clamp loosened to 0, the input isolation dropped from both compositor arms, the isolation dropped from the cage arm alone) plus a pristine control accepted, in `--self-test`; the helper is input-isolated, so a run cannot take the owner's keyboard or mouse |
+| S21 | In-repo `tests/check-render-node.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the render node: both `driver_features` lines in `src/sm750_drm.c` carry `DRIVER_RENDER` on the same line as `DRIVER_MODESET`, no executable line carries `DRIVER_RENDER` without `DRIVER_MODESET` (a render-only device would lose card0 and every mode), and `SM750_DRM_VERSION` agrees with the `readonly version=` line of `build-package.sh`. The live half walks `/sys/class/drm/renderD*`, keeps the node whose `device/driver` basename is `sm750hdmidrm`, and requires the matching `/dev/dri/renderDN` character device and write access for the invoking user; with no such node it prints one `SKIP:` line and still exits 0, which is the state before a 0.6.5 module is loaded | PASS (2026-11-25); seven assertions, six source-level (two `DRIVER_RENDER` lines, no `DRIVER_RENDER` without `DRIVER_MODESET`, the two mode_config funcs structs present and installed, the withdrawn modifier capability, the version agreement) and one live on the render node resolved by driver name, plus five planted defects rejected (`render_dropped`, `render_only`, `version_drift`, `fb_modifiers_dropped`, `fb_modifiers_branched`) in `--self-test`. The modifier assertion is described as S23 |
 | S22 | None (observed by hand; no script, no gate) | Session-level result: a full Plasma 6.7.5 Wayland session on `card0`, recorded as evidence rather than enforced, because the session needs a live seatless remote login, a private bus and a real panel | OBSERVED 2026-11-25: the compositor initializes, plasmashell presents, and the panel reads a non-zero scanout window; input and screencast are NOT measured |
+| S23 | In-repo `tests/check-render-node.sh`, extended (via `make check`, called by `tests/check-drm-policy.sh`) | Device-level check that the driver withdraws the framebuffer-modifier capability: both `drm_mode_config_funcs` structs (`sm750_mode_config_funcs`, `sm750_shadow_mode_config_funcs`) must exist and be installed, `drm->mode_config.fb_modifiers_not_supported = 1;` must be present, and it must sit on the line immediately after the two-line `drm->mode_config.funcs` ternary so a guard cannot withdraw the capability for one device only. Reasoning: the plane advertises `DRM_FORMAT_MOD_LINEAR` alone, KWin 6.7.5 submitted a modifier it could not match and AddFB2 failed with EINVAL, so core must report `DRM_CAP_ADDFB2_MODIFIERS=0` and every client must take the modifiers-free path | PASS (2026-11-25); seven assertions (six source-level, one live) and five planted defects rejected (`render_dropped`, `render_only`, `version_drift`, `fb_modifiers_dropped`, `fb_modifiers_branched`) in `--self-test` |
 ### S1: in-repo `make check`
 
 - Package/version: the repository itself at 0.5.9; no external package. The
@@ -551,7 +552,7 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   attribute is absent, and an ESC byte emitted under `--no-color`. Each is
   copied, patched and compiled into its own binary, and each must fail the
   gate for the stated reason; the script prints the observed failure.
-- Status: PASS, `sm750-smi checks passed (27 fields, 9 fixtures, 4 planted
+- Status: PASS, `sm750-smi checks passed (27 fields, 11 fixtures, 5 planted
   controls)`. The real-run view is in the README.
 
 ### S16: sysfs attribute gate
@@ -608,20 +609,33 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   and fails on `[ "$frames" -le 0 ]`, writes `status=3` on both paths and keeps
   the sentence "a frame count alone never proves a compositor rendered";
   `trap cleanup EXIT` is installed and `kill -TERM` precedes `kill -KILL`; the
-  script holds no absolute local path and no non-ASCII byte.
+  script holds no absolute local path and no non-ASCII byte; section k pins the
+  input isolation: `--mount --propagation private` and
+  `-t tmpfs -o size=1M,mode=0755 tmpfs /dev/input` both appear, the isolation
+  sentence and `00-plan.txt` are present, `isolate ` is reached from the weston
+  arm and from the cage arm, `isolate ` is absent from the kmscube arm (which
+  takes no input), the `/dev/input` mount line precedes the weston call line and
+  the cage call line, `export WLR_LIBINPUT_NO_DEVICES=1` is still present and
+  the script documents it as a wlroots variable (weston's DRM backend ignores
+  it, so the namespace is the load-bearing guard - A49).
 - Planted controls: `LIBSEAT_BACKEND` export deleted, `noop` changed to
   `builtin`, `-s` added to the cage arm, `-c 300` changed to `-n 300` in the
   kmscube arm, the `survived=0` assignment deleted, the
   `elif [ "$frames" -le 0 ]` branch disabled, the kmscube clean-exit branch
   turned into a failure, the kmscube exit code ignored so a crash reads as a
-  pass, an absolute local path appended after the last line, and the lower
-  clamp loosened from `-ge 1` to `-ge 0`. Each mutates a copy under the scratch
-  directory and must exit non-zero naming the defect; the unmutated copy must
-  pass.
-- Status: PASS, `Headless helper checks passed (10 assertions, 10 planted
-  controls)`; the `--self-test` run prints
-  `Headless helper checks passed (10 assertions, 10 planted controls, self-test)`.
-  The helper itself has not been run: every mode needs root and the card.
+  pass, the lower clamp loosened from `-ge 1` to `-ge 0`, `isolate "$prog"`
+  rewritten back to `exec "$prog"` in both compositor arms (the A49 incident:
+  weston then opens the owner's `/dev/input/event*`), and the same rewrite in
+  the cage arm only, so a single unprotected mode is caught. Each mutates a
+  copy under the scratch directory and must exit non-zero naming the defect;
+  the unmutated copy must pass.
+- Status: PASS 2026-11-26, `Headless helper checks passed (11 assertions, 12
+  planted controls)`; the `--self-test` run prints
+  `Headless helper checks passed (11 assertions, 12 planted controls, self-test)`.
+  The helper itself has not been run with the isolation in place: every mode
+  needs root and the card, and the incident that produced A49 came from doing
+  exactly that. The isolated run is in the NOT YET OBSERVED list of
+  `docs/evidence/runtime/40-headless-input-isolation.txt`.
 
 ### S21: render-node gate
 
@@ -646,12 +660,15 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   without `DRIVER_MODESET`) and `version_drift` (the packaged version moved
   while the module define stayed). Each mutates a copy under the scratch
   directory and must exit non-zero naming the defect.
-- Status: PASS, `Render node checks passed (5 assertions, 3 planted controls)`
-  on the installed 0.6.5, and
-  `Render node checks passed (8 assertions, 3 planted controls)` under
-  `--self-test`. The gate adds no recipe command, so `make check` still runs 18
-  commands. The observed node and the kwin outcome are in
-  `docs/evidence/runtime/36-render-node.txt`.
+- Status: PASS on 2026-11-25. The plain run prints
+  `Render node checks passed (7 assertions, 5 planted controls)` and the
+  `--self-test` run prints
+  `Render node checks passed (12 assertions, 5 planted controls)`: seven
+  assertions (six source-level and one live) plus five planted controls. The
+  earlier 0.6.5 run recorded five assertions and three controls. The gate adds
+  no recipe command, so `make check` still runs 18 commands. The observed node
+  and the kwin outcome are in `docs/evidence/runtime/36-render-node.txt`; the
+  modifier assertions are S23.
 
 ### S22: a full Plasma Wayland session (observed by hand, not gated)
 

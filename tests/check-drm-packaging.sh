@@ -10,7 +10,7 @@ bash -n "$builder" "$project_dir/packaging/write-xorg-config.sh"
 sh -n "$project_dir/packaging/drm-postinst" \
 	"$project_dir/packaging/drm-prerm" \
 	"$project_dir/packaging/drm-postrm"
-grep -F 'PACKAGE_VERSION="0.6.6"' "$dkms_config" >/dev/null
+grep -F 'PACKAGE_VERSION="0.6.7"' "$dkms_config" >/dev/null
 grep -F 'BUILT_MODULE_NAME[0]="sm750hdmidrm"' "$dkms_config" >/dev/null
 grep -F 'BUILD_EXCLUSIVE_KERNEL="^(6\\.(1[7-9]|[2-9][0-9])\\.|[7-9]\\.|[1-9][0-9]\\.)"' \
 	"$dkms_config" >/dev/null
@@ -39,7 +39,7 @@ tools_spec=$project_dir/packaging/sm750hdmifb-tools.spec
 grep -Eq '^BuildArch:[[:space:]]+noarch$' "$module_spec" >/dev/null
 ! grep -F '%package' "$module_spec" >/dev/null
 grep -Fx 'Name:           sm750hdmifb-tools' "$tools_spec" >/dev/null
-grep -Fx 'Version:        0.6.6' "$tools_spec" >/dev/null
+grep -Fx 'Version:        0.6.7' "$tools_spec" >/dev/null
 grep -Fx 'BuildRequires:  gcc' "$tools_spec" >/dev/null
 grep -Fx 'BuildRequires:  libdrm-devel' "$tools_spec" >/dev/null
 ! grep -Eq '^BuildArch:' "$tools_spec" >/dev/null

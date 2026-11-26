@@ -1,0 +1,264 @@
+Headless helper input isolation - A49
+=====================================
+Captured 2026-11-26 by the implementer, from the repository
+/home/coder/sm750hdmifb. Host deneb, kernel 7.3.4-100.fc43.x86_64, weston
+14.0.2. All commands below were run as the service account `coder` (uid 1005)
+except where a sudo record is quoted.
+
+This file records what happened, why the helper could do it, what was changed,
+and what has NOT been observed yet. It does not claim that an isolated run has
+happened: see section 6.
+
+
+1. Timeline of the incident run
+--------------------------------
+Run directory: /mega/tmp/sm750/headless/20261126T033248Z-weston
+
+  2026-11-26T06:32:48  sudo[16436] accepted `coder : PWD=/home/coder/sm750hdmifb ;
+                       USER=root ; COMMAND=/usr/local/sbin/sm750-headless weston 600`
+                       and started the helper as pid 16443.
+  06:32:48             the helper resolved the card, took DRM master
+                       (02-master.txt: "master: acquired"), dropped it
+                       ("master: dropped"), and exec'd weston as pid 16475.
+  06:32:48.349         weston's DRM backend opened /dev/input/event2 and logged
+                       "device is a keyboard".
+  06:32:48.355-360     it went on to open event3, event4, event6, event7,
+                       event5 (the mouse), event1 and event0.
+  06:32:48.393         "libinput: configuring device \"HID 04f3:0103\"."
+  06:32:48.394-401     seven further configuring lines, eight in total.
+  06:42:51.252         "[06:42:51.252] caught signal 15", then "device removed"
+                       lines for every device it had taken.
+  06:42:51             the helper wrote 05-verdict.txt:
+                         sm750-headless: weston exited with rc=0 before 600s
+                         vblank_count before: 4208
+                         vblank_count after:  4956
+                         vblank delta:        748
+                         RESULT: FAIL weston did not survive 600s (see 03-compositor.log)
+
+Later, non-incident runs of the same evening: `sm750-headless diagnose` at
+06:38:49 (sudo[35414]), 06:40:45 (sudo[71449]) and 06:42:47 (sudo[109763]).
+They take no compositor and are not part of the failure.
+
+Owner impact: the machine owner had no keyboard and no mouse from 06:32:48
+until the run ended and was powered the machine off afterwards.
+
+The journal line, re-stamped in ISO form because this repository is ASCII only
+(the month renders as a localised abbreviation in the journal):
+
+```text
+2026-11-26 06:32:48 deneb sudo[16436]: coder : PWD=/home/coder/sm750hdmifb ; USER=root ;
+  COMMAND=/usr/local/sbin/sm750-headless weston 600
+```
+
+
+2. The grab, quoted from weston.log
+-----------------------------------
+weston.log holds 249 lines. The command line it records is:
+
+```text
+/usr/bin/weston --backend=drm --drm-device=card0 --renderer=pixman
+  --shell=kiosk-shell.so --continue-without-input --idle-time=0
+  --log=/mega/tmp/sm750/headless/20261126T033248Z-weston/weston.log
+```
+
+The device lines, verbatim (weston.log:31-46):
+
+```text
+[06:32:48.349] event2  - HID 04f3:0103: device is a keyboard
+[06:32:48.352] event3  - HID 04f3:0103 Consumer Control: device is a keyboard
+[06:32:48.353] event4  - HID 04f3:0103 System Control: device is a keyboard
+[06:32:48.355] event6  - HID 0557:2419: device is a keyboard
+[06:32:48.357] event7  - HID 0557:2419: device is a pointer
+[06:32:48.358] event5  - Genius Optical Mouse: is tagged by udev as: Mouse
+[06:32:48.359] event5  - Genius Optical Mouse: device is a pointer
+[06:32:48.359] event1  - Power Button: device is a keyboard
+[06:32:48.360] event0  - Power Button: device is a keyboard
+```
+
+then the configuring lines, of which these are representative:
+
+```text
+[06:32:48.393] libinput: configuring device "HID 04f3:0103".
+[06:32:48.394] libinput: configuring device "HID 04f3:0103 Consumer Control".
+[06:32:48.395] libinput: configuring device "HID 04f3:0103 System Control".
+[06:32:48.397] libinput: configuring device "HID 0557:2419".
+[06:32:48.398] libinput: configuring device "HID 0557:2419".
+[06:32:48.399] libinput: configuring device "Genius Optical Mouse".
+[06:32:48.400] libinput: configuring device "Power Button".
+[06:32:48.401] libinput: configuring device "Power Button".
+```
+
+`grep -c 'unknown libinput event 404' weston.log` = 116: the compositor kept
+receiving events from those devices for the whole session.
+
+03-compositor.log is 0 bytes in that run directory, so every attribution above
+comes from weston's own log and from the journal, not from the helper's
+stdout capture. That is itself a defect of the log layout, recorded here so it
+is not mistaken for a missing transcript.
+
+
+3. The launching session is the service account, not the owner
+---------------------------------------------------------------
+```text
+$ id -u
+1005
+$ cat /proc/self/loginuid
+1005
+$ loginctl list-sessions
+     (seat0 listed only for the owner's session; the service account's
+      session shows Seat= and Remote=yes)
+```
+
+`coder` holds no seat, and libseat 0.9.x then has no manager to ask. Under
+`LIBSEAT_BACKEND=noop` - the only usable backend here, since seatd is not
+installed (`/usr/bin/seatd` and `/usr/sbin/seatd` absent, no `seatd*` unit, no
+`/run/seatd.sock`) while `libseat.so.1` is present at /usr/lib64/libseat.so.1 -
+libseat opens the evdev node itself. Nothing in that path can refuse the open,
+which is why the grab reached the owner's hardware.
+
+
+4. Why no compositor flag can fix this
+--------------------------------------
+weston 14.0.2 `--help` places `--no-input  Dont create input devices` under
+`Options for x11:` only. The DRM backend accepts exactly `--seat`,
+`--drm-device`, `--additional-devices`, `--use-pixman`, `--current-mode` and
+`--continue-without-input`. `--continue-without-input` means "start even when
+zero input devices appear"; it does not stop weston from opening devices that
+do appear, and the incident run passed it.
+
+cage 0.2.x has no input option at all: `-d`, `-m extend|last`, `-s`, `-v`, `-h`.
+It is wlroots-based, so it does honour `WLR_LIBINPUT_NO_DEVICES=1`, which the
+helper still exports for that reason; weston does not read that variable.
+
+The conclusion is that the guard cannot be an argument. It has to be the
+absence of the device nodes.
+
+
+5. The fix: a private mount namespace with an empty /dev/input
+---------------------------------------------------------------
+`tools/sm750-headless.sh:244-253`:
+
+```sh
+isolate() {
+	exec "$UNSHARE" --mount --propagation private /bin/sh -c '
+		"$1" -t tmpfs -o size=1M,mode=0755 tmpfs /dev/input || {
+			echo "sm750-headless: cannot seal /dev/input in the private namespace" >&2
+			exit 1
+		}
+		shift
+		exec "$@"
+	' sm750-headless "$MOUNT" "$@"
+}
+```
+
+Both compositor arms call it (`:258` weston, `:264` cage); kmscube keeps its
+plain exec. `$UNSHARE` is `/usr/bin/unshare` and `$MOUNT` is `/usr/bin/mount`,
+both checked with `[ -x ]` before any compositor starts (`:85-114`), and the
+run exits 1 with "refusing to start a compositor without input isolation" if
+either is missing - the isolation is never silently skipped.
+
+`--propagation private` is required. `/dev` on this host is a shared mount:
+
+```text
+$ awk '$5=="/dev"{print $7}' /proc/self/mountinfo
+shared:2
+$ findmnt -no PROPAGATION /dev
+shared
+```
+
+A mount created in a namespace that kept shared propagation can propagate to
+the host; making the namespace private first removes that path. The mount lives
+only in the child namespace, so the host is not modified at all.
+
+The intermediate `/bin/sh` is replaced by the compositor with `exec`, so the
+compositor keeps the pid the EXIT trap sends TERM then KILL to; the cleanup
+semantics are unchanged.
+
+
+6. Measurements taken, and what is NOT YET OBSERVED
+---------------------------------------------------
+Measured 2026-11-26 as `coder`, without starting any compositor:
+
+```text
+$ /usr/bin/unshare -rm --propagation private /bin/sh -c \
+    'mount -t tmpfs -o size=1M,mode=0755 tmpfs /dev/input && \
+     ls -A /dev/input && echo EMPTY-OK'
+EMPTY-OK
+rc=0
+
+$ findmnt -o TARGET,PROPAGATION /dev      # inside the namespace
+TARGET PROPAGATION
+/dev   private
+
+# after the run, on the host:
+$ ls -A /dev/input | wc -l
+18
+$ ls /dev/input/event* | wc -l
+13
+$ findmnt -no PROPAGATION /dev
+shared
+```
+
+`/usr/bin/unshare` is not on the sudoers allowlist, so the user-requested
+`sudo -n /usr/bin/unshare --mount ...` form cannot run on this host:
+
+```text
+$ sudo -n /usr/bin/unshare --mount sh -c 'true'
+<localised "a password is required" message>
+rc=1
+```
+
+The message is localised on this host and is not ASCII, so it is not
+reproduced verbatim here; this repository is ASCII only. The exit status and
+the fact that the command required a password are the load-bearing part.
+
+The equivalent proof above therefore runs under `unshare -rm` as the service
+account. Inside the real helper the same `unshare` runs as root, where the `-r`
+mapping is unnecessary.
+
+The helper's `isolate()` was additionally exercised end to end without a
+compositor: `$UNSHARE` was pointed at a wrapper that runs `/usr/bin/unshare -r`,
+and `isolate /bin/sh -c '...'` reported `child-entries=0`, `child-pid` equal to
+the parent pid (proving the exec replaced the shell), a `tmpfs` mount at
+`/dev/input` inside the namespace, and exit 0. The host afterwards still had 18
+entries / 13 event nodes and `shared` propagation on `/dev`.
+
+NOT YET OBSERVED
+
+- The isolated run has not been executed on the host. `/usr/local/sbin/sm750-headless`
+  is still the 9223-byte, sha256
+  `137c665b7f60c17a95a6bdcd7948fb7064239eb62a6a108932e60315ce80913c` revision
+  without this code; the owner must refresh it first with
+  `sudo install -m 0755 -o root -g root tools/sm750-headless.sh /usr/local/sbin/sm750-headless`
+  from the repository root. Running it is the owner's action, not this task's:
+  a compositor run is exactly what caused the incident and the owner's session
+  is live on this machine.
+- No weston or cage run has been made with the namespace in place, so "weston
+  logs zero `device is a keyboard` lines and zero `libinput: configuring
+  device` lines" is an expectation from the mount, not a measurement.
+- Installed-copy hashes after a refresh are unknown by construction; the
+  expected source values are 12020 bytes, 336 lines, sha256
+  `bc1d3a06fdf59bb25f9b0f572c2be6085731332109a4231a80e3d2076308922f`.
+- The residual case is out of scope and unchanged: a compositor started on a
+  real VT under logind is supposed to take that seat's devices.
+
+
+7. Static verification run for this change
+-------------------------------------------
+```text
+$ sh -n tools/sm750-headless.sh
+rc=0
+
+$ ./tests/check-headless-helper.sh
+Headless helper checks passed (11 assertions, 12 planted controls)
+rc=0
+
+$ ./tests/check-headless-helper.sh --self-test
+negative control input-isolation-dropped: rejected: FAIL: k: weston must be started through the input isolation, not exec'd directly
+negative control isolation-one-mode-only: rejected: FAIL: k: cage must be started through the input isolation, not exec'd directly
+negative control pristine: accepted
+Headless helper checks passed (11 assertions, 12 planted controls, self-test)
+rc=0
+```
+
+No compositor was started for any of the above.
