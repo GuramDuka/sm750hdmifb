@@ -91,6 +91,10 @@ fi
 ok "a. the helper exists, starts with #!/bin/sh and passes sh -n"
 
 body=$(cat "$helper")
+# The off sequence, for ordering checks. The restore function is defined above
+# it and legitimately repeats a couple of the same calls, so an ordering test
+# against the whole file would compare the trap against the success path.
+offbody=$(awk '/^# off$/{f=1} f' "$helper")
 
 # --- b. three modes, everything else reaches usage ---------------------------
 has "$body" 'show|off|on' \
@@ -129,16 +133,17 @@ has "$body" '[ "$(cat "$1/bind" 2>/dev/null || echo '"'"'?'"'"')" = "$2" ]' \
 	"e: every bind write must be read back before it counts"
 ok "e. bind 0 detaches and bind 1 restores, each read back from sysfs"
 
-# --- f. the console is restored on every failing path -----------------------
-has "$body" 'restore_console' "f: a restore function must exist"
-has "$body" "trap 'rc=\$?; if [ \"\$rc\" -ne 0 ]; then restore_console; fi; exit \$rc' EXIT" \
-	"f: exactly one EXIT trap must restore the console and re-raise the status"
-has "$(func "$helper" restore_console)" 'write_bind "$TARGET" 1' \
+# --- f. both resources are restored on every failing path -------------------has "$body" 'restore_all' "f: a restore function must exist"
+has "$body" "trap 'rc=\$?; if [ \"\$rc\" -ne 0 ]; then restore_all; fi; exit \$rc' EXIT" \
+	"f: exactly one EXIT trap must restore the state and re-raise the status"
+has "$(func "$helper" restore_all)" 'write_bind "$TARGET" 1' \
 	"f: the restore function must write bind 1"
-has "$(func "$helper" restore_console)" 'return 0' \
+has "$(func "$helper" restore_all)" 'return 0' \
 	"f: the trap function must end with an explicit return so it cannot mask the status"
 has "$body" 'unbound=1' "f: the restore must be armed by the detach"
-ok "f. one EXIT trap restores fbcon after any non-zero exit and keeps the status"
+has "$body" 'FINISHED=1' \
+	"f: a completed run must disarm the restore so it never undoes its own success"
+ok "f. one EXIT trap restores the state after any non-zero exit and keeps the status"
 
 # --- g. unload before load, and only when nobody holds the card -------------
 has "$body" 'holders' "g: userspace holders must be enumerated"
@@ -147,8 +152,8 @@ has "$body" 'if [ -n "$h" ]; then' \
 	"g: the unload must be gated on the holder list, not merely report it"
 has "$body" 'userspace processes hold the card' \
 	"g: a held card must be refused with a message that names the reason"
-unload=$(lineno '"$MODPROBE" -r sm750hdmidrm' "$body")
-load=$(lineno '"$MODPROBE" sm750hdmidrm' "$body")
+unload=$(lineno '"$MODPROBE" -r sm750hdmidrm' "$offbody")
+load=$(lineno '"$MODPROBE" sm750hdmidrm' "$offbody")
 if [ -z "$unload" ] || [ -z "$load" ]; then
 	bad "g: both the unload (modprobe -r) and the load (modprobe) must be present"
 elif [ "$unload" -ge "$load" ]; then
@@ -160,7 +165,7 @@ ok "g. the holder refusal runs first and the unload precedes the load"
 # The read-back is the post-load guard, not the read used to print the state
 # before the change, so the ordered literal is the "missing after the load"
 # test that follows the load rather than the first mention of the file.
-ver=$(lineno 'is missing after the load' "$body")
+ver=$(lineno 'is missing after the load' "$offbody")
 if [ -z "$ver" ]; then
 	bad "h: the helper must read /sys/module/sm750hdmidrm/version back after the load"
 elif [ -n "$load" ] && [ "$ver" -le "$load" ]; then
@@ -172,9 +177,61 @@ ok "h. the version is read back from sysfs after the load"
 
 # --- i. the console-only recovery mode exists ------------------------------
 has "$body" 'module unloaded' "i: off must report the unload"
-has "$(func "$helper" restore_console)" 'FAILED to re-bind' \
+has "$(func "$helper" restore_all)" 'FAILED to re-bind' \
 	"i: a failed restore must say so and point at the on mode"
 ok "i. off reports the unload and a failed restore points the operator at on"
+
+# --- k. the PCI unbind step that releases the framebuffer reference (A51) ---
+# Detaching the vtconsole alone left the module refcount at 1 and modprobe -r
+# failed on the first live run, so the sequence now removes the device as well.
+has "$offbody" 'write_dev unbind' "k: the device must be unbound, not only the console"
+has "$offbody" 'write_dev bind' "k: the device must be bound again after the load"
+has "$body" 'refcnt before any change' \
+	"k: the module refcount must be printed before anything is touched"
+has "$body" 'refcnt after the unbind' \
+	"k: the module refcount must be printed again right after the unbind"
+has "$body" 'if [ "$rc_after" != 0 ]; then' \
+	"k: a refcount that did not drop to zero must fail the run with that number"
+has "$body" 'if ! dev_bound; then' \
+	"k: off must refuse when the device is not bound to its driver"
+
+detach=$(lineno 'write_bind "$TARGET" 0' "$offbody")
+pci_unbind=$(lineno 'write_dev unbind' "$offbody")
+pci_unload=$(lineno '"$MODPROBE" -r sm750hdmidrm' "$offbody")
+pci_load=$(lineno '"$MODPROBE" sm750hdmidrm' "$offbody")
+pci_rebind=$(lineno 'write_dev bind' "$offbody")
+pci_console=$(lineno 'write_bind "$TARGET" 1' "$offbody")
+for pair in "detach:$detach:unbind:$pci_unbind" "unbind:$pci_unbind:unload:$pci_unload" \
+	"unload:$pci_unload:load:$pci_load" "load:$pci_load:rebind:$pci_rebind" \
+	"rebind:$pci_rebind:console:$pci_console"; do
+	first_name=${pair%%:*}
+	rest=${pair#*:}
+	first=${rest%%:*}
+	rest=${rest#*:}
+	second_name=${rest%%:*}
+	second=${rest#*:}
+	if [ -z "$first" ] || [ -z "$second" ]; then
+		bad "k: one of $first_name and $second_name is missing from the off sequence"
+	elif [ "$first" -ge "$second" ]; then
+		bad "k: $first_name at line $first must precede $second_name at line $second"
+	fi
+done
+ok "k. the order is fbcon detach, PCI unbind, unload, load, PCI rebind, fbcon rebind"
+
+# The trap must put the module back first (the device has nothing to bind to
+# otherwise), then the device, then the console.
+trap_body=$(func "$helper" restore_all)
+t_mod=$(lineno '"$MODPROBE" sm750hdmidrm' "$trap_body")
+t_dev=$(lineno 'write_dev bind' "$trap_body")
+t_con=$(lineno 'write_bind "$TARGET" 1' "$trap_body")
+if [ -z "$t_mod" ] || [ -z "$t_dev" ] || [ -z "$t_con" ]; then
+	bad "k: the restore must reload the module, re-bind the device and re-bind the console"
+elif [ "$t_mod" -ge "$t_dev" ] || [ "$t_dev" -ge "$t_con" ]; then
+	bad "k: the restore order must be module ($t_mod), device ($t_dev), console ($t_con)"
+fi
+has "$trap_body" 'mod_down' "k: the restore must reload a module this run unloaded"
+has "$trap_body" 'dev_unbound' "k: the restore must re-bind a device this run unbound"
+ok "k. the trap restores module, then device, then console, and never on success"
 
 [ "$fail" -eq 0 ] || exit 1
 
@@ -194,7 +251,7 @@ plant_never_restore() { # fbcon left detached after a failed unload
 import sys
 p = sys.argv[1]
 s = open(p).read()
-old = "trap 'rc=$?; if [ \"$rc\" -ne 0 ]; then restore_console; fi; exit $rc' EXIT"
+old = "trap 'rc=$?; if [ \"$rc\" -ne 0 ]; then restore_all; fi; exit $rc' EXIT"
 new = "trap 'rc=$?; exit $rc' EXIT"
 assert s.count(old) == 1, s.count(old)
 open(p, 'w').write(s.replace(old, new))
@@ -248,6 +305,65 @@ assert s.count(old) == 1, s.count(old)
 open(p, 'w').write(s.replace(old, new))
 MUT
 }
+plant_pci_unbind_dropped() { # the A51 step removed, so the refcount never drops
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '''write_dev unbind || {
+\techo "$PROG: could not unbind $BDF; $DRIVER_ATTR still resolves to $(readlink -f "$DRIVER_ATTR" 2>/dev/null || echo '?')" >&2
+\texit 3
+}
+'''
+assert s.count(old) == 1, s.count(old)
+open(p, 'w').write(s.replace(old, ''))
+MUT
+}
+plant_pci_rebind_dropped() { # the device left unbound after the load
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '''if [ "$(readlink -f "$DRIVER_ATTR" 2>/dev/null || echo none)" != "$DRVDIR" ]; then
+\techo "$PROG: the driver core did not re-probe $BDF; binding it explicitly"
+\twrite_dev bind || {
+\t\techo "$PROG: could not bind $BDF to $(basename "$DRVDIR"); the device has no driver" >&2
+\t\texit 3
+\t}
+fi
+'''
+assert s.count(old) == 1, s.count(old)
+open(p, 'w').write(s.replace(old, ':\n'))
+MUT
+}
+plant_refcount_not_reported() { # the operator never sees the number that matters
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = 'echo "$PROG: device unbound, refcnt after the unbind: $rc_after"\n'
+assert s.count(old) == 1, s.count(old)
+open(p, 'w').write(s.replace(old, ''))
+MUT
+}
+plant_trap_restores_fbcon_only() { # the device stays unbound after a failure
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '''\tif [ "$dev_unbound" -eq 1 ] && [ -n "$DRVDIR" ]; then
+\t\tif write_dev bind; then
+\t\t\tdev_unbound=0
+\t\t\techo "$PROG: $BDF re-bound to $(basename "$DRVDIR")" >&2
+\t\telse
+\t\t\techo "$PROG: FAILED to re-bind $BDF; write it to $DRVDIR/bind by hand" >&2
+\t\tfi
+\tfi
+'''
+assert s.count(old) == 1, s.count(old)
+open(p, 'w').write(s.replace(old, ''))
+MUT
+}
 
 control() {
 	local name=$1
@@ -271,6 +387,10 @@ control hardcoded-vtcon plant_hardcoded_vtcon
 control modprobe-order-reversed plant_modprobe_order_reversed
 control version-readback-removed plant_version_readback_removed
 control holder-check-dropped plant_holder_check_dropped
+control pci-unbind-dropped plant_pci_unbind_dropped
+control pci-rebind-dropped plant_pci_rebind_dropped
+control refcount-not-reported plant_refcount_not_reported
+control trap-restores-fbcon-only plant_trap_restores_fbcon_only
 
 # The pristine copy must still pass, otherwise the controls prove nothing.
 cp "$helper" "$scratch/pristine.sh"
@@ -280,7 +400,7 @@ fi
 printf 'negative control pristine: accepted\n'
 
 [ "$fail" -eq 0 ] || exit 1
-controls=5
+controls=9
 if [ "$self_test" -eq 1 ]; then
 	printf 'VT helper checks passed (%s assertions, %s planted controls, self-test)\n' "$assertions" "$controls"
 else

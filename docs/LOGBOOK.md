@@ -3754,3 +3754,57 @@ The body of the entry and its measurements are unaffected; only the header time
 is wrong. The entry is left in place unedited, as this file is append-only.
 
 Evidence: `date -u +%Y-%m-%dT%H:%MZ` and `grep -n '^### 2026-11-26T' docs/LOGBOOK.md`.
+
+### 2026-11-26T07:04Z | orchestrator | T61 and A51: the vtconsole detach was not enough
+
+The installed `sm750-vt` ran for the first time and failed. It detached fbcon
+(`fbcon detached, bind=0`) and `modprobe -r sm750hdmidrm` was still refused with
+`modprobe: FATAL: Module sm750hdmidrm is in use.`, so the helper restored the
+console and exited 1. Measured state: `/sys/module/sm750hdmidrm/refcnt` is 1
+with an empty `holders/`, `/proc/modules` shows `sm750hdmidrm 200704 1 - Live`,
+a `/proc/*/fd` scan finds no userspace holder of the card (inode `9:297`), and
+dmesg has `sm750hdmidrm 0000:01:00.0: [drm] fb0: sm750hdmidrmdrm frame buffer
+device` with the two console switches that follow it. The conclusion, recorded
+as defect A51 in `docs/DEFECTS.md`: writing `0` to the vtconsole `bind` removes
+the console binding but not the reference that the registered framebuffer
+holds, so the reference survives and the unload stays blocked.
+
+`tools/sm750-vt.sh` now writes the BDF to
+`/sys/bus/pci/drivers/sm750hdmidrm/unbind` between the console detach and the
+unload, which runs the driver remove path and unregisters the DRM device with
+its fbdev client; it prints the refcount before any change and again right after
+the unbind, fails with the holders directory in the message when that number is
+still non-zero instead of leaking a bare `modprobe` error, re-binds the device
+after the load and reads `/sys/bus/pci/devices/0000:01:00.0/driver` back, and
+its single EXIT trap now restores the module, then the device, then the console
+behind a `FINISHED` guard. The helper is 411 lines, 15015 bytes, sha256
+`ebcece0675240834e0fab97528be1bbfc8b62ba3f5b2d24847223aeda1f14916`.
+
+`tests/check-vt-helper.sh` grew from 10 assertions and 5 planted controls to 12
+and 9, with four new controls for the PCI step (`pci-unbind-dropped`,
+`pci-rebind-dropped`, `refcount-not-reported`, `trap-restores-fbcon-only`), and
+it checks the six calls in the order detach, unbind, unload, load, rebind,
+console inside the `off` body and the restore order module then device then
+console. No new allowlist line is needed: the helper executes as root and does
+the write itself, so the two existing `off` and `on` grants remain exhaustive.
+
+Docs updated: `docs/DEFECTS.md` (new A51 row and detail, A50 status amended to
+point at it), `docs/TEST-STRATEGY.md` (S24 row and detail at 12 assertions and
+9 controls), `docs/ROOT-ACTIONS.md` section 3.12 (new sizes, the installed body
+is the old one and must be refreshed, the refresh command is unchanged),
+`docs/DELIVERABLES.md` and `README.md` (the two helper rows and the gate row),
+plan decision 87, and `docs/evidence/runtime/41-vt-hot-reload.txt` section 7,
+which records the failed attempt verbatim.
+
+Not run, deliberately: the helper itself, any sysfs write, `modprobe`, `sudo`,
+and any process owned by user `duka`. The reload remains NOT YET OBSERVED at
+either version of the helper; the owner must install the refreshed body first.
+The driver version stays 0.6.7.
+
+Evidence: `sh -n tools/sm750-vt.sh` and `bash -n tests/check-vt-helper.sh` exit
+0; `./tests/check-vt-helper.sh` prints `VT helper checks passed (12 assertions,
+9 planted controls)` and its `--self-test` prints the same line with
+`, self-test`, with every control rejected; `./tests/check-scratch-policy.sh`,
+`./tests/check-drm-policy.sh`, `./build-package.sh` and
+`./tests/audit-release.sh` all exit 0; `git diff --check` is clean and
+`grep -cP '[^\x00-\x7F]'` is 0 on every touched file.

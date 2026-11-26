@@ -7,7 +7,8 @@ deneb, Fedora 43, kernel 7.3.4-100.fc43.x86_64. Everything in sections 1 to 5
 is READ-ONLY measurement: no sysfs write, no modprobe, no sudo, no compositor.
 Section 6 states what has NOT been observed and why.
 
-Defect: A50 in docs/DEFECTS.md.
+Defects: A50 and A51 in docs/DEFECTS.md. Section 7 records the first live
+attempt, which failed and is A51.
 Helper: tools/sm750-vt.sh, installed as /usr/local/sbin/sm750-vt.
 Gate: tests/check-vt-helper.sh (static only).
 
@@ -217,14 +218,25 @@ The gate is static by design: it reads the script text and parses it with
 `sh -n`. It never writes sysfs, never calls modprobe and needs no root, so it
 can run inside `make check`.
 
+The transcript above is the gate as it stood before the first live attempt, so
+it says ten assertions and five controls. After that attempt the gate reads
+twelve assertions and nine controls, and the control list gains
+`pci-unbind-dropped`, `pci-rebind-dropped`, `refcount-not-reported` and
+`trap-restores-fbcon-only`; section 7 records why. The capture is left as it
+was taken rather than rewritten.
+
 --------------------------------------------------------------------------------
 6. NOT YET OBSERVED
 --------------------------------------------------------------------------------
 
-The reload itself has NOT been executed, and the helper is NOT installed:
+The reload itself has NOT been executed. As written, this section described a
+helper that was not installed; the installed copy is now the OLD body from
+section 4, which section 7 shows cannot work. The corrected body has to be
+installed before attempt 2:
 
-  * `/usr/local/sbin/sm750-vt` does not exist on the host (measurement in
-    section 5), so there is nothing to run yet.
+  * At the time of writing this section `/usr/local/sbin/sm750-vt` did not exist
+    on the host (measurement in section 5). It was installed afterwards and run
+    once; that run is section 7 and it failed.
   * The two allowlist lines of section 5 are the host owner's action. No agent
     holds a root credential on this host and the sudoers file is 0440 root:root.
   * Unbinding fbcon from a remote session is a console-visibility risk that
@@ -242,3 +254,71 @@ expected value is FF25FF6111B7C6D174A72F8), `cat
 those lines exist, the claim of this file is limited to: the blocker is
 measured, the mechanism is identified from readable sysfs, the helper that
 performs it is written and statically gated, and it has not run.
+
+--------------------------------------------------------------------------------
+7. The first live attempt, and what it changed (defect A51)
+--------------------------------------------------------------------------------
+
+The helper was installed on the host and run by the owner through the existing
+allowlist lines. The reload is STILL NOT YET OBSERVED: attempt 1 failed after
+detaching the console, restored everything, and left the machine unchanged.
+Verbatim output of `sm750-vt off`:
+
+```
+sm750-vt: target /sys/class/vtconsole/vtcon1 (basis: sole framebuffer vtconsole on the host, with the sole sm750hdmidrm card (card0, 0000:01:00.0); not by a hardcoded index)
+sm750-vt: detaching fbcon; there will be no text console until the reload ends
+sm750-vt: fbcon detached, bind=0
+modprobe: FATAL: Module sm750hdmidrm is in use.
+sm750-vt: fbcon re-bound to /sys/class/vtconsole/vtcon1 (bind=1)
+sm750-vt: modprobe -r sm750hdmidrm failed; the console was restored and nothing changed
+rc=1
+```
+
+What was measured right after, all read-only:
+
+  * `cat /sys/module/sm750hdmidrm/refcnt` = 1, and `ls -A
+    /sys/module/sm750hdmidrm/holders/` prints nothing: the holder is not a
+    module.
+  * `grep sm750hdmidrm /proc/modules` = `sm750hdmidrm 200704 1 - Live ... (OE)`.
+    The dependent lines `drm_vram_helper ... 1 sm750hdmidrm` and
+    `drm_ttm_helper ... 3 nvidia_drm,sm750hdmidrm,drm_vram_helper` are ordinary
+    dependencies.
+  * No userspace holder: the card node `/dev/dri/card0` is device inode 9:297
+    (`/dev/dri/renderD128` is 9:296) and a scan of `/proc/[0-9]*/fd` for that
+    inode finds nothing.
+  * `dmesg` carries `sm750hdmidrm 0000:01:00.0: [drm] fb0: sm750hdmidrmdrm frame
+    buffer device`, and each failed attempt logged `Console: switching to
+    colour VGA+ 80x25` followed by `Console: switching to colour frame buffer
+    device 128x48`.
+  * `/sys/class/vtconsole/vtcon1/name` is `(M) frame buffer device` and
+    `vtcon1/bind` reads 1 again after the restore; `/sys/class/graphics/`
+    contains only `fbcon`, so there is no `fb0` class device to unregister.
+
+Conclusion: `vtcon*/bind` 0 detaches the console from the framebuffer but does
+not release the reference the registered framebuffer holds on the module. The
+reference is dropped by removing the device: writing the BDF to
+`/sys/bus/pci/drivers/sm750hdmidrm/unbind` runs the driver's remove path, which
+unregisters the DRM device and the fbdev client registered by
+`drm_client_setup` (`src/sm750_drm.c:5266`, after `drm_dev_register` at
+`:5262`).
+
+What changed in the helper as a result (defect A51, tools/sm750-vt.sh):
+
+  * `off` writes the BDF to `/sys/bus/pci/drivers/sm750hdmidrm/unbind` after the
+    console detach and before `modprobe -r`, and verifies the device's driver
+    link no longer resolves; a bind is verified by that link resolving back.
+  * The module refcount is printed before anything is touched and again right
+    after the unbind; a refcount that is still non-zero fails the run with that
+    number instead of a bare modprobe error.
+  * After the load the device is bound again if the driver core did not
+    re-probe it, and the console is re-bound only after that read-back.
+  * The single EXIT trap now restores module, then device, then console, and is
+    disarmed by `FINISHED=1` so a successful run never undoes itself.
+  * The driver directory is a fixed path rather than a `readlink` of the device
+    link, because the module owns it and the link disappears with the unload.
+
+Nothing privileged was performed to write this section: no sysfs write, no
+modprobe, no sudo, no compositor. Attempt 2 has not run either, because it needs
+the refreshed helper installed by the owner. The `NOT YET OBSERVED` list of
+section 6 therefore still stands in full, with one item now measured rather
+than assumed: the console detach alone is not sufficient.
