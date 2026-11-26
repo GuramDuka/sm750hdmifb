@@ -8,7 +8,9 @@ is READ-ONLY measurement: no sysfs write, no modprobe, no sudo, no compositor.
 Section 6 states what has NOT been observed and why.
 
 Defects: A50 and A51 in docs/DEFECTS.md. Section 7 records the first live
-attempt, which failed and is A51.
+attempt, which failed and is A51. Section 8 records the holder-scan name-glob
+bug found in the helper afterwards; it is not a defect entity of its own, since
+the separate investigation of the reference count owns that numbering.
 Helper: tools/sm750-vt.sh, installed as /usr/local/sbin/sm750-vt.
 Gate: tests/check-vt-helper.sh (static only).
 
@@ -219,11 +221,11 @@ The gate is static by design: it reads the script text and parses it with
 can run inside `make check`.
 
 The transcript above is the gate as it stood before the first live attempt, so
-it says ten assertions and five controls. After that attempt the gate reads
-twelve assertions and nine controls, and the control list gains
-`pci-unbind-dropped`, `pci-rebind-dropped`, `refcount-not-reported` and
-`trap-restores-fbcon-only`; section 7 records why. The capture is left as it
-was taken rather than rewritten.
+it says ten assertions and five controls. After that attempt the gate grew the
+A51 controls `pci-unbind-dropped`, `pci-rebind-dropped`, `refcount-not-reported`
+and `trap-restores-fbcon-only` (section 7), and after the holder-scan defect the
+gate reads thirteen assertions and ten controls with `holder-scan-name-glob`
+added (section 8). The capture is left as it was taken rather than rewritten.
 
 --------------------------------------------------------------------------------
 6. NOT YET OBSERVED
@@ -322,3 +324,190 @@ modprobe, no sudo, no compositor. Attempt 2 has not run either, because it needs
 the refreshed helper installed by the owner. The `NOT YET OBSERVED` list of
 section 6 therefore still stands in full, with one item now measured rather
 than assumed: the console detach alone is not sufficient.
+
+--------------------------------------------------------------------------------
+8. The holder scan matched a node name, and why that was wrong
+--------------------------------------------------------------------------------
+
+Found 2026-11-26 while reading the helper, before any second live attempt.
+Nothing privileged was performed to confirm it: no sysfs write, no modprobe, no
+sudo, no compositor. The bug is in `holders()`, at what was line 173 of
+`tools/sm750-vt.sh`:
+
+```
+case $t in *card0*) ;;
+*) continue ;;
+esac
+```
+
+`$t` is the readlink target of an entry under `/proc/<pid>/fd`. The scan
+therefore recognised a holder only while the DRM node happened to be named
+`card0`. The name is not stable across a probe: the measured by-path links on
+this host read
+
+```
+$ readlink /dev/dri/by-path/pci-0000:01:00.0-card
+../card4
+$ readlink /dev/dri/by-path/pci-0000:01:00.0-render
+../renderD132
+$ stat -L -c '%d:%i' /dev/dri/by-path/pci-0000:01:00.0-card
+9:1582
+$ stat -L -c '%d:%i' /dev/dri/by-path/pci-0000:01:00.0-render
+9:1581
+```
+
+Section 2 recorded the same node as `/dev/dri/card0` with inode `9 297`, so
+both the name and the inode were re-issued when the module was re-probed. A
+name match fails silently in exactly the case that matters: when the module is
+held. The observed consequence would be the refusal message of step 3 of
+section 4 printing an EMPTY holder list, which states that nothing holds the
+card while the refcount says otherwise, and hides the process an operator needs
+to see.
+
+Measured, read-only, as user `coder` (which holds ACL `rw` on the card node, so
+no root is needed):
+
+```
+$ sh tools/sm750-vt.sh show
+...
+card:         /dev/dri/by-path/pci-0000:01:00.0-card -> /dev/dri/card4 inode 9:1582
+render:       /dev/dri/by-path/pci-0000:01:00.0-render -> /dev/dri/renderD132 inode 9:1581
+holders:      0 userspace processes hold the card
+
+$ ( exec 3</dev/dri/by-path/pci-0000:01:00.0-card; sleep 30 ) &
+$ sh tools/sm750-vt.sh show | tail -2
+holders:      1
+  969720:sleep card4
+
+$ ( exec 3</dev/dri/by-path/pci-0000:01:00.0-render; sleep 30 ) &
+$ sh tools/sm750-vt.sh show | tail -2
+holders:      1
+  974959:sleep renderD132
+```
+
+The pid of the synthetic reader differs per run (a later repeat measured
+`1031518:sleep card4`); it is the sleeping subshell, not the shell that started
+it.
+
+The old glob over the same fd table with pid 969720 alive printed nothing,
+which is the false negative reproduced directly.
+
+The fix, in the tree: `node_inode()` resolves a path with `stat -L -c '%d:%i'`,
+`card_inode()` and `render_inode()` resolve the two by-path links (the render
+link may legitimately be absent), and `holders()` compares each fd target's
+`dev:inode` against both, printing `pid:comm node` with the node name used only
+for display. `show` gained a `render:` line and now prints the card and render
+nodes the by-path links resolve to, because those names are diagnostic and
+change per probe. The basis string no longer names `card0`.
+
+Gate: `tests/check-vt-helper.sh` gained section l (the by-path links, the
+`stat -L -c` form, the identity comparison, the printed node name, and a check
+that no `*card[N]*` glob survives outside a comment) and the planted control
+`holder-scan-name-glob`, which rewrites the comparison back into the old glob
+and is rejected with `FAIL: l: the fd scan must compare node identity, not a
+node name`. The gate now reads thirteen assertions and ten planted controls.
+
+NOT YET OBSERVED: this section is a read-only measurement of the helper and of
+sysfs. The reload itself has still not succeeded, and the refusal path has not
+been exercised on the host against a real holder; pid 969720 above is a
+synthetic reader started for the measurement, not the process that actually
+holds the module reference.
+
+9. The second live attempt: the reference survives a full device unbind (defect A52)
+
+Section 7 ended with a sequence that detaches the console and then unbinds the
+PCI device, and with the assumption that the unbind releases the reference the
+framebuffer holds. The owner installed that helper
+(`/usr/local/sbin/sm750-vt`, 411 lines, sha256
+`ebcece0675240834e0fab97528be1bbfc8b62ba3f5b2d24847223aeda1f14916`, matching
+the tree) and ran it. The sequence ran to completion and the unload was still
+refused:
+
+```
+sm750-vt: refcnt before any change: 1
+sm750-vt: fbcon detached, bind=0
+sm750-vt: unbinding 0000:01:00.0 from sm750hdmidrm to release the framebuffer
+sm750-vt: device unbound, refcnt after the unbind: 1
+sm750-vt: the module refcount is still 1 after unbinding the device, so
+          something other than the framebuffer holds it (holders directory: );
+          modprobe -r cannot succeed
+sm750-vt: 0000:01:00.0 re-bound to sm750hdmidrm
+sm750-vt: fbcon re-bound to /sys/class/vtconsole/vtcon1 (bind=1)
+rc=1
+```
+
+The restore path did its job: the device was bound again, the console was bound
+again, and the module stayed at 0.6.5 rather than being left half-removed. What
+that run and the measurements around it establish:
+
+`refcnt` is 1 before the detach, after the detach, and after the unbind.
+
+```
+$ cat /sys/module/sm750hdmidrm/refcnt
+1
+$ ls -A /sys/module/sm750hdmidrm/holders/
+$ grep '^sm750hdmidrm ' /proc/modules
+sm750hdmidrm 200704 1 - Live 0xffffffffc0a3d000 (OE)
+```
+
+No userspace holder exists. A whole-host scan of `/proc/[0-9]*/fd` finds no
+process holding any `/dev/dri/*` node, and none holding the SM750 card or render
+node by inode, so the reference is not an open file description.
+
+`1` is a real reference on this host, not a counting artefact. Every
+`/sys/module/*/refcnt` was read: 34 modules read `0`, 36 read `1`, and the ones
+at `1` are modules with something genuinely attached (`binfmt_misc`,
+`drm_vram_helper`, `i2c_algo_bit`, `i2c_smbus`). The `nvidia` family is not a
+counter-example, because its counts come from module-to-module dependencies
+listed in `holders/` (`nvidia` 427, `nvidia_drm` 60, `nvidia_modeset` 15), and
+this module has none.
+
+The module itself takes no reference and registers nothing else. `grep` over
+`src/*.c src/*.h` finds no `try_module_get`, `module_get` or `module_put`, and
+no `i2c_add_driver`, `i2c_register_driver`, `i2c_add_adapter`,
+`i2c_new_client`, `platform_driver_register`, `auxiliary_driver`,
+`module_i2c_driver`, `module_platform_driver`, `drm_panel_init`, `serio` or
+`input_register`. `module_pci_driver(sm750_pci_driver)` at `src/sm750_drm.c:5375`
+is its only registration; the SiI9022 is driven by bit-banging MMIO
+(`sm750_sw_i2c_init` at `src/sii902x.c:771`), not through an i2c client, and
+`/sys/bus/i2c/devices` holds only other drivers' entries.
+
+The detach is real. When the trap rebound the device, the kernel re-probed it
+completely:
+
+```
+[13925.142750] Console: switching to colour VGA+ 80x25
+[13925.221212] sm750hdmidrm 0000:01:00.0: DMA1 IRQ was not delivered; reverting to completion polling
+[13925.392261] [drm] Initialized sm750hdmidrm 0.6.5 for 0000:01:00.0 on minor 4
+[13928.418802] Console: switching to colour frame buffer device 128x48
+[13928.418821] sm750hdmidrm 0000:01:00.0: [drm] fb0: sm750hdmidrmdrm frame buffer device
+[13928.918794] sm750hdmidrm 0000:01:00.0: full-frame backbuffer staging enabled (1572864 bytes per buffer)
+[13928.962343] sm750hdmidrm 0000:01:00.0: painted a test card: no client has produced a frame (test_pattern=auto)
+```
+
+The DRM minor advanced across those cycles - it was `0` at boot and is `4` now,
+with three `on minor 4` lines in the boot log - which only happens when the DRM
+device is registered again after being torn down. So the unbind is not a silent
+no-op, and the missing `drm_dev_unregister()` in `sm750_pci_remove`
+(`src/sm750_drm.c:5300-5313`) is not the cause: the device does come apart.
+
+The remove path, for the record, calls `drm_kms_helper_poll_fini`,
+`drm_dev_unplug`, `sm750_test_pattern_cancel`, `drm_atomic_helper_shutdown`,
+`sm750_vblank_timer_stop` and `sm750_sii902x_shutdown`, and neither
+`drm_dev_unregister` nor `drm_dev_put`. The latter would be wrong: the device
+comes from `devm_drm_dev_alloc` at `src/sm750_drm.c:5050` and devres owns the
+put (`include/drm/drm_drv.h:460-461`).
+
+What is not known: which kernel object holds the reference. A structure in the
+DRM core that outlives the driver detach on this kernel series is the shape that
+fits, but nothing measured here identifies one. `drm_dev_unregister()` was
+considered as a fix and rejected, because the installed headers give it no
+documented reference semantics and the change could not be measured on this
+host; a fix that cannot be measured is not a fix. The defect is recorded as open
+in `docs/DEFECTS.md` (A52) with no code change, and the helper keeps printing
+the refcount so the failure is reported rather than guessed at.
+
+NOT YET OBSERVED: any successful hot reload. The working path to a newly built
+module on this host is still a reboot, which loads the module DKMS already built
+(`/lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz`, 71804 bytes,
+`modinfo -F version` 0.6.7, srcversion `FF25FF6111B7C6D174A72F8`).

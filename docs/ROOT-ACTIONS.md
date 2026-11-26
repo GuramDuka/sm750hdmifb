@@ -1196,12 +1196,15 @@ in `docs/DEFECTS.md`; the five log directories are under
 
 ### 3.12 `/usr/local/sbin/sm750-vt` (hot module reload without a reboot; allowlist present, installed body is the OLD one and must be refreshed)
 
-Source `tools/sm750-vt.sh`: 411 lines, 15015 bytes, sha256
-`ebcece0675240834e0fab97528be1bbfc8b62ba3f5b2d24847223aeda1f14916` as measured
-2026-11-26; static gate `tests/check-vt-helper.sh` (407 lines, sha256
-`055f520b8cc40982498f236cc52ed6e10c506d436300716afeada67545e87009`, part of
-`make check` through `tests/check-drm-policy.sh`, 12 assertions and 9 planted
-controls).
+Source `tools/sm750-vt.sh`: 448 lines, 16688 bytes, sha256
+`26f9fb7105ece6cf7a2d81d32d32b9f7a957e5d4d478e7940f8f9ad1fc0404f9` as measured
+2026-11-26; static gate `tests/check-vt-helper.sh` (450 lines, sha256
+`17a4390fc46614c061ba362819909b900bf8148cb7b2755cf702f0a6bd668efb`, part of
+`make check` through `tests/check-drm-policy.sh`, 13 assertions and 10 planted
+controls). The holder scan matches the card and render nodes on their
+`dev:inode` identity through the by-path links, never on a node name: the node
+is `card0` before a reload and `card4` after it on this host, so a name glob
+reported no holder while the module was really held.
 
 **Installed copy must be refreshed with**, from the repository root. The two
 allowlist lines below are already present in `sudo -n -l`; the body that is
@@ -1295,19 +1298,25 @@ vtconsole:    /sys/class/vtconsole
   vtcon0       bind=0 name=(S) VGA+
   vtcon1       bind=1 name=(M) frame buffer device
 target:       /sys/class/vtconsole/vtcon1
-basis:        sole framebuffer vtconsole on the host, with the sole sm750hdmidrm card (card0, 0000:01:00.0); not by a hardcoded index
+basis:        sole framebuffer vtconsole on the host, with the sole sm750hdmidrm card (0000:01:00.0); not by a hardcoded index or a node name
   bind now:   1
 driver dir:   /sys/bus/pci/drivers/sm750hdmidrm
 module:       version=0.6.5 srcversion=76EE5488E11276C6D8610B7 refcnt=1
 active tty:   tty1
-card:         /dev/dri/by-path/pci-0000:01:00.0-card -> /dev/dri/card0 inode 9:297
+card:         /dev/dri/by-path/pci-0000:01:00.0-card -> /dev/dri/card4 inode 9:1582
+render:       /dev/dri/by-path/pci-0000:01:00.0-render -> /dev/dri/renderD132 inode 9:1581
 holders:      0 userspace processes hold the card
 ```
 
+The `card:` and `render:` lines are diagnostic, not decoration: the node names
+change on every probe (`card0` before a reload, `card4` after it, and
+`renderD131` / `renderD132` likewise), so the helper prints what the by-path
+links currently resolve to together with the `dev:inode` pair it scans for.
+
 Guard rails, in the order `off` applies them: it refuses when fbcon is already
 unbound (`run 'sm750-vt on'`), when any process holds the card (it prints
-`pid:comm` per holder instead of letting `modprobe -r` fail with `Module ... is
-in use`), when the driver directory is missing or lacks `bind`/`unbind`, and
+`pid:comm node` per holder, naming which node that process holds, instead of
+letting `modprobe -r` fail with `Module ... is in use`), when the driver directory is missing or lacks `bind`/`unbind`, and
 when the version file does not appear after the load. Every sysfs write - the
 vtconsole `bind`, the PCI `unbind` and the PCI `bind` - is read back before it
 is reported, so no line claims success that sysfs does not confirm. The help

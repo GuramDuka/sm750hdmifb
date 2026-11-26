@@ -233,6 +233,30 @@ has "$trap_body" 'mod_down' "k: the restore must reload a module this run unload
 has "$trap_body" 'dev_unbound' "k: the restore must re-bind a device this run unbound"
 ok "k. the trap restores module, then device, then console, and never on success"
 
+# --- l. the holder scan is pinned to node identity, not to a node name -------
+# The scan globbed `*card0*`, but the DRM node name is not stable: after a
+# reload the SM750 card is card4 and the render node renderD132, so the scan
+# reported zero holders while the module refcount was 1 and the refusal printed
+# an empty holder list - a false statement that hid the real holder.
+has "$body" '/dev/dri/by-path/pci-0000:01:00.0-card' \
+	"l: the card must be addressed through its stable by-path link"
+has "$body" '/dev/dri/by-path/pci-0000:01:00.0-render' \
+	"l: the render node must be addressed through its by-path link too"
+has "$(func "$helper" node_inode)" 'stat -L -c' \
+	"l: a node must be resolved to its dev:inode pair, not compared by name"
+has "$(func "$helper" holders)" 'node_inode' \
+	"l: the fd scan must compare node identity, not a node name"
+has "$(func "$helper" holders)" 'basename "$t"' \
+	"l: the matched node path must be printed so the operator sees which node"
+has "$body" 'holder scan pinned to the card identity, not to a node name' \
+	"l: the scan must carry the reason it is identity-based"
+# A comment may name card0 as the unstable example; executed text may not glob
+# a node name. Same comment filter as the vtconsole guard in section d.
+if grep -nE '\*card[0-9]+\*' "$helper" | grep -vE ':[[:space:]]*#' >"$scratch/cardglob.hit"; then
+	bad "l: the fd scan must not glob a DRM node name: $(head -n 1 "$scratch/cardglob.hit")"
+fi
+ok "l. the holder scan matches by dev:inode and prints the node it matched"
+
 [ "$fail" -eq 0 ] || exit 1
 
 if [ "$single" -eq 1 ]; then
@@ -364,6 +388,24 @@ assert s.count(old) == 1, s.count(old)
 open(p, 'w').write(s.replace(old, ''))
 MUT
 }
+plant_holder_scan_name_glob() { # the fd scan back on an unstable node name
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '''\t\t\tid=$(node_inode "$t")
+\t\t\t[ -n "$id" ] || continue
+\t\t\t[ "$id" = "$card" ] || [ "$id" = "$rend" ] || continue
+'''
+new = '''\t\t\tcase $t in
+\t\t\t*card0*) ;;
+\t\t\t*) continue ;;
+\t\t\tesac
+'''
+assert s.count(old) == 1, s.count(old)
+open(p, 'w').write(s.replace(old, new))
+MUT
+}
 
 control() {
 	local name=$1
@@ -391,6 +433,7 @@ control pci-unbind-dropped plant_pci_unbind_dropped
 control pci-rebind-dropped plant_pci_rebind_dropped
 control refcount-not-reported plant_refcount_not_reported
 control trap-restores-fbcon-only plant_trap_restores_fbcon_only
+control holder-scan-name-glob plant_holder_scan_name_glob
 
 # The pristine copy must still pass, otherwise the controls prove nothing.
 cp "$helper" "$scratch/pristine.sh"
@@ -400,7 +443,7 @@ fi
 printf 'negative control pristine: accepted\n'
 
 [ "$fail" -eq 0 ] || exit 1
-controls=9
+controls=10
 if [ "$self_test" -eq 1 ]; then
 	printf 'VT helper checks passed (%s assertions, %s planted controls, self-test)\n' "$assertions" "$controls"
 else

@@ -26,7 +26,8 @@
 #   - refuses unless the device is bound to sm750hdmidrm and that driver exposes
 #     writable bind and unbind attributes, so the PCI step cannot fail silently;
 #   - refuses to unload while a userspace process holds the DRM card, naming the
-#     processes instead of printing a modprobe error;
+#     processes instead of printing a modprobe error; the holder scan is pinned
+#     to the card identity, not to a node name (see holders());
 #   - prints the module refcount before and after the unbind, so a reference
 #     that did not go away is reported as such instead of as a modprobe error;
 #   - on every non-zero exit the trap reloads the module if it is down, re-binds
@@ -54,7 +55,11 @@ set -eu
 
 PROG=sm750-vt
 BDF=0000:01:00.0
+# The by-path links are the stable handles for the two DRM nodes: the cardN and
+# renderDN names they point at are re-issued on every probe, so they are read
+# and never assumed.
 CARD=/dev/dri/by-path/pci-0000:01:00.0-card
+RENDER=/dev/dri/by-path/pci-0000:01:00.0-render
 VTCLASS=/sys/class/vtconsole
 DRIVER_ATTR=/sys/bus/pci/devices/$BDF/driver
 # Fixed by driver name, not resolved through the device, so it stays valid
@@ -147,34 +152,63 @@ resolve_target() {
 			echo "$PROG: $BDF is bound to '$driver', not sm750hdmidrm" >&2
 			return 1
 		fi
-		BASIS="sole framebuffer vtconsole on the host, with the sole sm750hdmidrm card (card0, $BDF); not by a hardcoded index"
+		BASIS="sole framebuffer vtconsole on the host, with the sole sm750hdmidrm card ($BDF); not by a hardcoded index or a node name"
 	else
 		BASIS="sole framebuffer vtconsole on the host; $BDF is currently unbound from any driver"
 	fi
 	return 0
 }
 
+# node_inode PATH - the dev:inode pair of a node, empty when it cannot be
+# read. This is the only identity a DRM node has: the cardN and renderDN names
+# are re-issued on every probe (card0 before the reload, card4 after it on this
+# host on 2026-11-26), so a name can never be compared, only resolved.
+node_inode() {
+	stat -L -c '%d:%i' "$1" 2>/dev/null || true
+}
+
 # card_inode - the dev:inode pair that identifies the card node even after a
 # reload re-creates it under a different name.
 card_inode() {
-	stat -L -c '%d:%i' "$CARD" 2>/dev/null || true
+	node_inode "$CARD"
 }
 
-# holders - print "pid:comm" per process whose fd table resolves to the card.
+# render_inode - the same for the render node. Its absence is tolerated: an
+# older module without DRIVER_RENDER has no render node, and the card alone is
+# then the whole set of nodes to scan for.
+render_inode() {
+	[ -e "$RENDER" ] || return 0
+	node_inode "$RENDER"
+}
+
+# holders - print "pid:comm node" per process whose fd table resolves to the
+# SM750 card or render node.
+#
+# Why identity and not a name: this is a
+# holder scan pinned to the card identity, not to a node name; the name is
+# read from the fd link only to print it, never to decide, because card0 is
+# not stable across a driver reload (the holder-scan failure mode - a
+# `*card0*` glob reported zero holders while the module refcount was 1, which
+# hid the real holder behind an empty list).
+#
 # Unreadable /proc entries are skipped silently: this runs as root, where the
-# only such entries are kernel threads that cannot hold a card fd.
+# only such entries are kernel threads that cannot hold a DRM fd.
 holders() {
-	ino=$(card_inode)
-	[ -n "$ino" ] || return 0
+	card=$(card_inode)
+	rend=$(render_inode)
+	[ -n "$card$rend" ] || return 0
 	for p in /proc/[0-9]*; do
 		for f in "$p"/fd/*; do
 			t=$(readlink "$f" 2>/dev/null) || continue
 			case $t in
-			*card0*)
-				printf '%s:%s\n' "${p#/proc/}" "$(cat "$p/comm" 2>/dev/null || echo '?')"
-				break
-				;;
+			/dev/*) ;;
+			*) continue ;;
 			esac
+			id=$(node_inode "$t")
+			[ -n "$id" ] || continue
+			[ "$id" = "$card" ] || [ "$id" = "$rend" ] || continue
+			printf '%s:%s %s\n' "${p#/proc/}" "$(cat "$p/comm" 2>/dev/null || echo '?')" "$(basename "$t")"
+			break
 		done
 	done
 }
@@ -210,11 +244,14 @@ show_state() {
 	printf 'active tty:   %s\n' "$(cat "$TTYACTIVE" 2>/dev/null || echo '?')"
 	printf 'card:         %s -> %s inode %s\n' "$CARD" \
 		"$(readlink -f "$CARD" 2>/dev/null || echo '?')" "$(card_inode)"
+	printf 'render:       %s -> %s inode %s\n' "$RENDER" \
+		"$(readlink -f "$RENDER" 2>/dev/null || echo '?')" \
+		"$(render_inode || printf 'none')"
 	h=$(holders || true)
 	if [ -z "$h" ]; then
 		printf 'holders:      0 userspace processes hold the card\n'
 	else
-		printf 'holders:      %s\n' "$(printf '%s' "$h" | wc -l | tr -d ' ')"
+		printf 'holders:      %s\n' "$(printf '%s\n' "$h" | wc -l | tr -d ' ')"
 		printf '%s\n' "$h" | sed 's/^/  /'
 	fi
 	return 0

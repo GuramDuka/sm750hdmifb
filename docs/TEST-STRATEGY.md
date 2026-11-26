@@ -106,7 +106,7 @@ exports `TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}`), never to `/tmp`.
 | S21 | In-repo `tests/check-render-node.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the render node: both `driver_features` lines in `src/sm750_drm.c` carry `DRIVER_RENDER` on the same line as `DRIVER_MODESET`, no executable line carries `DRIVER_RENDER` without `DRIVER_MODESET` (a render-only device would lose card0 and every mode), and `SM750_DRM_VERSION` agrees with the `readonly version=` line of `build-package.sh`. The live half walks `/sys/class/drm/renderD*`, keeps the node whose `device/driver` basename is `sm750hdmidrm`, and requires the matching `/dev/dri/renderDN` character device and write access for the invoking user; with no such node it prints one `SKIP:` line and still exits 0, which is the state before a 0.6.5 module is loaded | PASS (2026-11-25); seven assertions, six source-level (two `DRIVER_RENDER` lines, no `DRIVER_RENDER` without `DRIVER_MODESET`, the two mode_config funcs structs present and installed, the withdrawn modifier capability, the version agreement) and one live on the render node resolved by driver name, plus five planted defects rejected (`render_dropped`, `render_only`, `version_drift`, `fb_modifiers_dropped`, `fb_modifiers_branched`) in `--self-test`. The modifier assertion is described as S23 |
 | S22 | None (observed by hand; no script, no gate) | Session-level result: a full Plasma 6.7.5 Wayland session on `card0`, recorded as evidence rather than enforced, because the session needs a live seatless remote login, a private bus and a real panel | OBSERVED 2026-11-25: the compositor initializes, plasmashell presents, and the panel reads a non-zero scanout window; input and screencast are NOT measured |
 | S23 | In-repo `tests/check-render-node.sh`, extended (via `make check`, called by `tests/check-drm-policy.sh`) | Device-level check that the driver withdraws the framebuffer-modifier capability: both `drm_mode_config_funcs` structs (`sm750_mode_config_funcs`, `sm750_shadow_mode_config_funcs`) must exist and be installed, `drm->mode_config.fb_modifiers_not_supported = 1;` must be present, and it must sit on the line immediately after the two-line `drm->mode_config.funcs` ternary so a guard cannot withdraw the capability for one device only. Reasoning: the plane advertises `DRM_FORMAT_MOD_LINEAR` alone, KWin 6.7.5 submitted a modifier it could not match and AddFB2 failed with EINVAL, so core must report `DRM_CAP_ADDFB2_MODIFIERS=0` and every client must take the modifiers-free path | PASS (2026-11-25); seven assertions (six source-level, one live) and five planted defects rejected (`render_dropped`, `render_only`, `version_drift`, `fb_modifiers_dropped`, `fb_modifiers_branched`) in `--self-test` |
-| S24 | In-repo `tests/check-vt-helper.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the root-only helper `tools/sm750-vt.sh`, which hot-reloads `sm750hdmidrm` by unbinding fbcon from the SM750 vtconsole (A50): POSIX `sh` that passes `sh -n`, the three modes `show`, `off`, `on` in the usage and in the dispatcher with `usage` exiting 2 for anything else, a root check that still lets `show` run unprivileged, the target vtconsole resolved by globbing `/sys/class/vtconsole/vtcon*` and confirmed against `basename $(readlink -f /sys/bus/pci/devices/0000:01:00.0/driver)` = `sm750hdmidrm` with no executed `vtconN` literal, zero and multiple candidates both refused, `write_bind "$TARGET" 0` to detach and `write_bind "$TARGET" 1` to restore with every write read back from the `bind` file, one EXIT trap that restores the module, the device and then the console on a non-zero exit, disarmed by `FINISHED=1` so a successful run does not undo itself, with a restore function that ends in an explicit `return`, the userspace holder refusal gating the unload, the PCI unbind step that releases the framebuffer reference (A51) between the console detach and the unload with the refcount printed before it and again after it, the device re-bound and read back after the load, `modprobe -r` before `modprobe` by line order, and the loaded version read back from `/sys/module/sm750hdmidrm/version` after the load with a missing file failing as `is missing after the load`. Static only: it writes no sysfs, calls no modprobe, needs no root and never runs the helper | PASS (2026-11-26); twelve assertions and nine planted defects rejected (`never-restore`, `hardcoded-vtcon`, `modprobe-order-reversed`, `version-readback-removed`, `holder-check-dropped`, `pci-unbind-dropped`, `pci-rebind-dropped`, `refcount-not-reported`, `trap-restores-fbcon-only`) plus a pristine control accepted, in `--self-test`; the reload itself is NOT YET OBSERVED |
+| S24 | In-repo `tests/check-vt-helper.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the root-only helper `tools/sm750-vt.sh`, which hot-reloads `sm750hdmidrm` by unbinding fbcon from the SM750 vtconsole (A50): POSIX `sh` that passes `sh -n`, the three modes `show`, `off`, `on` in the usage and in the dispatcher with `usage` exiting 2 for anything else, a root check that still lets `show` run unprivileged, the target vtconsole resolved by globbing `/sys/class/vtconsole/vtcon*` and confirmed against `basename $(readlink -f /sys/bus/pci/devices/0000:01:00.0/driver)` = `sm750hdmidrm` with no executed `vtconN` literal, zero and multiple candidates both refused, `write_bind "$TARGET" 0` to detach and `write_bind "$TARGET" 1` to restore with every write read back from the `bind` file, one EXIT trap that restores the module, the device and then the console on a non-zero exit, disarmed by `FINISHED=1` so a successful run does not undo itself, with a restore function that ends in an explicit `return`, the userspace holder refusal gating the unload with the scan matched on node identity - the by-path card and render links resolved to a `dev:inode` pair and compared against each fd target - rather than on a node name, since the card is not `card0` after a reload, the PCI unbind step that releases the framebuffer reference (A51) between the console detach and the unload with the refcount printed before it and again after it, the device re-bound and read back after the load, `modprobe -r` before `modprobe` by line order, and the loaded version read back from `/sys/module/sm750hdmidrm/version` after the load with a missing file failing as `is missing after the load`. Static only: it writes no sysfs, calls no modprobe, needs no root and never runs the helper | PASS (2026-11-26); thirteen assertions and ten planted defects rejected (`never-restore`, `hardcoded-vtcon`, `modprobe-order-reversed`, `version-readback-removed`, `holder-check-dropped`, `pci-unbind-dropped`, `pci-rebind-dropped`, `refcount-not-reported`, `trap-restores-fbcon-only`, `holder-scan-name-glob`) plus a pristine control accepted, in `--self-test`; the reload itself is NOT YET OBSERVED |
 ### S1: in-repo `make check`
 
 - Package/version: the repository itself at 0.5.9; no external package. The
@@ -708,7 +708,7 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   sysfs. `--self-test` runs the planted controls; plain invocation runs the
   assertions and the controls the way the other gates do. Scratch trees go
   under `${TMPDIR:-/mega/tmp/sm750/tmp}`.
-- Holds, in twelve printed sections: (a) the helper exists, starts with
+- Holds, in thirteen printed sections: (a) the helper exists, starts with
   `#!/bin/sh` and passes `sh -n`; (b) `show`, `off` and `on` are the only modes,
   `*) usage ;;` catches the rest and `usage` exits 2; (c) `[ "$(id -u)" -eq 0 ]`
   exists and the refusal names the problem, so an unprivileged `show` stays
@@ -736,7 +736,14 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   (compared inside the `off` body only, because the restore function
   legitimately repeats two of them), and the restore function itself orders
   module, device, console and is armed by `mod_down` and `dev_unbound`;
-  (j) the section counter.
+  (l) the holder scan is pinned to node identity: the card and render nodes are
+  addressed through `/dev/dri/by-path/pci-0000:01:00.0-card` and
+  `-render`, `node_inode` resolves a path to a `dev:inode` pair with
+  `stat -L -c`, `holders` compares that pair for the card and the render node
+  and prints the matched node name for the operator, the reason string
+  `holder scan pinned to the card identity, not to a node name` is present, and
+  no executed line globs a node name (`*cardN*` in a comment is allowed, which
+  is why the check filters comment-only lines); (j) the section counter.
 - Planted controls: the EXIT trap rewritten to `exit $rc` only, so fbcon is
   left detached after a failed unload (`never-restore`); `TARGET` pinned to
   `/sys/class/vtconsole/vtcon1` before the resolve call (`hardcoded-vtcon`);
@@ -751,10 +758,13 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   the second refcount print deleted, so the operator never sees the number that
   explains a failure (`refcount-not-reported`); and the device restore removed
   from the trap, so a failure leaves the card without a driver
-  (`trap-restores-fbcon-only`). Each mutates a copy under the scratch directory and
-  must exit non-zero with a message naming the defect; the unmutated copy must
-  pass, otherwise the controls prove nothing.
-- Status: PASS 2026-11-26, `VT helper checks passed (12 assertions, 9 planted
+  (`trap-restores-fbcon-only`); and the identity comparison rewritten back into
+  a `*card0*` name glob, so the scan reports no holder while the card is really
+  held (`holder-scan-name-glob`, the holder-scan name-glob failure mode). Each
+  mutates a copy under the scratch directory and must exit non-zero with a
+  message naming the defect; the unmutated copy must pass, otherwise the
+  controls prove nothing.
+- Status: PASS 2026-11-26, `VT helper checks passed (13 assertions, 10 planted
   controls)`; the `--self-test` run prints the same line with `, self-test`.
   The first live run of the installed helper failed and is recorded as defect
   A51: `vtcon*/bind` 0 detaches the console but does not release the framebuffer

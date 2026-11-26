@@ -3808,3 +3808,58 @@ Evidence: `sh -n tools/sm750-vt.sh` and `bash -n tests/check-vt-helper.sh` exit
 `./tests/check-drm-policy.sh`, `./build-package.sh` and
 `./tests/audit-release.sh` all exit 0; `git diff --check` is clean and
 `grep -cP '[^\x00-\x7F]'` is 0 on every touched file.
+
+### 2026-11-26T11:35Z | orchestrator | T62 and A52: the reference is not the framebuffer, and it is not measurable here
+
+The holder scan in the hot-reload helper matched a node name. It looked for
+`*card0*` in every `/proc/[0-9]*/fd` link, and this host renames the DRM node on
+every probe, so the scan reported "0 holders" without looking at the right path
+at all. It now resolves `/dev/dri/by-path/pci-0000:01:00.0-card` and its render
+sibling, compares `stat -L -c '%d:%i'` identity, and prints `pid:comm node` with
+the name used only for display. Proven against a synthetic reader: the fixed
+scan reports `holders: 1` / `1102473:sleep card4` where the old glob printed
+nothing. Gate section l pins it, with the planted control
+`holder-scan-name-glob`, which is rejected with `FAIL: l: the fd scan must
+compare node identity, not a node name`.
+
+The owner installed the helper with the PCI unbind step and ran it. It did
+everything it was written to do and the unload was still refused: `fbcon
+detached, bind=0`, `device unbound, refcnt after the unbind: 1`, then the
+refusal, then the restore of device and console, `rc=1`. So A51's premise is
+false - the module reference is not the framebuffer, and a full device unbind
+does not release it.
+
+Five explanations were tested and each was killed by measurement. That the
+unbind never happened: `dmesg` shows a complete re-probe afterwards
+(`[drm] Initialized sm750hdmidrm 0.6.5 for 0000:01:00.0 on minor 4`,
+`fb0: sm750hdmidrmdrm frame buffer device`) and the DRM minor advanced 0 -> 4
+across cycles. That the missing `drm_dev_unregister()` in the remove path is
+the leak: the device does come apart, and `include/drm/drm_drv.h:460-461` gives
+`devm_drm_dev_alloc` ownership of the put, so adding `drm_dev_put()` would
+double-free. That `refcnt` 1 is itself the anomaly: a census of every
+`/sys/module/*/refcnt` reads 34 at `0` and 36 at `1`, and the `1`s are modules
+with something genuinely attached, so `1` here is a real reference and the
+`nvidia` comparison is invalid because its counts come from dependencies listed
+in `holders/`. That the module pins itself: `grep` finds no `try_module_get`,
+`module_get` or `module_put`, and no i2c, platform, auxiliary, panel, serio or
+input registration, leaving `module_pci_driver(sm750_pci_driver)` at
+`src/sm750_drm.c:5375` as its only one. And that a userspace client holds it: a
+whole-host fd scan finds no process holding any `/dev/dri` node by inode.
+
+A52 is therefore recorded as OPEN with the root cause undetermined, and no code
+is changed. `drm_dev_unregister()` was considered and rejected: the headers give
+it no reference semantics and the change cannot be measured on this host, and a
+fix that cannot be measured is not a fix. The helper keeps printing the
+refcount so the failure is reported rather than guessed at, and the working path
+to a newly built module remains a reboot, which loads the 0.6.7 module DKMS has
+already built.
+
+Evidence: `docs/evidence/runtime/41-vt-hot-reload.txt` section 9. Defect rows
+A52 in `docs/DEFECTS.md`, and A51's root-cause paragraph now says SUPERSEDED by
+A52 instead of asserting a cause the second run disproved. Decision 88 in the
+plan of record. `./tests/check-vt-helper.sh` prints `VT helper checks passed
+(13 assertions, 10 planted controls)` and its `--self-test` rejects every
+control; `./tests/check-scratch-policy.sh`, `./tests/check-drm-policy.sh`,
+`./tests/check-release-version.sh`, `./tests/check-drm-packaging.sh`,
+`./build-package.sh` and `./tests/audit-release.sh` all exit 0; `git diff
+--check` is clean and `grep -cP '[^\x00-\x7F]'` is 0 on every touched file.
