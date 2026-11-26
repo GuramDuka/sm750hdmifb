@@ -1,0 +1,390 @@
+# 43 - Plasma over X11: the server wall, the environment conflict and the clean scratch runs
+
+Measured on 2026-11-26 on the target host, PCI 0000:01:00.0, kernel
+7.3.4-100.fc43.x86_64, module sm750hdmidrm 0.6.7, panel PHL 243V7 over HDMI.
+Sections 2 to 11 ran as the service account `coder` (uid 1005) except where a
+privileged attempt is named, and no privileged attempt succeeded there; that
+text is kept as the record of that stage and is superseded by section 12, which
+records the later root run and is the panel evidence.
+
+This is the transcript behind defect A53 in `docs/DEFECTS.md` and behind
+`docs/PLASMA-X11.md`: the X11 stack on this host, the wall that stops an
+unprivileged X server, the desktop-wide environment that made `kwin_x11` crash
+four times, the two clean window-manager runs that clear it on a scratch X
+server, and the root run on `card0` that followed and is recorded in section 12.
+
+## 1. Subject
+
+The Wayland front is measured on the panel and is recorded in
+`docs/evidence/runtime/37-plasma-wayland.txt` and
+`docs/evidence/runtime/42-modifier-withdrawal-proof.txt`. This file records the
+X11 front on the same card: whether Plasma can run through `kwin_x11`, what
+stops it, and what has actually been observed as opposed to inferred.
+
+Two questions are answered separately, and only the first two sections have a
+measured answer on this host:
+
+1. Can an X server own the SM750 card from a login session? (section 3: no
+   without root)
+2. Does `kwin_x11` act as a window manager on this card's X server? (sections 6
+   to 8: yes, on a scratch server)
+3. Does the X desktop reach the panel? (section 11: NOT OBSERVED under a
+   scratch server; section 12: OBSERVED on 2026-11-26 with the root server on
+   `card0`)
+
+## 2. The X11 stack present
+
+| Package | Version |
+| --- | --- |
+| plasma-workspace-x11 | 6.7.6 |
+| kwin-x11 | 6.7.6 |
+| kwin | 6.7.6 |
+| xorg-x11-server-Xorg | 21.1.26 |
+
+- `/usr/libexec/Xorg` is the real server: 2507936 bytes, mode 0755, not setuid.
+- `/usr/bin/Xorg` is a small wrapper script, so `Xorg` through `PATH` is not the
+  binary that ran in any measurement below.
+
+## 3. A non-root X server cannot own a VT on this host
+
+Attempted as `coder`, no privilege, against the generated configuration of
+section 5. The server parsed the config and reached the driver before it died;
+the relevant log lines are
+
+```text
+(++) Using config file
+(II) xfree86: Adding drm device (/dev/dri/card0)
+(**) OutputClass "SM750 HDMI DRM" setting /dev/dri/card0 as PrimaryGPU
+```
+
+and the failure is exactly
+
+```text
+(EE) xf86OpenConsole: Cannot open virtual console 1 (Permission denied)
+(EE) Server terminated with error (1). Closing log file.
+```
+
+Device ownership on the host:
+
+```text
+crw-rw----+ root tty   /dev/tty0
+crw-------  duka tty   /dev/tty1
+```
+
+The active-VT ACL belongs to the session owner (`duka`), not to `coder`, so
+`xf86OpenConsole` is refused for this account. A real X11 session on card0 needs
+the server to run as root. That is the ordinary desktop arrangement, not a
+driver defect, and it is the reason the helper's `x11` mode is a root mode.
+
+## 4. `-config` under elevated privileges
+
+Once the server is privileged it refuses an absolute configuration path with
+
+```text
+With elevated privileges -config must specify a relative path without any ".." elements.
+```
+
+The working form runs the server from the directory holding the config and
+passes a bare filename:
+
+```text
+/usr/libexec/Xorg :1 -config sm750-x11.conf -sharevts -novtswitch -noreset -ac -nolisten tcp
+```
+
+The helper implements that as `cd "$out"` followed by the bare `-config`
+argument (`tools/sm750-headless.sh:334-336`), and the gate rejects an absolute
+or `..`-bearing argument (`tests/check-headless-helper.sh:285-288`).
+
+## 5. The server configuration that parses
+
+Generated once per run by the helper (`tools/sm750-headless.sh:128-155`):
+
+```text
+Section "ServerFlags"
+	Option "AutoAddDevices" "false"
+	Option "AutoAddGPU" "false"
+	Option "DontVTSwitch" "true"
+	Option "DontZap" "true"
+EndSection
+
+Section "Device"
+	Identifier "SM750 HDMI"
+	Driver "modesetting"
+	Option "kmsdev" "/dev/dri/card0"
+	Option "AccelMethod" "none"
+	Option "ShadowFB" "true"
+	Option "PrimaryGPU" "true"
+EndSection
+
+Section "Screen"
+	Identifier "SM750 screen"
+	Device "SM750 HDMI"
+EndSection
+
+Section "ServerLayout"
+	Identifier "SM750 layout"
+	Screen "SM750 screen"
+EndSection
+```
+
+The log confirms the layout - `ServerLayout "SM750 layout"`, `Screen "SM750
+screen"`, `Device "SM750 HDMI"` - and the four `ServerFlags` are honoured. With
+`AutoAddDevices` off and no `InputDevice` section, the server opens no input
+device at all. That is a configuration guarantee, not a namespace one, and it
+is why this arm can run as root without repeating the A49 input grab.
+
+## 6. The desktop-wide environment conflict (root cause of the crash loop)
+
+`/etc/environment` on this host: `root:root`, mode 644, 821 bytes, mtime
+2026-11-23 13:20:32. The uncommented lines that matter here:
+
+```text
+KWIN_DRM_DEVICES=/dev/dri/pci-0000-02-00-0-card
+KWIN_DISABLE_VULKAN=1
+__GLX_VENDOR_LIBRARY_NAME=nvidia
+GBM_BACKEND=nvidia-drm
+VK_DRIVER_FILES=/usr/share/vulkan/icd.d/nvidia_icd.x86_64.json
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+```
+
+The rest of the file is commented-out tuning lines and Russian-language
+comments about disabling the NVIDIA Vulkan layer. `VK_ICD_FILENAMES` names the
+lavapipe ICD while `VK_DRIVER_FILES` names the NVIDIA one; both are recorded
+verbatim because the pair is part of the measured state, not because the pair
+is coherent.
+
+`/dev/dri/pci-0000-02-00-0-card` is a symlink to `card1`, the NVIDIA card at
+PCI `0000:02:00.0`. Every login session inherits the six lines and
+`startplasma-x11` passes its environment to `kwin_x11`.
+
+Measured on an X11 session on the SM750 card: the session log carried four
+lines of the shape
+
+```text
+KCrash: Application 'kwin_x11' crashing... crashRecursionCounter = 2
+```
+
+`kwin_x11` then settled on a `--crashes 4` argument, and the session's
+screenshots were 16339 to 27556 bytes - tens of kilobytes, the signature of a
+window manager that never drew. Every GLX-less server in that family also
+printed
+
+```text
+Xlib: extension "NV-GLX" missing
+```
+
+because `__GLX_VENDOR_LIBRARY_NAME=nvidia` was forced on a card whose GLX is
+Mesa's software path.
+
+## 7. Clean run 1: environment cleared, kwinrc preseeded
+
+Scratch X server `Xvfb :20`, 1920x1080x24, private `XDG_RUNTIME_DIR` under
+`/tmp`, `QT_QPA_PLATFORM=xcb`, as `coder`. No root, no seat, no DRM device.
+
+- Unset: `KWIN_DRM_DEVICES`, `KWIN_RENDER_NODES`, `__GLX_VENDOR_LIBRARY_NAME`,
+  `KWIN_DISABLE_VULKAN`, `KWIN_COMPOSE`.
+- Preseeded `kwinrc`: `[Compositing] Enabled=true`, `Backend=XRender`.
+- Command line: plain `/usr/bin/kwin_x11`.
+- Observation window: 40 s.
+- Result: `kwin_x11` stayed on the same pid **1513813** for the whole window,
+  zero `crashing` lines, screenshot **1692991 bytes**.
+
+## 8. Clean run 2: the same environment cleared, no kwinrc at all
+
+Scratch X server `Xvfb :21`, same geometry and environment as section 7, but no
+`kwinrc` in the private config tree.
+
+- Result: `kwin_x11` pid **1537736** stable for the run, zero `crashing` lines,
+  screenshot **1582653 bytes**.
+- kwin wrote no `[Compositing]` section of its own.
+
+Conclusion: the crash loop was the inherited desktop-wide environment. It was
+neither a driver defect nor a missing configuration key - the second run has no
+configuration key at all and still comes up, with a drawn desktop of the same
+size class as the first.
+
+## 9. The `KWIN_COMPOSE` probe and the earlier misreading
+
+A foreground `kwin_x11` under an 8 s `timeout`:
+
+| `KWIN_COMPOSE` | Observed |
+| --- | --- |
+| `X` | exits immediately, rc 0 |
+| `Q` | exits immediately, rc 0 |
+| empty | survives the window, rc 124 |
+| `O2` | survives the window, rc 124 |
+
+An earlier note claimed "`KWIN_COMPOSE=X` makes `kwin_x11` work". That note is
+wrong: rc 0 from `timeout` means the child exited at once. The correct
+disposition is that `KWIN_COMPOSE` must not be set, and the generated session
+script unsets it (`tools/sm750-headless.sh:381-382`).
+
+## 10. The helper change in the tree
+
+`tools/sm750-headless.sh` gained an `x11 [SECONDS]` mode
+(`tools/sm750-headless.sh:119`): the plan file is written at `:156-165`, the
+server runs from the run directory at `:328-337`, the socket wait is
+`:359-367`, `04-display.txt` is written at `:368`, and the session script is
+generated at `:374-388` and made executable at `:389`.
+
+The plan file names the variables a session on `:1` must start without, and
+states that a leaked `KWIN_DRM_DEVICES` or `__GLX_VENDOR_LIBRARY_NAME=nvidia`
+cost four crashes before kwin stayed up.
+
+The gate `tests/check-headless-helper.sh` now carries 12 assertions and 17
+planted controls; the five x11-specific controls are `x11-sharevts-dropped`,
+`x11-input-device`, `x11-abspath-config`, `x11-env-note-dropped` and
+`x11-session-script-unset-dropped` (`tests/check-headless-helper.sh:449-453`).
+
+At the time of the scratch-server runs the installed
+`/usr/local/sbin/sm750-headless` was still the pre-`x11` copy, sha256
+`bc1d3a06fdf59bb25f9b0f572c2be6085731332109a4231a80e3d2076308922f`, so the mode
+did not exist there. SUPERSEDED 2026-11-26: the owner reinstalled the file, and
+the installed copy now has sha256
+`bef39ba73cacdbcce93bc7319203689f98947a7556484d8cd51d06faf0591df7`, identical to
+`tools/sm750-headless.sh` in the tree; section 12 was run with it.
+
+## 11. NOT OBSERVED (as of the scratch-server runs; superseded by section 12)
+
+Superseded 2026-11-26: section 12 records the root server on `card0`, so the
+card0 statements below are history, not current state. The wording is kept as
+the record of what had been observed when the scratch-server work was written.
+
+- **No root X server on card0, as of this section.** Nothing at this stage was
+  measured against the DRM device; both clean runs used `Xvfb`. The panel, the
+  modeset and the scanout for the X11 route were unmeasured. SUPERSEDED: see
+  section 12.
+- **No panel output through X11, as of this section.** Consequently no
+  screenshot, register dump or scanout window existed for an X11 session on
+  this card at this stage. SUPERSEDED: see section 12.
+- **No input device.** The generated config opens none by design and none was
+  tested.
+- **No acceleration.** The server's GLX on this card is DRISWRAST, software;
+  kwin's fallback is the observed behaviour, not a measured acceleration path.
+- **No compositing measurement on the card.** The XRender composition in
+  section 7 happened on a scratch server, not on the SM750.
+- **No Plasma shell observation.** The clean runs establish the session and the
+  window manager; `plasmashell` was not sampled for in either run.
+
+## 12. Panel observation: the root server on card0 (2026-11-26)
+
+This section supersedes the card0 statements of section 11. The helper's `x11`
+mode was run once as root:
+
+```text
+sudo -n /usr/local/sbin/sm750-headless x11 240
+```
+
+Installed helper sha256
+`bef39ba73cacdbcce93bc7319203689f98947a7556484d8cd51d06faf0591df7`, identical to
+`tools/sm750-headless.sh` in the tree. Run directory
+`/mega/tmp/sm750/headless/20261126T125401Z-x11`, holding `00-plan.txt`,
+`01-before.txt`, `01-before.before.txt`, `02-master.txt`, `03-compositor.log`
+(1086 B), `04-display.txt` (11 B, `DISPLAY=:1`), `run-plasma-x11.sh` (587 B,
+mode 0755), `sm750-x11.conf` (621 B), `xorg.log` (30335 B) and `runtime/`.
+
+### 12.1 The root server reached display :1 on the SM750
+
+- The server was up in 4 seconds: `server up after 4s`.
+- `xorg.log` carries, among others:
+
+```text
+(++) Using config file: "sm750-x11.conf"
+(==) ServerLayout "SM750 layout"
+(**) OutputClass "SM750 HDMI DRM" setting /dev/dri/card0 as PrimaryGPU
+(II) LoadModule: "modesetting"
+(II) Loading /usr/lib64/xorg/modules/drivers/modesetting_drv.so
+(**) modeset(0): Option "kmsdev" "/dev/dri/card0"
+```
+
+The `modesetting` driver is therefore the one bound, and its `kmsdev` is the
+SM750 card node.
+
+### 12.2 The input errors are by design
+
+The same log carries
+
+```text
+(EE) Failed to load module "mouse" (module does not exist, 0)
+(EE) Failed to load module "kbd" (module does not exist, 0)
+(EE) No input driver matching 'mouse'
+(EE) PreInit returned 2 for "<default pointer>"
+```
+
+and the matching pair for `<default keyboard>`. There is no `InputDevice`
+section, so the server runs with no input device and never opens `/dev/input`.
+These lines are the expected consequence of that design, not failures of the
+run; they are recorded so a later reader does not read them as regressions.
+
+### 12.3 One redundant option in the generated config
+
+The log also carries
+
+```text
+(WW) modeset(0): Option "PrimaryGPU" is not used
+```
+
+The generated `sm750-x11.conf` has `Option "PrimaryGPU" "true"` inside the
+`Device` section, where the modesetting driver ignores it; the `OutputClass`
+fragment is what actually selects `card0`. The warning above is recorded as
+read, and the line is still in the generated file at the time of this run - a
+separate task removes it from the `Device` section.
+
+### 12.4 The session and the window manager
+
+Started as user `coder` with the eight desktop-wide variables absent from the
+environment and a private `XDG_RUNTIME_DIR`:
+
+```text
+dbus-run-session -- <run>/run-plasma-x11.sh
+```
+
+- `kwin_x11` pid **1979033**, plain `/usr/bin/kwin_x11` command line, alive and
+  identical at t=20 s, t=40 s and t=60 s.
+- Session-log `crashing` lines: **0**.
+- `kwin_wayland_drm` and `Failed to create framebuffer` lines: **0**.
+
+So the crash loop of section 6 does not occur when the desktop-wide NVIDIA
+selection is cleared for the session, on the card itself and not only on a
+scratch server.
+
+### 12.5 The panel
+
+- `/sys/class/drm/card0-HDMI-A-1`: `connected`, `enabled=enabled`.
+- `PANEL_DISPLAY_CTRL 0x0f010105`, `PANEL_CURRENT_LINE 0x00000419` (advancing),
+  `PANEL_FB_ADDRESS 0x00000000`.
+- The scanout CRC dump over the last four 16-byte rows shows content - the
+  bytes alternate `49 21 49 29` - not the all-zero frame whose crc32 is
+  `0xe20eea22`.
+- An `ffmpeg -f x11grab -video_size 1920x1080` capture of display `:1` is
+  **1836586 bytes**.
+
+### 12.6 Two harness lessons, each from a failed attempt
+
+(a) A stale display lock and a live orphan both abort the server, with distinct
+messages:
+
+```text
+(EE) Server is already active for display 1
+If this server is no longer running, remove /tmp/.X1-lock
+```
+
+```text
+_XSERVTransSocketUNIXCreateListener: ...SocketCreateListener() failed
+(EE) Cannot establish any listening sockets - Make sure an X server isn't already running
+```
+
+The first comes from a stale `/tmp/.X1-lock`; the second from a live orphan
+`Xvfb :1`. A harness must remove the lock and kill orphan `Xvfb` processes by
+pid before starting the server, and `pkill -x` cannot be used for names longer
+than 15 characters.
+
+(b) Killing the `sudo` process does not stop the helper: the root child keeps
+running until its own `seconds` value expires. An early teardown therefore has
+to use a short `seconds`, not a kill.
+
+### 12.7 Rendering is still software
+
+This X server has no GLX, so kwin composites through its XRender path on
+llvmpipe. Nothing in section 12 is hardware acceleration, and the panel content
+above is software-composited.

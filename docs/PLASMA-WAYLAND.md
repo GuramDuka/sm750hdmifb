@@ -21,8 +21,8 @@ with a one-variable workaround and a device-level fix in 0.6.7.
 | Path | State | Detail |
 | --- | --- | --- |
 | Wayland session | yes, with the section 4.5 caveat | `startplasma-wayland` brings up kwin_wayland, Xwayland and plasmashell on the SM750 card node; the panel scans the composited frame (section 4). On a driver older than 0.6.7 a session can freeze the scanout through a rejected buffer modifier unless `KWIN_DRM_USE_MODIFIERS=0` is exported (section 4.4) |
-| X11 session | yes | Xorg on `:1` drives the same card at 1920x1080, kwin_x11 manages windows |
-| X11 compositing | no | the server's GLX is DRISWRAST and lacks `GLX_EXT_texture_from_pixmap`; kwin_x11 aborts its compositor (section 7) |
+| X11 session | yes, on `card0` since 2026-11-26 | a root Xorg on `:1`, started by the helper's `x11` mode, drives the same card at 1920x1080 and `kwin_x11` manages windows; the earlier evidence was a scratch X server only. See `docs/PLASMA-X11.md` and `docs/evidence/runtime/43-plasma-x11.txt` |
+| X11 compositing | software only | the server has no GLX, so `kwin_x11` composites through its XRender path on llvmpipe and the desktop draws; no GLX-backed compositing exists on this host (section 7, `docs/PLASMA-X11.md` section 9) |
 | Input | no | no `/dev/input/event*` access for this account, so the session draws but cannot be driven (section 5) |
 | Screencast | no | kwin's screencast needs PipeWire and the system bus, both removed by the bypass (section 5) |
 | Full-frame readback | yes in 0.6.6 | `crc_window_bytes` became runtime-writable in 0.6.6, so the whole 8294400-byte frame can be read; in 0.6.5 the window was fixed at 256 KiB / 68 scanlines (section 5) |
@@ -361,21 +361,29 @@ has to be granted for this procedure.
 
 ## 7. X11 comparison
 
-The X11 route works and was measured in the same session family:
+The X11 route is the second front, documented in `docs/PLASMA-X11.md` with its
+transcript in `docs/evidence/runtime/43-plasma-x11.txt`. It was first measured
+under a scratch X server (`Xvfb`, no DRM device) and, since 2026-11-26, on the
+card itself through the helper's `x11` mode:
 
-- Xorg starts as `/usr/libexec/Xorg :1` with the shipped `OutputClass` config
-  and drives `card0` at 1920x1080; `plasmashell` and `kwin_x11` run and window
-  management works.
-- X11 compositing is **impossible** on this host: the server's GLX is
-  `DRISWRAST` and lacks `GLX_EXT_texture_from_pixmap`, so `kwin_x11` aborts its
-  compositor with `No provider of glXBindTexImageEXT found`.
-- glamor refuses llvmpipe in this Xorg build: `/usr/lib64/xorg/modules/
-  libglamoregl.so` prints `Refusing to try glamor on llvmpipe`, and no
-  environment variable reaches the `Allowing glamor on llvmpipe for PRIME`
-  string. There is therefore no accelerated X11 path either.
+- `/usr/libexec/Xorg :1` runs as root - a non-root server cannot own a VT on
+  this host - with the generated config whose `OutputClass` pins
+  `/dev/dri/card0`. In the 2026-11-26 run the server was up in 4 s and
+  `xorg.log` shows `modeset(0): Option "kmsdev" "/dev/dri/card0"`.
+- On `card0`, `kwin_x11` held pid 1979033 at t=20 s, 40 s and 60 s with zero
+  `crashing` lines, `card0-HDMI-A-1` read `connected` and `enabled=enabled`,
+  `PANEL_CURRENT_LINE` advanced, and a 1920x1080 capture of `:1` was 1836586
+  bytes. The route needs the six `/etc/environment` NVIDIA selections cleared
+  for the session, or kwin crash-loops four times (A53).
+- There is no GLX on that server: kwin composites through its XRender path on
+  llvmpipe. GLX-backed compositing remains unavailable, and glamor refuses
+  llvmpipe in this Xorg build (`/usr/lib64/xorg/modules/libglamoregl.so`
+  prints `Refusing to try glamor on llvmpipe`), so there is no accelerated X11
+  path either.
 
-So the two routes differ in exactly one respect that matters: Wayland gives a
-composited desktop on this driver, X11 gives an uncomposited one.
+So the two routes differ in how the desktop is composed: Wayland gives a
+GL-composited desktop on another card's render node, X11 gives a software
+XRender one on this host's llvmpipe.
 
 ## 8. What this document does not claim
 

@@ -3984,3 +3984,91 @@ The honest limits recorded elsewhere do not change: the compositor renders with
 software GL because no Mesa driver exists for 126f:0750, input injection and
 screencast capture remain limited, and GAP-B8 still awaits a hardware
 recurrence. A47 is now proven twice over - at the ioctl level and by eye.
+
+### 2026-11-26T12:33Z | orchestrator | the X11 front: the missing window manager was a desktop-wide environment
+
+The owner's next instruction was to push kwin workability as far as it goes on
+both fronts (m09344), so the X11 front was investigated properly. Two
+independent blockers were measured first. A non-root X server cannot own a VT
+here - Xorg reaches the driver correctly and then dies with
+
+  (EE) xf86OpenConsole: Cannot open virtual console 1 (Permission denied)
+
+so a real X11 session on card0 needs Xorg running as root, which is the
+standard setup and not a driver defect. Xorg also refuses an absolute -config
+path once privileged, so the server has to be started from the directory that
+holds its config.
+
+The second, larger blocker was the earlier observation that startplasma-x11
+produced no kwin_x11 at all. Twelve experiments on scratch X servers (Xvfb
+:11 to :21, no root, no seat, no DRM device) found the cause in the host, not
+in the driver: /etc/environment selects the NVIDIA card for the desktop and
+for GLX, and every login session inherits it, startplasma-x11 included. With
+the file in force kwin_x11 crash-looped - four "KCrash: Application
+'kwin_x11' crashing" lines, a --crashes 4 argument and a 16 KB screenshot.
+With KWIN_DRM_DEVICES, KWIN_RENDER_NODES, __GLX_VENDOR_LIBRARY_NAME,
+KWIN_DISABLE_VULKAN and KWIN_COMPOSE all unset, kwin_x11 held one pid for the
+whole run, logged zero crashes and drew a 1.69 MB desktop; a second run with
+no kwinrc at all reproduced it at 1.58 MB, so no configuration preseed is
+needed and kwin's own fallback handles the GLX-less server.
+
+One earlier claim is corrected by measurement: KWIN_COMPOSE must not be set.
+With it set to X or Q a foreground kwin_x11 exits immediately with rc 0; the
+note that read that rc 0 as success was a misreading of timeout.
+
+tools/sm750-headless.sh gained an x11 mode for this: it writes its own server
+config per run, starts /usr/libexec/Xorg on :1 with -sharevts -novtswitch so no VT is
+claimed, waits for the socket, and writes an executable
+run-plasma-x11.sh that clears the eight desktop-wide variables before starting
+the session. The gate now carries 12 assertions and 17 planted controls, five
+of them for this mode; the control that only deleted the explanatory sentence
+had to be rewritten, because the variable names survived in the lines below
+it and a planted control that does not remove the property proves nothing.
+
+The Xvfb runs prove the session and the window manager. They do not prove the
+panel: no root X server has run against card0 yet, which needs the owner to
+reinstall the helper. That is recorded as NOT OBSERVED in
+docs/evidence/runtime/43-plasma-x11.txt.
+
+### 2026-11-26T16:05Z | orchestrator | X11 on card0: the harness was the blocker, the session is on the panel
+
+The owner reinstalled the helper and the `x11` mode ran as root on card0. Two
+attempts failed before the third succeeded, and both failures were mine, not
+the driver's or the server's:
+
+- `/tmp/.X1-lock` survived an earlier `Xvfb :1` run, so Xorg refused with
+  `Server is already active for display 1`.
+- after removing the lock, five orphan `Xvfb` servers were still alive
+  (`:1` pid 1731442, `:9` 1129894, `:10` 1131726, `:19` 1477646, `:21` 1537368)
+  holding sockets `X9 X10 X19 X21`, and Xorg refused with
+  `Cannot establish any listening sockets - Make sure an X server isn't already running`.
+  My own teardown had run `pkill -u coder -f 'Xvfb :1'` in the same shell that
+  also received the signal, so the pattern killed nothing; and `pkill -x` cannot
+  match names longer than fifteen characters at all.
+
+The successful run is `/mega/tmp/sm750/headless/20261126T125401Z-x11`: the
+server was up on display `:1` after 4 s, the log shows
+`OutputClass "SM750 HDMI DRM" setting /dev/dri/card0 as PrimaryGPU`,
+`modesetting` loaded and `Option "kmsdev" "/dev/dri/card0"`. The generated
+`run-plasma-x11.sh` started `startplasma-x11` as coder and `kwin_x11` pid
+1979033 stayed identical with a plain cmdline at 20, 40 and 60 s, zero
+`crashing` lines, zero framebuffer failures, and an x11grab screenshot of
+1836586 bytes. The panel agrees: `card0-HDMI-A-1` `connected` and `enabled`,
+`PANEL_DISPLAY_CTRL 0x0f010105`, `PANEL_CURRENT_LINE 0x00000419` advancing,
+and the scanout dump carrying content instead of the all-zero frame whose
+crc32 is `0xe20eea22`.
+
+Three residual facts are recorded rather than papered over. The server logs
+`(EE) Failed to load module "mouse"` / `"kbd"` and
+`PreInit returned 2 for "<default pointer>"` - by design, because no
+`InputDevice` section is configured and the server therefore never opens
+`/dev/input`. It also logs `Option "PrimaryGPU" is not used`, because the
+generated Device section carried a redundant copy of an option only the
+OutputClass honours; that line is removed in a follow-up. And the server has
+no GLX, so kwin composites through XRender on llvmpipe - the same
+software-rendering limit the Wayland record already states.
+
+Lesson worth keeping beyond this host: a root helper launched through `sudo`
+cannot be stopped by killing the `sudo` pid - the child keeps running until the
+helper's own `seconds` value expires, so an early teardown has to shorten
+`seconds` instead of reaching for a kill.

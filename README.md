@@ -81,7 +81,7 @@ packaged tarball.
 | IGT KMS subset | 26 pass, 14 skip, 1 fail by design |
 | GL path | `kmscube`, 299 frames in 5.07 s, 59.01 fps on llvmpipe |
 | Vblank rate | 60.43 per second measured over 120 events |
-| Evidence | 48 runtime transcripts, 28 build transcripts and 7 packaging transcripts under `docs/evidence/` |
+| Evidence | 50 runtime transcripts, 28 build transcripts and 7 packaging transcripts under `docs/evidence/` |
 | Documentation | 22 documents under `docs/`, plus the specification archive and the deck |
 
 ### How a claim is checked
@@ -106,6 +106,7 @@ enforce:
 | [Acceptance report](docs/ACCEPTANCE-REPORT.md) | Criterion-by-criterion verdict with the command and the evidence path behind each row |
 | [Test strategy](docs/TEST-STRATEGY.md) | Every suite, its selection rationale, pass criteria and recorded results |
 | [Plasma on this driver](docs/PLASMA-WAYLAND.md) | The measured Wayland session, its two working bypasses, the scanout proof, the buffer-modifier freeze and its two remedies, and what is still missing |
+| [Plasma over X11](docs/PLASMA-X11.md) | The second front: why the X server needs root here, the generated config, the `/etc/environment` NVIDIA selection that crash-loops `kwin_x11`, the session launcher that clears it, and the observed `card0` session with its scanline and capture evidence |
 | [Defects](docs/DEFECTS.md) | Findings with ids, root causes, dispositions and the gate that guards each fix |
 | [Repository audit](docs/AUDIT.md) | Point-in-time audit of the tree, with dated path notes where the tree moved on |
 | [Deliverables](docs/DELIVERABLES.md) | What ships, how it is rebuilt, and the exact reproduction commands |
@@ -949,6 +950,20 @@ measured effect of the variable and how to tell which case you are in. A
 modeset on `card0`
 from a test tool temporarily replaces the console; closing the tool lets the
 fbdev client restore its own 1920x1080 mode.
+
+A second front, X11, is documented in [Plasma over X11](docs/PLASMA-X11.md).
+It needs one thing Wayland does not: the X server must run as root, because a
+non-root `Xorg` cannot own a VT on this host and dies with
+`xf86OpenConsole: Cannot open virtual console 1 (Permission denied)`. It also
+needs a per-session fix, because `/etc/environment` points `KWIN_DRM_DEVICES`
+and GLX at the NVIDIA card, which crash-loops `kwin_x11` four times before it
+gives up. With the desktop-wide variables cleared, `kwin_x11` holds a single
+process and draws. Since 2026-11-26 that is measured on the panel too: the
+helper's `x11` mode ran as root, the server came up on `:1` in 4 s against
+`/dev/dri/card0`, `kwin_x11` stayed on one pid with zero crash lines, the
+connector read `enabled`, and a 1920x1080 capture was 1836586 bytes. The
+composition is software, through kwin's XRender path on llvmpipe, because that
+server has no GLX.
 
 That restore is a disable-then-enable pair inside one atomic commit, and both
 halves can now say what happened instead of failing quietly. The transition

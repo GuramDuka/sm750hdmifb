@@ -108,6 +108,7 @@ exports `TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}`), never to `/tmp`.
 | S23 | In-repo `tests/check-render-node.sh`, extended (via `make check`, called by `tests/check-drm-policy.sh`) | Device-level check that the driver withdraws the framebuffer-modifier capability: both `drm_mode_config_funcs` structs (`sm750_mode_config_funcs`, `sm750_shadow_mode_config_funcs`) must exist and be installed, `drm->mode_config.fb_modifiers_not_supported = 1;` must be present, and it must sit on the line immediately after the two-line `drm->mode_config.funcs` ternary so a guard cannot withdraw the capability for one device only. Reasoning: the plane advertises `DRM_FORMAT_MOD_LINEAR` alone, KWin 6.7.5 submitted a modifier it could not match and AddFB2 failed with EINVAL, so core must report `DRM_CAP_ADDFB2_MODIFIERS=0` and every client must take the modifiers-free path | PASS (2026-11-25); seven assertions (six source-level, one live) and five planted defects rejected (`render_dropped`, `render_only`, `version_drift`, `fb_modifiers_dropped`, `fb_modifiers_branched`) in `--self-test` |
 | S24 | In-repo `tests/check-vt-helper.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the root-only helper `tools/sm750-vt.sh`, which hot-reloads `sm750hdmidrm` by unbinding fbcon from the SM750 vtconsole (A50): POSIX `sh` that passes `sh -n`, the three modes `show`, `off`, `on` in the usage and in the dispatcher with `usage` exiting 2 for anything else, a root check that still lets `show` run unprivileged, the target vtconsole resolved by globbing `/sys/class/vtconsole/vtcon*` and confirmed against `basename $(readlink -f /sys/bus/pci/devices/0000:01:00.0/driver)` = `sm750hdmidrm` with no executed `vtconN` literal, zero and multiple candidates both refused, `write_bind "$TARGET" 0` to detach and `write_bind "$TARGET" 1` to restore with every write read back from the `bind` file, one EXIT trap that restores the module, the device and then the console on a non-zero exit, disarmed by `FINISHED=1` so a successful run does not undo itself, with a restore function that ends in an explicit `return`, the userspace holder refusal gating the unload with the scan matched on node identity - the by-path card and render links resolved to a `dev:inode` pair and compared against each fd target - rather than on a node name, since the card is not `card0` after a reload, the PCI unbind step that releases the framebuffer reference (A51) between the console detach and the unload with the refcount printed before it and again after it, the device re-bound and read back after the load, `modprobe -r` before `modprobe` by line order, and the loaded version read back from `/sys/module/sm750hdmidrm/version` after the load with a missing file failing as `is missing after the load`. Static only: it writes no sysfs, calls no modprobe, needs no root and never runs the helper | PASS (2026-11-26); thirteen assertions and ten planted defects rejected (`never-restore`, `hardcoded-vtcon`, `modprobe-order-reversed`, `version-readback-removed`, `holder-check-dropped`, `pci-unbind-dropped`, `pci-rebind-dropped`, `refcount-not-reported`, `trap-restores-fbcon-only`, `holder-scan-name-glob`) plus a pristine control accepted, in `--self-test`; the reload itself is NOT YET OBSERVED |
 | S25 | None (observed by hand; no script, no gate) | Panel-level proof of the 0.6.7 modifier withdrawal (A47), recorded as evidence rather than enforced: with the module loaded by the hot reload, a userspace probe on the same 1920x1080 buffer gets `OK fb=42` for plain XRGB8888 AddFB2 and `FAIL errno=22` for `MODIFIERS + LINEAR`, where 0.6.5 accepted both; a KWin 6.7.5 session started with `KWIN_DRM_USE_MODIFIERS` explicitly unset logs `drmModeAddFB2WithModifiers is not supported on GPU "/dev/dri/card0"`, reaches an initialised compositor with output PHL 243V7, and `grep -c 'Failed to create framebuffer'` returns **0** where the 0.6.5 session returned **359**; `PANEL_CURRENT_LINE` advances and twelve scanout samples read `nonzero 262144` with `crc32 0x976e751b` while the offset alternates between 0 and 4147200 | OBSERVED 2026-11-26, module 0.6.7 on kernel `7.3.4-100.fc43.x86_64` with kwin and Plasma `6.7.5`. Evidence, not a gate: there is no script and no new `make check` recipe, so `make check` stays at 18 commands, and no CI job reproduces it. Input injection and screencast are unmeasured, as S22 records; `docs/evidence/runtime/42-modifier-withdrawal-proof.txt` is the transcript |
+| S26 | In-repo `tests/check-headless-helper.sh`, extended (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the `x11` mode of `tools/sm750-headless.sh`: the arm writes its server config once per run, execs `/usr/libexec/Xorg :1` directly (never the setuid-capable wrapper) from the run directory with a bare `-config` filename, carries `-sharevts -novtswitch` and `-nolisten tcp`, declares `AutoAddDevices` off with no `InputDevice` section so a root server opens no input device, must not pass an absolute or `..`-bearing config path, clamps the run length, and generates `run-plasma-x11.sh` with the `/etc/environment` variables unset and `DISPLAY=:1` exported; the plan text must name those variables and the four-crash consequence of leaking them. Static only: it starts no server, needs no root and never touches the card | PASS (2026-11-26); twelve assertions and seventeen planted controls, five of them x11-specific (`x11-sharevts-dropped`, `x11-input-device`, `x11-abspath-config`, `x11-env-note-dropped`, `x11-session-script-unset-dropped`). The arm then ran once as root on 2026-11-26 (`x11 240`) and reached the panel: the server was up on `:1` in 4 s with `kmsdev` `/dev/dri/card0`, `kwin_x11` held pid 1979033 with zero crash lines, and the connector read `enabled` |
 ### S1: in-repo `make check`
 
 - Package/version: the repository itself at 0.5.9; no external package. The
@@ -774,6 +775,66 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   controls pin the corrected sequence, and the reload is still in the NOT YET
   OBSERVED list of `docs/evidence/runtime/41-vt-hot-reload.txt` (section 7
   records the failed attempt; attempt 2 needs the refreshed helper installed).
+
+### S26: headless helper gate, `x11` arm
+
+- Command: `./tests/check-headless-helper.sh`; `./tests/check-headless-helper.sh --self-test`
+  runs the same gate under the planted controls. It is also reached from
+  `make check` through `tests/check-drm-policy.sh`, and adds no recipe command,
+  so the recipe stays at 18.
+- Holds, in section l of the gate: the generated config contains
+  `Section "ServerFlags"`, `AutoAddDevices` off, `AutoAddGPU` off,
+  `DontVTSwitch` true, `DontZap` true, `Section "Device"` with
+  `Driver "modesetting"`, the `kmsdev` of the card, `AccelMethod` none and
+  `ShadowFB` true, and `Section "Screen"` plus `Section "ServerLayout"`; no
+  `InputDevice` section and no `AutoAddDevices` true anywhere; the arm execs
+  `/usr/libexec/Xorg` rather than a wrapper; it `cd`s into the run directory and
+  passes a bare `-config` filename, with absolute paths and `..` elements
+  rejected; it passes `-sharevts -novtswitch` and `-nolisten tcp`; it clamps the
+  run length; and the session script it generates unsets `KWIN_DRM_DEVICES`,
+  `KWIN_RENDER_NODES`, `__GLX_VENDOR_LIBRARY_NAME`, `KWIN_DISABLE_VULKAN`,
+  `KWIN_COMPOSE`, `GBM_BACKEND`, `VK_DRIVER_FILES` and `VK_ICD_FILENAMES`
+  before it execs `startplasma-x11`. The gate count is 12 assertions, section
+  `l` being the twelfth and the only one that inspects this arm, and 17 planted
+  controls.
+- Planted controls: five are x11-specific - `x11-sharevts-dropped` (a missing
+  `-sharevts` would allocate a VT and take the owner's console),
+  `x11-input-device` (an `InputDevice` section would let a root server read the
+  owner's keyboard), `x11-abspath-config` (an absolute `-config` is refused
+  under elevated privileges), `x11-env-note-dropped` (the plan would stop
+  naming the environment that costs four crashes) and
+  `x11-session-script-unset-dropped` (the generated script would inherit the
+  NVIDIA selection). All five are rejected, alongside the twelve controls of
+  the other modes.
+- Status: gated statically, then run once as root on 2026-11-26 with the
+  installed helper (sha256
+  `bef39ba73cacdbcce93bc7319203689f98947a7556484d8cd51d06faf0591df7`, identical
+  to the tree copy): `sudo -n /usr/local/sbin/sm750-headless x11 240` in run
+  directory `/mega/tmp/sm750/headless/20261126T125401Z-x11` brought the server
+  up on `:1` in 4 s with `modeset(0): Option "kmsdev" "/dev/dri/card0"`, the
+  session ran as `coder` under `dbus-run-session` with the eight variables
+  absent, `kwin_x11` held pid 1979033 at t=20 s, 40 s and 60 s with zero
+  `crashing` lines, `card0-HDMI-A-1` read `connected` and `enabled=enabled`,
+  `PANEL_CURRENT_LINE` advanced (`0x00000419`), and a 1920x1080 `x11grab`
+  capture was 1836586 bytes. The transcript is section 12 of
+  `docs/evidence/runtime/43-plasma-x11.txt`; the walkthrough is
+  `docs/PLASMA-X11.md`.
+- Harness lessons a future run must repeat. (a) A stale `/tmp/.X1-lock` aborts
+  the server with `(EE) Server is already active for display 1`, and a live
+  orphan `Xvfb :1` aborts it with
+  `_XSERVTransSocketUNIXCreateListener: ...SocketCreateListener() failed` and
+  `(EE) Cannot establish any listening sockets - Make sure an X server isn't
+  already running`; the harness must remove the stale lock and kill the orphan
+  by pid, and `pkill -x` cannot match names longer than 15 characters. (b)
+  Killing the `sudo` process does not stop the helper - the root child runs
+  until its own `seconds` value expires - so an early teardown needs a short
+  `seconds`, not a kill. Both cost one failed attempt before the 2026-11-26
+  run succeeded.
+- Limits unchanged: no input device is opened by design (the log's
+  `Failed to load module "mouse"` and `"kbd"` lines are that design), and the
+  server has no GLX, so kwin composites through XRender on llvmpipe - the
+  panel observation is software-composited, not accelerated, and `plasmashell`
+  itself was not sampled for.
 
 ## 3. `make check`: the recipe commands
 

@@ -87,14 +87,14 @@ if ! sh -n "$helper" 2>"$scratch/sh-n.err"; then
 fi
 ok "a. the helper exists, starts with #!/bin/sh and passes sh -n"
 
-# --- b. five modes, everything else reaches usage ---------------------------
-has "$(cat "$helper")" 'probe|diagnose|weston|cage|kmscube)' \
-	"b: the mode dispatch must accept exactly probe, diagnose, weston, cage and kmscube"
+# --- b. six modes, everything else reaches usage ---------------------------
+has "$(cat "$helper")" 'probe|diagnose|weston|cage|kmscube|x11)' \
+	"b: the mode dispatch must accept exactly probe, diagnose, weston, cage, kmscube and x11"
 has "$(cat "$helper")" '*) usage ;;' \
 	"b: an unknown mode must fall through to usage, not to a default action"
 has "$(cat "$helper")" 'exit 2' \
 	"b: the usage path must exit 2 so a wrong mode cannot read as a run"
-ok "b. modes probe, diagnose, weston, cage and kmscube dispatch, anything else exits 2"
+ok "b. modes probe, diagnose, weston, cage, kmscube and x11 dispatch, anything else exits 2"
 
 # --- c. the card is the SM750 and the driver is bound ------------------------
 body=$(cat "$helper")
@@ -250,6 +250,99 @@ if ! grep -qF 'wlroots' "$helper"; then
 fi
 ok "k. weston and cage both run in a private mount namespace with an empty /dev/input, mounted before the exec"
 
+# --- l. the x11 arm: a root server that never touches the owner's input ----
+# Xorg cannot open a VT without privilege here ((EE) xf86OpenConsole: Cannot
+# open virtual console 1 (Permission denied) as coder), so the arm runs as
+# root. That makes input isolation a configuration question, not a namespace
+# one: AutoAddDevices off and no InputDevice section are the whole guarantee,
+# and both are asserted so a later "helpful" addition cannot quietly reinstate
+# the A49 keyboard grab with root privileges behind it.
+has "$body" 'Section "ServerFlags"' \
+	"l: the x11 arm must emit its own ServerFlags section"
+has "$body" 'Option "AutoAddDevices" "false"' \
+	"l: AutoAddDevices must be off so Xorg never opens /dev/input as root"
+has "$body" 'Option "AutoAddGPU" "false"' \
+	"l: AutoAddGPU must be off so the NVIDIA cards are not added to this server"
+has "$body" 'Option "DontVTSwitch" "true"' \
+	"l: DontVTSwitch must be on; the owner's tty1 session must not be switched away"
+has "$body" 'Option "DontZap" "true"' \
+	"l: DontZap must be on; a root Ctrl-Alt-Backspace would take the server down"
+has "$body" 'Option "kmsdev"' \
+	"l: the device must be pinned with kmsdev, not left to auto-detection"
+has "$body" 'Option "AccelMethod" "none"' \
+	"l: the x11 arm must request the software path; there is no Mesa driver for this GPU"
+# The generated Device section must not carry PrimaryGPU: the modesetting
+# driver ignores it there and logs
+# "(WW) modeset(0): Option "PrimaryGPU" is not used" (Xorg 21.1.26, run
+# 20261126T125401Z-x11). Card selection is done by the shipped OutputClass
+# fragment, so the whole option is dead weight that also emits a warning.
+# The section is extracted with comments stripped, so the explanatory comment
+# above it cannot satisfy or trip this check.
+device_section=$(awk '
+	{ line = $0; sub(/^[ \t]+/, "", line); sub(/[ \t]+$/, "", line) }
+	!indev && line == "Section \"Device\"" { indev = 1; next }
+	indev && line == "EndSection" { exit }
+	indev && line != "" && line !~ /^#/ { print }
+' "$helper")
+if [ -z "$device_section" ]; then
+	bad "l: the x11 arm must emit a Device section; none was found"
+fi
+if printf '%s\n' "$device_section" | grep -qF 'PrimaryGPU'; then
+	bad "l: PrimaryGPU must not appear in the x11 Device section; modesetting ignores it there and warns, card selection is done by the OutputClass fragment"
+fi
+# The load-bearing options in that section must survive: dropping one to
+# silence the warning would trade a warning for a broken render path.
+has "$device_section" 'Driver "modesetting"' \
+	"l: the Device section must keep Driver modesetting"
+has "$device_section" 'Option "kmsdev"' \
+	"l: the Device section must keep kmsdev pinned to the card node"
+has "$device_section" 'Option "AccelMethod" "none"' \
+	"l: the Device section must keep the software path (AccelMethod none)"
+has "$device_section" 'Option "ShadowFB" "true"' \
+	"l: the Device section must keep ShadowFB; the card has no working Mesa driver"
+has "$body" '20-sm750hdmidrm.conf' \
+	"l: the helper must name the OutputClass fragment that actually selects card0"
+if grep -nE 'Section[[:space:]]+"InputDevice"' "$helper" >/dev/null; then
+	bad "l: an InputDevice section would open a real input device as root; the x11 arm must declare none"
+fi
+if grep -nF 'AutoAddDevices" "true' "$helper" >/dev/null; then
+	bad "l: AutoAddDevices true would add every present input device to a root X server"
+fi
+has "$body" '/usr/libexec/Xorg' \
+	"l: the arm must exec /usr/libexec/Xorg directly, never a setuid wrapper"
+has "$body" 'cd "$out" || exit 1' \
+	"l: the arm must cd into the run directory, because -config rejects absolute paths"
+if grep -nE '\-config[[:space:]]+/' "$helper" >/dev/null; then
+	bad "l: -config must be a relative path; Xorg refuses an absolute one under elevated privileges"
+fi
+if grep -nE '\-config[[:space:]]+\.\.' "$helper" >/dev/null; then
+	bad "l: -config must not contain .. elements; Xorg refuses it under elevated privileges"
+fi
+has "$body" '-config sm750-x11.conf' \
+	"l: the arm must pass the generated config by bare filename"
+has "$body" '-sharevts -novtswitch' \
+	"l: the server must not claim or switch a VT (-sharevts -novtswitch)"
+has "$body" '-nolisten tcp' \
+	"l: the server must not open a TCP listener"
+has "$body" 'no input devices are configured' \
+	"l: the run must record that no input device was configured"
+has "$body" '/tmp/.X11-unix/X1' \
+	"l: the arm must report whether DISPLAY=:1 came up for the session user"
+has "$body" 'KWIN_DRM_DEVICES' \
+	"l: the run must name the variables a Plasma session on :1 has to start without"
+has "$body" 'run-plasma-x11.sh' \
+	"l: the run must leave a session script the user can execute; six variable names are too many to remember"
+# The launcher clears the desktop-wide selection from /etc/environment; assert
+# the launcher lines themselves, not bare variable names, which the plan file
+# above already mentions.
+has "$body" 'unset KWIN_DRM_DEVICES KWIN_RENDER_NODES' \
+	"l: the generated session script must clear KWIN_DRM_DEVICES for the SM750"
+has "$body" 'unset __GLX_VENDOR_LIBRARY_NAME GBM_BACKEND' \
+	"l: the generated session script must clear the forced NVIDIA GLX and GBM selection"
+has "$body" '__GLX_VENDOR_LIBRARY_NAME' \
+	"l: a leaked GLX vendor library selection must be named; it made kwin_x11 crash four times"
+ok "l. the x11 arm runs a root server on :1 with no input device, no VT switch and no TCP listener"
+
 [ "$fail" -eq 0 ] || exit 1
 
 if [ "$single" -eq 1 ]; then
@@ -318,6 +411,57 @@ plant_input_isolation_dropped() { # both compositors exec without the namespace
 plant_isolation_one_mode_only() { # cage left unprotected while weston is sealed
 	sed -i 's|isolate "\$prog" -d -- /usr/bin/weston-terminal|exec "$prog" -d -- /usr/bin/weston-terminal|' "$1"
 }
+plant_x11_sharevts_dropped() { # the root server would take a VT away from the owner
+	sed -i 's| -sharevts -novtswitch||' "$1"
+}
+plant_x11_input_device() { # a root X server that opens a real input device
+	printf 'Section "InputDevice"\n\tIdentifier "keyboard"\n\tDriver "libinput"\nEndSection\n' >>"$1"
+}
+plant_x11_abspath_config() { # -config with an absolute path: refused by Xorg
+	sed -i 's|-config sm750-x11.conf|-config /tmp/sm750-x11.conf|' "$1"
+}
+plant_x11_session_script_unset_dropped() { # the generated session script starts with the hostile environment
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+keep = [l for l in open(p)
+        if not (l.startswith('unset ')
+                and ('KWIN_DRM_DEVICES' in l or '__GLX_VENDOR_LIBRARY_NAME' in l))]
+out = open(p, 'w')
+out.writelines(keep)
+out.close()
+MUT
+}
+
+plant_x11_env_note_dropped() { # the leak that cost four kwin crashes goes unmentioned
+	# Both the sentence and the unset list must go, otherwise the variable
+	# names are still in the file and the assertion would rightly still hold.
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+keep = [l for l in open(p)
+        if 'KWIN_DRM_DEVICES' not in l
+        and '__GLX_VENDOR_LIBRARY_NAME' not in l]
+out = open(p, 'w')
+out.writelines(keep)
+out.close()
+MUT
+}
+
+plant_x11_primarygpu_reintroduced() { # a Device-section PrimaryGPU the modesetting driver ignores and warns about
+	# Inserted right after Driver "modesetting", so it lands inside the Device
+	# section and changes nothing else: the rejection can only be the
+	# PrimaryGPU assertion.
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+anchor = '\tDriver "modesetting"\n'
+assert s.count(anchor) == 1, s.count(anchor)
+inject = anchor + '\tOption "PrimaryGPU" "true"\n'
+open(p, 'w').write(s.replace(anchor, inject, 1))
+MUT
+}
 
 control() {
 	local name=$1
@@ -348,6 +492,12 @@ control local-path plant_local_path
 control seconds-zero-clamp plant_seconds_zero
 control input-isolation-dropped plant_input_isolation_dropped
 control isolation-one-mode-only plant_isolation_one_mode_only
+control x11-sharevts-dropped plant_x11_sharevts_dropped
+control x11-input-device plant_x11_input_device
+control x11-abspath-config plant_x11_abspath_config
+control x11-primarygpu-reintroduced plant_x11_primarygpu_reintroduced
+control x11-env-note-dropped plant_x11_env_note_dropped
+control x11-session-script-unset-dropped plant_x11_session_script_unset_dropped
 
 # The pristine copy must still pass, otherwise the controls prove nothing.
 cp "$helper" "$scratch/pristine.sh"
@@ -357,7 +507,7 @@ fi
 printf 'negative control pristine: accepted\n'
 
 [ "$fail" -eq 0 ] || exit 1
-controls=12
+controls=18
 if [ "$self_test" -eq 1 ]; then
 	printf 'Headless helper checks passed (%s assertions, %s planted controls, self-test)\n' "$assertions" "$controls"
 else
