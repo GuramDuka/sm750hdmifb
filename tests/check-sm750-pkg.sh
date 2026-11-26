@@ -9,8 +9,9 @@
 # version-independent rule impossible any other way), so its own argv and file
 # checks are the whole security boundary. That boundary is what this gate
 # pins: newest-pair selection, version agreement, symlink refusal, argv
-# refusal, the unprivileged status path, the root requirement, and the
-# ownership/mode policy for the candidate files.
+# refusal, the unprivileged status path, the root requirement, the
+# ownership/mode policy for the candidate files, and the A65 reload guard
+# (refusal while the framebuffer vtconsole is bound, and the --force override).
 #
 # Everything that would touch the system is stubbed through a temporary PATH:
 # dnf, dkms, rpm, modprobe and lsmod are shell scripts in $scratch/bin that
@@ -23,7 +24,12 @@ set -uo pipefail
 export TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}
 
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-helper=$project_dir/tools/sm750-pkg.sh
+single=0
+if [ "${1:-}" = "--single" ]; then
+	single=1
+	shift
+fi
+helper=${1:-$project_dir/tools/sm750-pkg.sh}
 
 fail=0
 bad() {
@@ -85,6 +91,28 @@ run_helper() {
 	shift
 	PATH="$bin:$PATH" SM750_PKG_ROOT="$_root" SM750_TEST_LOG="$log" \
 		sh "$helper" "$@"
+}
+
+# The fake-root runner keeps its uid-0 `id` in a separate directory: test f
+# above must keep seeing the real uid, so the stub cannot live in $bin.
+binroot=$scratch/bin-root
+mkdir -p "$binroot"
+cat >"$binroot/id" <<'EOF'
+#!/bin/sh
+case "${1:-}" in
+-u) printf '0\n' ;;
+*) exec /usr/bin/id "$@" ;;
+esac
+EOF
+chmod 0755 "$binroot/id"
+
+# run_helper_root VTCLASS ARGS... - as run_helper, but uid 0 and a fake
+# vtconsole tree, so the reload guard can be exercised without root or sysfs.
+run_helper_root() {
+	_vt=$1
+	shift
+	PATH="$binroot:$bin:$PATH" SM750_PKG_ROOT="$scratch/absent" \
+		SM750_VTCLASS="$_vt" SM750_TEST_LOG="$log" sh "$helper" "$@"
 }
 
 # make_rpm TREE RELPATH - a plain, empty file standing in for a built RPM.
@@ -281,8 +309,133 @@ else
 fi
 printf 'ok: i ownership and mode policy (invoking uid accepted, 0666 file and 0775 directory refused, foreign uid refused)\n'
 
+# --- j. A65 reload guard ----------------------------------------------------
+# A hot reload while the framebuffer vtconsole held the panel wedged the module
+# in Unloading (refcount -1) on 2026-11-26 (A65). reload must refuse in that
+# state, --force must be the only way past it, and the console's name is part
+# of the match: a bound VGA+ console is not this guard.
+vtroot=$scratch/vt
+mkdir -p "$vtroot/vtcon0" "$vtroot/vtcon1"
+printf '(S) VGA+\n' >"$vtroot/vtcon0/name"
+printf '0\n' >"$vtroot/vtcon0/bind"
+printf '(M) frame buffer device\n' >"$vtroot/vtcon1/name"
+printf '1\n' >"$vtroot/vtcon1/bind"
+refusal="sm750-pkg: refusing to unload: the framebuffer vtconsole is still bound (A65: a hot reload in that state wedged the module in Unloading on 2026-11-26). Run 'sm750-vt off' first, or pass --force if you accept the risk."
+: >"$log"
+out=$(run_helper_root "$vtroot" reload 2>&1)
+st=$?
+expect_exit "j1: bound fbcon reload" "$st" 1
+expect_in "j1: refusal text" "$out" "$refusal"
+expect_exit "j1: refused reload must not call modprobe" \
+	"$(count_calls modprobe)" 0
+# --force proceeds, states that it does, and unloads before it loads.
+: >"$log"
+out=$(run_helper_root "$vtroot" reload --force 2>&1)
+st=$?
+expect_exit "j2: forced reload" "$st" 0
+expect_in "j2: force line" "$out" "sm750-pkg: unloading anyway (--force)"
+expect_exit "j2: unload then load" "$(count_calls modprobe)" 2
+_first=$(grep '^modprobe ' "$log" | head -n 1)
+expect_in "j2: unload first" "$_first" "modprobe -r sm750hdmidrm"
+# Only the framebuffer console's name is the guard: a bound VGA+ console and a
+# detached fbcon both reload normally.
+printf '1\n' >"$vtroot/vtcon0/bind"
+printf '0\n' >"$vtroot/vtcon1/bind"
+: >"$log"
+out=$(run_helper_root "$vtroot" reload 2>&1)
+st=$?
+expect_exit "j3: bound non-fbcon console reloads" "$st" 0
+expect_not_in "j3: no refusal" "$out" "refusing to unload"
+expect_exit "j3: reload proceeds" "$(count_calls modprobe)" 2
+printf 'ok: j A65 reload guard (bound fbcon refused, --force overrides, name is part of the match)\n'
+
 if [ "$fail" -ne 0 ]; then
 	printf 'sm750-pkg self-tests failed\n' >&2
 	exit 1
 fi
-printf 'sm750-pkg self-tests passed (9 groups: selection, version pair, symlinks, argv, unprivileged status, root gate, single dkms call, missing tools, ownership/mode)\n'
+if [ "$single" -eq 1 ]; then
+	printf 'sm750-pkg self-tests passed (10 groups, --single: %s)\n' "$helper"
+	exit 0
+fi
+
+# --- planted controls -------------------------------------------------------
+# Each control deletes one PROPERTY and keeps the sentence that explains it, so
+# a gate that passes after the mutation is a gate that was not checking it.
+control() {
+	_name=$1
+	_mutator=$2
+	_planted=$scratch/planted-$_name.sh
+	cp "$project_dir/tools/sm750-pkg.sh" "$_planted"
+	chmod 0755 "$_planted"
+	if ! "$_mutator" "$_planted"; then
+		printf 'FAIL: negative control %s: mutator did not apply\n' "$_name" >&2
+		fail=1
+		return 1
+	fi
+	_err=$scratch/planted-$_name.err
+	if bash "$0" --single "$_planted" >/dev/null 2>"$_err"; then
+		printf 'FAIL: negative control %s was accepted\n' "$_name" >&2
+		fail=1
+		return 1
+	fi
+	[ -s "$_err" ] || {
+		printf 'FAIL: negative control %s failed without a reason\n' \
+			"$_name" >&2
+		fail=1
+		return 1
+	}
+	printf 'negative control %s: rejected: %s\n' \
+		"$_name" "$(head -n 1 "$_err")"
+}
+
+# (a) guard removed entirely, call and function.
+mut_guard_removed() {
+	python3 - "$1" <<'PY'
+import sys
+
+path = sys.argv[1]
+text = open(path).read()
+call = "\treload_guard\n"
+assert text.count(call) == 1, "guard call count"
+text = text.replace(call, "", 1)
+start = text.index("reload_guard() {\n")
+end = text.index("\n}\n", start) + len("\n}\n")
+open(path, "w").write(text[:start] + text[end:])
+PY
+}
+
+# (b) guard matches only bind=1 without checking the console name.
+mut_bind_only() {
+	python3 - "$1" <<'PY'
+import sys
+
+path = sys.argv[1]
+text = open(path).read()
+old = '\t\t*"(M) frame buffer device"*) return 0 ;;\n'
+assert text.count(old) == 1, "name match count"
+open(path, "w").write(text.replace(old, "\t\t*) return 0 ;;\n", 1))
+PY
+}
+
+# (c) --force accepted but never printed.
+mut_force_silent() {
+	python3 - "$1" <<'PY'
+import sys
+
+path = sys.argv[1]
+text = open(path).read()
+old = '\t\tsay "$PROG: unloading anyway (--force)"\n'
+assert text.count(old) == 1, "force say count"
+open(path, "w").write(text.replace(old, "", 1))
+PY
+}
+
+control guard-removed mut_guard_removed
+control name-unchecked mut_bind_only
+control force-silent mut_force_silent
+
+if [ "$fail" -ne 0 ]; then
+	printf 'sm750-pkg self-tests failed\n' >&2
+	exit 1
+fi
+printf 'sm750-pkg self-tests passed (10 groups: selection, version pair, symlinks, argv, unprivileged status, root gate, single dkms call, missing tools, ownership/mode, A65 reload guard)\n'

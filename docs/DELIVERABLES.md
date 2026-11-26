@@ -130,7 +130,7 @@ to `src/*.c` or `src/*.h` (`docs/evidence/builds/11-warnings-scan.log`).
 ```
 
 Expected: exit 0. The script rebuilds the noarch RPM from a fresh `_topdir`,
-asserts the payload against `git ls-files` (149 payload files in the current
+asserts the payload against `git ls-files` (151 payload files in the current
 tree; the same command the script uses is `git ls-files -- . ':(exclude)docs/plan'
 ':(exclude)docs/evidence' ':(exclude)docs/images' ':(exclude)docs/notes' |
 wc -l`), the `%files` list

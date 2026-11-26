@@ -51,6 +51,7 @@ that half of P1.
 | 11 | proposed | refresh `/usr/local/sbin/sm750-vt` from the tree (the installed body is the first version, which fails) and use the two NOPASSWD lines already in place for `/usr/local/sbin/sm750-vt off` and `/usr/local/sbin/sm750-vt on` (section 3.12), then run `sm750-vt off` to load the 0.6.7 module without a reboot | the reload blocker: a rebuilt module cannot be loaded while the vtconsole holds the framebuffer reference (`modprobe: FATAL: Module sm750hdmidrm is in use.`), and detaching the vtconsole alone does not release it (A51) |
 | 12 | proposed | reboot with `intel_iommu=on iommu=pt`, then bind `0000:01:00.0` to `vfio-pci` for a guest (section 3.13) | no GAP and no P1: the guest runs its own copies of `sm750_pm_suspend()` / `sm750_pm_resume()`, the host's copies never execute, and the chip stays in D0 from the host's point of view |
 | 13 | proposed | install the PM test helper with `sudo install -m 0755 -o root -g root tools/sm750-pmtest.sh /usr/local/sbin/sm750-pmtest`, add `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-pmtest` (section 3.14), then run `sm750-pmtest run devices` in a maintenance window | the host-wide `pm_test` cycle that P1 needs, still deferred to the owner's window; the helper makes the cycle repeatable and cannot leave `pm_test` armed |
+| 14 | proposed | install the hang capture with `sudo install -m 0755 -o root -g root tools/sm750-hang.sh /usr/local/sbin/sm750-hang`, add `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-hang` (section 3.15), then run `sudo -n /usr/local/sbin/sm750-hang capture` after the next wedge | A65: the 2026-11-26 hot reload wedged the module in `Unloading` with no stack captured, so the blocked function is unknown; this helper exists before the next reproduction so `02-stacks.txt` finally closes it |
 
 Sections below are ordered by subject, not by date: allowlist, recovery recipe,
 helpers, udev rule, installed state and re-verification, gap map.
@@ -1632,6 +1633,72 @@ sudo -n /usr/local/sbin/sm750-pmtest status
 The proof to look for is the same four `pm:` lines named in section 3.13, with
 no `pm: suspend failed:` or `pm: resume failed:` line in the same cycle, and
 `PANEL_CURRENT_LINE` advancing between two reads.
+
+### 3.15 Capturing a stack from a wedged driver
+
+Defect A65: on 2026-11-26 a hot `modprobe -r sm750hdmidrm` with the framebuffer
+vtconsole bound wedged the module in `Unloading` (refcount -1) and left
+`modprobe -r` in `D` state for the rest of the boot. `kernel.dmesg_restrict=1`,
+the hung-task detector never fired and no allowlisted helper could read
+`/proc/<pid>/stack`, so the blocked function was never identified and A65 has no
+root cause. This helper exists before the next reproduction, so that a stack is
+finally available.
+
+Install (repo-relative source; the installed copy is byte-identical):
+
+```sh
+sudo install -m 0755 -o root -g root tools/sm750-hang.sh /usr/local/sbin/sm750-hang
+```
+
+One NOPASSWD line, with no colon in the command line (section 1 rule):
+
+```sh
+coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-hang
+```
+
+The helper is read-only. It reads `/proc`, `/sys`, `/dev/dri`, `lsmod`, `ps`,
+`journalctl` and `dmesg`; it never writes sysfs, never calls `modprobe` and never
+tries to unwedge anything. `capture` writes six files into a fresh directory
+(default `/mega/tmp/sm750/hang/<UTC stamp>`, refusing to overwrite one that
+exists):
+
+- `00-summary.txt` - date, kernel release, the `sm750hdmidrm` line from
+  `/proc/modules`, the matching `lsmod` lines and one line per `D`-state task.
+- `01-tasks.txt` - the full `ps` row of every `D`-state task plus every
+  `modprobe`/`insmod`/`rmmod`/`dkms` process.
+- `02-stacks.txt` - for every `D`-state pid a `=== pid NNN comm` header, then
+  `/proc/NNN/stack` and `/proc/NNN/wchan`. A kernel thread's stack may be
+  unreadable; that error text is recorded, never fatal. **This is the file that
+  closes A65.**
+- `03-driver.txt` - refcnt, srcversion, the PCI driver link, every vtconsole
+  name and bind, `/proc/fb` and `/dev/dri`.
+- `04-kernel.txt` - the last 400 lines of `journalctl -k -b` and the last 200
+  lines of `dmesg`.
+- `05-locks.txt` - whether `/proc/lockdep` exists and the two hung-task sysctls.
+  The large `lockdep_stats` and tracing `available_filter_functions` dumps are
+  deliberately not read: neither names the blocked function.
+
+After any future wedge, run:
+
+```sh
+sudo -n /usr/local/sbin/sm750-hang capture
+sudo -n /usr/local/sbin/sm750-hang status
+```
+
+`capture` prints each file with its line count and one verdict line: `stacks
+captured, read 02-stacks.txt first` when `02-stacks.txt` is non-empty, else `no
+stack captured - the task was not in an uninterruptible wait, or
+/proc/<pid>/stack is not readable`. `status` prints the same summary, task and
+driver facts to stdout without writing anything. Exit codes: 0 capture written,
+1 failed capture or wrong privileges, 2 usage.
+
+The helper cannot recover a wedged module. A module stuck in `Unloading` with
+refcount -1 cannot be unloaded from userspace; only a reboot does that. The
+helper's only job is to make the next wedge leave behind the stack that A65
+needs. The gate `tests/check-hang-helper.sh` pins its properties, and
+`tests/check-sm750-pkg.sh` pins the `sm750-pkg reload` refusal that keeps a hot
+reload from re-entering the wedged state while the framebuffer vtconsole is
+still bound.
 
 ## 4. udev ACL rule
 

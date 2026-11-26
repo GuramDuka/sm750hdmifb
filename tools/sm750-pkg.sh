@@ -47,6 +47,10 @@ DRIVER=sm750hdmifb
 TOOLS=sm750hdmifb-tools
 ROOT=${SM750_PKG_ROOT:-/mega/tmp/sm750/t6/rpmbuild/RPMS}
 VERSION_FILE=/sys/module/$MODULE/version
+# SM750_VTCLASS redirects the vtconsole tree for tests/check-sm750-pkg.sh only;
+# sudo strips the environment unless setenv is granted, and the allowlist
+# grants no setenv.
+VTCLASS=${SM750_VTCLASS:-/sys/class/vtconsole}
 
 usage() {
 	cat >&2 <<'EOF'
@@ -66,7 +70,11 @@ usage: sm750-pkg install | remove | status | reload
   status   read-only: dkms status, the loaded module version, its lsmod line,
            the SM750 PCI device from sysfs, and the newest built RPM pair with
            the version that install would use. Runs unprivileged.
-  reload   unload and load sm750hdmidrm, then print the loaded version.
+  reload [--force]
+           unload and load sm750hdmidrm, then print the loaded version.
+           Refuses while the framebuffer vtconsole is still bound: a hot
+           reload in that state wedged the module in Unloading with refcount
+           -1 (A65). --force skips that refusal and accepts the risk.
 
 install, remove and reload need root.
 Exit codes: 0 ok, 1 failure or wrong privileges, 2 bad usage.
@@ -462,8 +470,42 @@ cmd_status() {
 	print_pair
 }
 
+# fbcon_bound - true when a vtconsole is bound and is the framebuffer one, the
+# state in which the panel is driven through the SM750 framebuffer console.
+fbcon_bound() {
+	for _vc in "$VTCLASS"/vtcon*; do
+		[ -e "$_vc" ] || continue
+		[ "$(cat "$_vc/bind" 2>/dev/null)" = 1 ] || continue
+		case $(cat "$_vc/name" 2>/dev/null) in
+		*"(M) frame buffer device"*) return 0 ;;
+		esac
+	done
+	return 1
+}
+
+# reload_guard - refuse the unload while the framebuffer vtconsole is bound.
+# A hot reload in that state wedged the module in Unloading on 2026-11-26 (A65)
+# and no stack could be captured, so the next reproduction must not repeat it.
+reload_guard() {
+	if ! fbcon_bound; then
+		return 0
+	fi
+	if [ "$force" -eq 1 ]; then
+		say "$PROG: unloading anyway (--force)"
+		return 0
+	fi
+	fail "refusing to unload: the framebuffer vtconsole is still bound (A65: a hot reload in that state wedged the module in Unloading on 2026-11-26). Run 'sm750-vt off' first, or pass --force if you accept the risk."
+}
+
 cmd_reload() {
+	force=0
+	if [ "${1:-}" = "--force" ]; then
+		force=1
+		shift
+	fi
+	[ $# -eq 0 ] || usage
 	need_root reload
+	reload_guard
 	run modprobe -r "$MODULE" || say "$MODULE was not loaded"
 	run modprobe "$MODULE" || fail "modprobe $MODULE failed"
 	say "== loaded module"
@@ -479,10 +521,18 @@ case $action in
 install | remove | status | reload) ;;
 *) usage ;;
 esac
-[ $# -eq 0 ] || usage
+case $action in
+reload)
+	[ $# -le 1 ] || usage
+	[ $# -eq 0 ] || [ "$1" = "--force" ] || usage
+	;;
+*)
+	[ $# -eq 0 ] || usage
+	;;
+esac
 case $action in
 install) cmd_install ;;
 remove) cmd_remove ;;
 status) cmd_status ;;
-reload) cmd_reload ;;
+reload) cmd_reload "$@" ;;
 esac

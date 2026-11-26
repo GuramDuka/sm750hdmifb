@@ -275,6 +275,18 @@ test "$stage_count" -ge 6 || {
 # the verdict that needs both completion lines, and the absence of fb0 as a
 # success criterion. Source-level; it never writes sysfs, suspends or needs root.
 ./tests/check-pmtest-helper.sh
+# T62: the A65 forensic pair. tools/sm750-hang.sh is the read-only capture
+# installed as /usr/local/sbin/sm750-hang (ROOT-ACTIONS.md 3.15): a root check
+# before the first write, no OUTDIR overwrite, six files, a D-state-only task
+# filter, a `=== pid` header per blocked pid, and a verdict that distinguishes
+# a captured stack from one /proc could not report; it never writes sysfs,
+# never calls modprobe and needs no root. tools/sm750-pkg.sh gains the reload
+# refusal while the framebuffer vtconsole is bound (the state that wedged the
+# module in Unloading on 2026-11-26) and the --force override. Source-level,
+# with three planted controls each; neither adds a `make check` recipe
+# command, so the documented count of 17 is unchanged.
+./tests/check-hang-helper.sh
+./tests/check-sm750-pkg.sh
 # Runtime guard properties found by the 2026-11-26 production-readiness
 # review (docs/evidence/review/02-production-readiness-runtime.txt): D1 (the
 # direct scanout path must not read past the plane object or VRAM), D2 (the

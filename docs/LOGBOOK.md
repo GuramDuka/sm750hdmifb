@@ -4221,3 +4221,49 @@ rows and 54 runtime transcripts; plan decisions 99 and 100 record the defect and
 decision. Lesson: a hot reload is not a safe operation on this driver until A65 is closed,
 and the reload path in `tools/sm750-pkg.sh` should refuse to unload while the vtconsole is
 bound.
+
+### 2026-11-26T23:52Z | orchestrator | A65 tooling: a reload guard and a stack capture
+
+The A65 wedge proved two gaps, not one: nothing prevented the unsafe operation, and nothing
+could record why it hung. Both are now closed in userspace-only code.
+
+`tools/sm750-pkg.sh` gained a reload guard. `fbcon_bound()` reads every
+`/sys/class/vtconsole/vtcon*/name` and `bind` pair and requires both `bind=1` and a name
+containing `(M) frame buffer device`, so a bound `(S) VGA+` console is deliberately not the
+guard. `reload_guard()` then refuses the unload and prints the observed state and the remedy
+rather than a generic error, and `--force` skips it with one explicit line. The vtconsole
+directory is reachable through the `SM750_VTCLASS` seam so the gate can simulate a bound and
+an unbound console without touching the host. Dispatch still accepts only `reload` with an
+optional `--force`; every other subcommand is unchanged. The script is 537 lines, up from 488.
+
+`tools/sm750-hang.sh` is a new read-only capture for the next reproduction. `capture` writes
+six files (summary, tasks, stacks, driver, kernel, locks) under `/mega/tmp/sm750/hang` with a
+UTC stamp, refuses an existing directory, checks root before the first write, filters the
+process table to uninterruptible tasks and module tools, reads `/proc/PID/stack` and `wchan`
+for each and records the errno text instead of aborting, snapshots `refcnt`, `srcversion`, the
+driver symlink, every vtconsole name and bind, `/proc/fb` and `/dev/dri`, tails the boot
+journal and `dmesg`, and records lockdep presence plus the two hung-task sysctls while
+deliberately not reading `lockdep_stats` or `available_filter_functions`. Its verdict line
+distinguishes stacks captured from a task that was not uninterruptible or an unreadable
+stack, which is the exact ambiguity that left A65 without evidence. `status` prints the same
+facts and writes nothing.
+
+Guards: `tests/check-hang-helper.sh` with 7 assertion sections and 3 property-deleting
+planted controls, and `tests/check-sm750-pkg.sh` group j with 3 more. Both run inside
+`tests/check-drm-policy.sh` so the `make check` recipe count is unchanged, and both are pinned
+in the scratch census, now 24 entries. `docs/ROOT-ACTIONS.md` gained row 14 and section 3.15
+with the install line and the colon-free sudoers line.
+
+Gates: `Hang helper checks passed (7 assertions, 3 planted controls)`; `sm750-pkg self-tests
+passed (10 groups: selection, version pair, symlinks, argv, unprivileged status, root gate,
+single dkms call, missing tools, ownership/mode, A65 reload guard)`; `Scratch policy checks
+passed (24 scripts, resolver before first mktemp, census pinned)`; `DRM mode policy checks
+passed (16 runtime-guard assertions, 16 planted controls)`; `Release version consistency
+checks passed: 0.6.8`. One hygiene defect was found and fixed before the commit -
+`tests/check-sm750-pkg.sh` had grown a blank line at EOF.
+
+Counts after staging: 151 payload files, 33 gate scripts, 54 runtime transcripts, 64 defect
+rows. A65 stays OPEN with no root cause; these tools change what is possible next time, not
+what happened. Lesson: a guard belongs on the operation that wedged the machine, and a capture
+helper belongs on the evidence that was missing - writing the record without either would
+leave the same hole open.

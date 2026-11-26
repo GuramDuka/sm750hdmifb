@@ -46,6 +46,7 @@ scripts=(
 	tests/check-render-node.sh
 	tests/check-vt-helper.sh
 	tests/check-pmtest-helper.sh
+	tests/check-hang-helper.sh
 	tools/benchmark-staging.sh
 	tools/sm750-crc-cycle.sh
 	tools/sm750-pmtest.sh
