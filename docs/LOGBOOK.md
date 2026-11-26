@@ -3863,3 +3863,101 @@ control; `./tests/check-scratch-policy.sh`, `./tests/check-drm-policy.sh`,
 `./tests/check-release-version.sh`, `./tests/check-drm-packaging.sh`,
 `./build-package.sh` and `./tests/audit-release.sh` all exit 0; `git diff
 --check` is clean and `grep -cP '[^\x00-\x7F]'` is 0 on every touched file.
+
+### 2026-11-26T10:45Z | orchestrator | correction to the 11:35Z entry: the reference is transient, the reload ran, and A47 is proven on hardware
+
+This entry corrects `### 2026-11-26T11:35Z | orchestrator | T62 and A52: the
+reference is not the framebuffer, and it is not measurable here`. That entry
+ends by stating that "the working path to a newly built module remains a
+reboot". That is wrong, and the error is mine rather than the driver's: the
+module reference A52 could not release is transient. Between the failing run at
+08:35Z and the successful run at 10:37Z nothing happened - no reboot, no module
+operation and no action by anyone - and the refcount fell to 0 on its own:
+
+    12:34:40: 0
+    12:34:41: 0
+    12:34:42: 0
+    sm750hdmidrm 200704 0 - Live 0xffffffffc0a3d000 (OE)
+
+with `holders/` still empty and the version still 0.6.5. Everything else in the
+11:35Z entry stands: the five explanations it killed stay killed, the rejection
+of `drm_dev_unregister()` stays right, and A52 stays open with no code change.
+What changes is the consequence - a reload is possible, it is merely not
+schedulable, because nothing on this host can predict when the reference clears.
+
+The same helper that had failed twice then succeeded, `rc=0`:
+
+    sm750-vt: refcnt before any change: 0
+    sm750-vt: fbcon detached, bind=0
+    sm750-vt: device unbound, refcnt after the unbind: 0
+    sm750-vt: module unloaded
+    sm750-vt: device re-bound, .../driver -> /sys/bus/pci/drivers/sm750hdmidrm
+    fbcon:        detached then re-bound to /sys/class/vtconsole/vtcon1, bind=1
+    reloaded:     0.6.5 -> 0.6.7 (srcversion=FF25FF6111B7C6D174A72F8 refcnt=1)
+
+The loaded module is now 0.6.7, `sm750-smi --query=driver_version,srcversion`
+agrees, the DRM minor reset to 0 so the card is `card0` and `renderD128` again,
+and `dmesg` shows `[drm] Initialized sm750hdmidrm 0.6.7 for 0000:01:00.0 on
+minor 0`, `fb0: sm750hdmidrmdrm frame buffer device` and one
+`painted a test card: no client has produced a frame (test_pattern=auto)`, with
+no oops and no warning. So the reboot I asked the owner for was never needed,
+and the 0.6.7 fix had been sitting in `/lib/modules` unused for three hours.
+
+A47 is then proven on the hardware, not argued. A KWin 6.7.5 session on `card0`
+started with `env -u KWIN_DRM_USE_MODIFIERS` - the workaround deliberately
+unset - logs `kwin_wayland_drm: drmModeAddFB2WithModifiers is not supported on
+GPU "/dev/dri/card0"`, then `Using Atomic Mode Setting`, `Number of planes on
+GPU "/dev/dri/card0" : 2`, `New output on GPU /dev/dri/card0: PHL 243V7` and
+`kwin_core: OpenGL compositing has been successfully initialized`. The count of
+`Failed to create framebuffer` is **0**, against **359** on 0.6.5, and the
+string `modifier support disabled by environment variable` does not appear at
+all, which is what "the device withdrew the capability" looks like from the
+client side.
+
+At the ioctl level the probe shows exactly the intended split: on 0.6.5
+`MODIFIERS + LINEAR` succeeded, on 0.6.7 it returns `errno 22` while plain
+AddFB2 still succeeds, and formats outside the plane list (`RGB565`,
+`XBGR8888`, `ABGR8888`) fail either way. The scanout is live under the
+compositor: `PANEL_CURRENT_LINE` 0x107 -> 0x35a -> 0x1f4, `PANEL_FB_ADDRESS`
+alternating 0x003f4800 and 0, `PANEL_WINDOW_WIDTH` 0x077f0000 and
+`PANEL_WINDOW_HEIGHT` 0x04370000, and twelve `sm750-console show` samples over
+103 s with `nonzero 262144` and `crc32 0x976e751b` unchanged.
+
+The honest limit is unchanged and is now measured rather than assumed: the
+compositor runs on software GL. `kwin_scene_opengl: couldn't find dev node for
+drm device`, `libEGL warning: pci id for fd 14: 126f:0750, driver (null)` and
+`Refusing to try glamor on llvmpipe` say so plainly - no Mesa driver exists for
+this GPU, the card is the output device and the CPU renders.
+
+A52 is narrowed in `docs/DEFECTS.md` rather than closed: the heading now reads
+"the module reference survives a full driver detach and then clears on its own",
+the status cell says the reference clears by itself so a reload is possible but
+not schedulable, and a dated update subsection carries the three 12:34 samples
+and the successful transcript. The one actionable leftover is a bounded poll for
+refcnt 0 inside `tools/sm750-vt.sh`, which is a helper change, not a driver one.
+
+Evidence: section 10 of `docs/evidence/runtime/41-vt-hot-reload.txt` and the new
+`docs/evidence/runtime/42-modifier-withdrawal-proof.txt`; section 4.7 of
+`docs/PLASMA-WAYLAND.md`; row S25 of `docs/TEST-STRATEGY.md`; the A47 update
+subsection in `docs/DEFECTS.md`; decision 89 in the plan of record. Two
+contradictions reported by the documentation pass were fixed rather than left:
+`docs/PLASMA-WAYLAND.md` cited `src/sm750_drm.c:4617-4619` for
+`drm_simple_display_pipe_init()` where the call is at `:4624-4626` with a `NULL`
+format-modifier argument, and it claimed the flag is set "in both mode config
+structs" where `src/sm750_drm.c:4606` assigns the device-wide
+`drm->mode_config.fb_modifiers_not_supported` once, directly after the funcs
+selection at `:4604-4605`.
+
+Gates re-run after these edits: `./tests/check-vt-helper.sh` prints `VT helper checks passed (13 assertions,
+10 planted controls)`; `./tests/check-scratch-policy.sh` prints `21 scripts`;
+`./tests/check-drm-policy.sh`, `./tests/check-release-version.sh`,
+`./tests/check-drm-packaging.sh`, `./tests/check-render-node.sh`,
+`./tests/check-sm750-smi.sh` and `./tests/check-headless-helper.sh` all exit 0;
+`./tests/check-render-node.sh --self-test` reports `12 assertions, 5 planted
+controls` and rejects both modifier controls; `./build-package.sh` writes the
+three artifacts and `./tests/audit-release.sh` passes. `make check` needs an
+enabled connector for `tests/check-drm-module.sh`, so it ran with
+`sm750-headless weston 300` holding master (`connector enabled after 4s`,
+`master: acquired`, `master: dropped`) and exits 0 with `Ran 4 tests ... OK`.
+`git diff --check` is clean and `grep -cP '[^\x00-\x7F]'` is 0 on every
+touched file.

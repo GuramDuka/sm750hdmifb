@@ -217,7 +217,7 @@ process, plasmashell and Xwayland were all running, and the raster was dead
 because the kernel rejected every framebuffer kwin asked it to create.
 
 The driver is not the cause. It passes `NULL` as the `format_modifiers` argument
-of `drm_simple_display_pipe_init()` at `src/sm750_drm.c:4617-4619`, and the
+of `drm_simple_display_pipe_init()` at `src/sm750_drm.c:4624-4626`, and the
 kernel documents that a driver which supports only the linear modifier may pass
 NULL, in which case the plane advertises exactly `DRM_FORMAT_MOD_LINEAR`
 (`/usr/src/kernels/7.3.4-100.fc43.x86_64/include/drm/drm_plane.h:885-886` and
@@ -250,7 +250,8 @@ the framebuffer failures are **zero**, and the scanout is live:
 with `crc32 0xe00643f1`, not the all-zero frame signature `0xe20eea22`.
 
 The device-level fix, in 0.6.7, removes the need for the variable: the driver
-sets `.fb_modifiers_not_supported = 1` in both mode config structs, so the
+sets `drm->mode_config.fb_modifiers_not_supported = 1` once, immediately after
+the `drm->mode_config.funcs` selection (`src/sm750_drm.c:4604-4606`), so the
 kernel reports `DRM_CAP_ADDFB2_MODIFIERS` as **0** to userspace, and every
 client - kwin and any other that hits the same path - takes the modifiers-free
 route by itself. On 0.6.7 or newer the environment variable is redundant, not
@@ -273,6 +274,44 @@ Diagnosis here is done from kwin's own log because `strace` cannot be attached
 to kwin on this host: `ptrace(PTRACE_SEIZE, ...)` fails with the localised
 `strerror(EPERM)` text, errno **1**. The compositor's log is the only trace
 available, which is why the framebuffer line is worth knowing by name.
+
+### 4.7 The same result with the fix loaded, and no override
+
+Sections 4.4 to 4.6 describe an outcome seen on module 0.6.5 and a fix that
+shipped in 0.6.7 but was then only built and gated. 0.6.7 has since been loaded
+on this host by the hot reload of `docs/evidence/runtime/41-vt-hot-reload.txt`
+section 10, and the fixed case was measured on the panel.
+
+The session was started the same way as section 3 except that
+`KWIN_DRM_USE_MODIFIERS` was explicitly unset (`env -u KWIN_DRM_USE_MODIFIERS`),
+so no environment variable can be credited for the result. KWin discovers the
+missing capability for itself and logs
+
+```text
+kwin_wayland_drm: drmModeAddFB2WithModifiers is not supported on GPU "/dev/dri/card0"
+```
+
+and reaches `kwin_core: OpenGL compositing has been successfully initialized`
+with output PHL 243V7 in about a second, with plasmashell up about a second
+later. `grep -c 'Failed to create framebuffer'` over the session log returns
+**0**, where the 0.6.5 session of section 4.4 returned **359**. The raster
+advanced (`PANEL_CURRENT_LINE` took three different values over three samples
+two seconds apart), and twelve scanout samples five seconds apart all read
+`nonzero 262144` with `crc32 0x976e751b` while the offset alternated between 0
+and 4147200, so the scanout is a live double-buffered frame, not one frozen
+buffer.
+
+Chronology, stated once so it cannot be read backwards: the 0.6.5 session of
+section 4.4 REQUIRED the override, section 4.5 records that override as the
+workaround, and 0.6.7 makes it redundant because the driver refuses
+modifier-flagged framebuffer creation for the whole device. Nothing in sections
+4.4 to 4.6 is withdrawn by this one; it is the fixed case reaching the panel.
+
+The two limits of section 5 are unchanged by this. A session that initialises
+and scans still cannot be driven, because `/dev/input/event*` are unreadable to
+this account, and it still cannot be screencast, because kwin's screencast
+needs the PipeWire graph and system bus that the `NoopSession` bypass removes.
+Both remain documented in section 5.
 
 ## 5. Limits that remain
 

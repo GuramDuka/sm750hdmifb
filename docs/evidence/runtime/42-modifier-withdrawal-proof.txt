@@ -1,0 +1,192 @@
+# 42 - the modifier withdrawal on the panel: probe table, compositor and scanout
+
+Measured on 2026-11-26 on the target host, PCI 0000:01:00.0, module
+sm750hdmidrm 0.6.7 (srcversion FF25FF6111B7C6D174A72F8), panel PHL 243V7 over
+HDMI, kernel 7.3.4-100.fc43.x86_64. The module was loaded by the hot reload
+recorded in `docs/evidence/runtime/41-vt-hot-reload.txt` section 10, not by a
+reboot.
+
+This is the hardware proof of defect A47 in `docs/DEFECTS.md`: the device-level
+withdrawal of framebuffer modifiers is live, a KWin session takes the
+modifiers-free path by itself, and the panel scans a double-buffered frame.
+
+## 1. Subject
+
+0.6.7 withdraws framebuffer modifiers for the whole device. The change is one
+line, `drm->mode_config.fb_modifiers_not_supported = 1;` at
+`src/sm750_drm.c:4606`, placed immediately after the two-line
+`drm->mode_config.funcs` selection at `:4604-4605` so that both the VRAM/TTM and
+the shmem shadow configuration reach it.
+
+It exists because KWin 6.7.5 submitted a modifier the plane does not advertise
+and DRM core answered EINVAL: the session log carried `Failed to create
+framebuffer` 359 times and the scanout froze on 0.6.5. With the flag set, core
+reports `DRM_CAP_ADDFB2_MODIFIERS=0`, every client takes the plain AddFB2 path
+without being told to, and the failure cannot recur for a client that asks for a
+modifier.
+
+## 2. ioctl-level proof, before and after
+
+The probe is a userspace program, `/mega/tmp/sm750/wayland-barriers/fbfmt-probe`,
+not shipped in this repository. It was run on the same card against the same
+1920x1080 buffer, first on 0.6.5 and then on 0.6.7. "Flag" means the
+`DRM_MODE_FB_MODIFIERS` flag of `DRM_IOCTL_MODE_ADDFB2`; the modifier value is
+named where the flag is set.
+
+| Format | Flag | 0.6.5 | 0.6.7 |
+| --- | --- | --- | --- |
+| XRGB8888, pitch 4096 | none | `OK fb=42` | `OK fb=42` |
+| XRGB8888, pitch 4096 | MODIFIERS + LINEAR | `OK fb=42` | `FAIL errno=22` |
+| XRGB8888, pitch 4096 | MODIFIERS + INVALID | `FAIL errno=22` | `FAIL errno=22` |
+| RGB565 (0x36314752) | none | not measured | `FAIL errno=22` |
+| RGB565 (0x36314752) | MODIFIERS + LINEAR | not measured | `FAIL errno=22` |
+| XBGR8888 (0x34324258) | none | not measured | `FAIL errno=22` |
+| XBGR8888 (0x34324258) | MODIFIERS + LINEAR | not measured | `FAIL errno=22` |
+| ABGR8888 (0x34324241) | none | not measured | `FAIL errno=22` |
+| ABGR8888 (0x34324241) | MODIFIERS + LINEAR | not measured | `FAIL errno=22` |
+
+RGB565, XBGR8888 and ABGR8888 fail on 0.6.7 with and without the flag because
+those formats are not in the plane's format list at all; the EINVAL there is the
+format gate, not the modifier gate. The 0.6.5 probe was not extended to those
+formats, so those cells stay unmeasured rather than inferred.
+
+The capability change is the XRGB8888 pair: plain AddFB2 still succeeds and any
+modifier-flagged AddFB2 is refused by the DRM core. That is exactly what
+withdraws the capability - not a driver-side rejection of one modifier value,
+but core declining the whole modifier-flagged entry point because the device
+declares that it does not support modifiers.
+
+## 3. The compositor session
+
+Session script `/mega/tmp/sm750/wayland-barriers/run-067.sh`, not shipped. It
+starts a private session bus, points `DBUS_SYSTEM_BUS_ADDRESS` at a nonexistent
+socket so KWin falls back to `NoopSession`, uses a private `XDG_RUNTIME_DIR`,
+sets `KWIN_DRM_DEVICES=/dev/dri/card0` and
+`KWIN_RENDER_NODES=/dev/dri/renderD128`, and runs `startplasma-wayland`.
+
+It does NOT set `KWIN_DRM_USE_MODIFIERS`. The earlier workaround is explicitly
+unset with `env -u KWIN_DRM_USE_MODIFIERS`, so nothing in the environment can be
+credited for the result.
+
+The compositor reached readiness in about 1 s, and plasmashell came up in about
+1 s. Verbatim `kwin_wayland_drm` log lines:
+
+```
+kwin_wayland_drm: drmModeAddFB2WithModifiers is not supported on GPU "/dev/dri/card0"
+kwin_wayland_drm: Using Atomic Mode Setting on gpu "/dev/dri/card0"
+kwin_wayland_drm: Number of planes on GPU "/dev/dri/card0" : 2
+kwin_wayland_drm: adding GPU /dev/dri/card0
+kwin_wayland_drm: New output on GPU /dev/dri/card0: PHL 243V7
+kwin_core: OpenGL compositing has been successfully initialized
+```
+
+The decisive comparison is the framebuffer failure count:
+
+```
+$ grep -c 'Failed to create framebuffer' session.log
+0
+```
+
+The same grep over the 0.6.5 session found 359. KWin discovers the withdrawn
+capability itself and says so in its first line; no environment variable was
+needed for it to do that.
+
+## 4. Raster and scanout
+
+Three register samples two seconds apart, verbatim values:
+
+```
+PANEL_DISPLAY_CTRL   0x0f010105   0x0f010105   0x0f010105
+PANEL_FB_ADDRESS     0x003f4800   0x00000000   0x00000000
+PANEL_WINDOW_WIDTH   0x077f0000   0x077f0000   0x077f0000
+PANEL_WINDOW_HEIGHT  0x04370000   0x04370000   0x04370000
+PANEL_CURRENT_LINE   0x00000107   0x0000035a   0x000001f4
+```
+
+The window is 1920x1080, and `PANEL_CURRENT_LINE` takes three different values,
+so the raster is advancing rather than frozen.
+
+The scanout readback was sampled twelve times, five seconds apart, between
+13:16:21 and 13:18:04 local time. Every sample reported:
+
+```
+scanout nonzero: 262144
+scanout crc32: 0x976e751b
+```
+
+and the `scanout offset` alternated between 0 and 4147200, the staged
+backbuffer, which is the direct statement that double buffering is in use. A
+stable CRC over a static desktop with the offset flipping between the two
+buffers is a healthy double-buffered scanout, not a single frozen buffer.
+
+`dmesg` carries, at 2061.492080:
+
+```
+sm750hdmidrm 0000:01:00.0: full-frame backbuffer staging enabled (4147200 bytes per buffer)
+```
+
+`4147200` is `1920 * 1080 * 2`: one RGB565 frame, which is the format the driver
+advertises for this controller.
+
+## 5. What this proves and what it does not
+
+It proves, on this panel and this module:
+
+- the device-level withdrawal is live in the loaded 0.6.7 module, at the ioctl
+  level: plain AddFB2 succeeds and a modifier-flagged AddFB2 is refused;
+- KWin takes the no-modifier path by itself and logs that it discovered the
+  missing capability;
+- no framebuffer creation fails, where the 0.6.5 session failed 359 times;
+- the compositor initialises, holds output PHL 243V7, and reaches a presenting
+  session;
+- scanout advances, with a stable CRC and the readback offset alternating
+  between the two 4147200-byte buffers.
+
+It does NOT prove anything about input injection or screencast capture; both
+remain limited exactly as recorded elsewhere. It also does not prove behaviour
+on a kernel other than 7.3.4-100.fc43.x86_64.
+
+7. What the panel did over the following hour
+
+The session that produced section 3 above was left running while the
+documentation pass was written, so it became a durability measurement by
+accident. Started 13:15:06 local time, sampled 14:16:27 local time: the process
+had been up 1 h 01 min 20 s, `session.log` had grown to 111189 bytes, and
+
+    grep -c 'Failed to create framebuffer' session.log
+    0
+
+so the failure mode of 0.6.5, which logged 359 of those lines inside a single
+session and killed the scanout, never recurred once in an hour. KWin still held
+DRM master on `card0` at that point, according to
+`/sys/kernel/debug/dri/0/clients` (`kwin_wayland 50790   0   y    y`).
+
+The output, however, was no longer presenting:
+
+- `/sys/class/drm/card0-HDMI-A-1/enabled` read `disabled` while `status` read
+  `connected` and `modes` still listed `1920x1080`;
+- `PANEL_CURRENT_LINE` read `0x00000000`, where the twelve presenting samples of
+  section 4 showed it advancing;
+- `PANEL_DISPLAY_CTRL` read `0x0f010001`, against `0x0f010105` while presenting;
+- `PANEL_FB_ADDRESS` stayed `0x003f4800` instead of alternating with `0`, so
+  nothing was being flipped any more.
+
+The compositor's own log carries no framebuffer error and no driver error at
+that point; the last lines before `Logging disabled` are `kpipewire_logging:
+error: "Could not connect to PipeWire"` repeated, and earlier
+`Could not load a session backend. Session management operations such as
+shutdown will not be operational. This is a setup issue.` together with the
+`kwin_core` output for a session started without a logind seat. The most
+plausible reading is that KWin switched the output off itself under its
+no-session policy and had no seat with which to switch it back on, not that the
+driver stopped working - the driver logged nothing and still held a healthy
+client.
+
+This is recorded as an observation, not as a conclusion: the cause of the
+output-off was not determined, and it is not evidence either for or against the
+modifier withdrawal. What the hour does establish is that the 0.6.5 failure
+mode does not recur, which is the claim being made here.
+
+To finish the gate run the session was then stopped (`kill` on its four
+processes), the connector was confirmed free, and `make check` ran with a
+compositor holding master, exiting 0.

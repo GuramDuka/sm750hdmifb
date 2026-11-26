@@ -507,7 +507,63 @@ host; a fix that cannot be measured is not a fix. The defect is recorded as open
 in `docs/DEFECTS.md` (A52) with no code change, and the helper keeps printing
 the refcount so the failure is reported rather than guessed at.
 
-NOT YET OBSERVED: any successful hot reload. The working path to a newly built
-module on this host is still a reboot, which loads the module DKMS already built
+NOT YET OBSERVED at the time of this section: any successful hot reload. The
+working path to a newly built module on this host was still a reboot, which
+loads the module DKMS already built
 (`/lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz`, 71804 bytes,
 `modinfo -F version` 0.6.7, srcversion `FF25FF6111B7C6D174A72F8`).
+
+SUPERSEDED by section 10: the reference cleared by itself and the reload ran,
+so neither a reboot nor a driver change is needed. The paragraph above records
+what was believed at 09:45Z and is kept unedited apart from this pointer.
+
+10. The reference cleared, and the reload ran (defect A52)
+
+The module reference that section 7 and section 9 chased is transient. No
+reboot, no module operation and no user action happened between the failing run
+at 08:35Z and the successful run at 10:37Z; only time passed. The state read
+before the run, at 12:34:40 to 12:34:42 local time (10:34Z):
+
+```
+12:34:40: 0
+12:34:41: 0
+12:34:42: 0
+sm750hdmidrm 200704 0 - Live 0xffffffffc0a3d000 (OE)
+holders/: 0 entries
+/sys/module/sm750hdmidrm/version: 0.6.5
+```
+
+With the refcount at 0 the helper of section 9, unchanged, ran to completion.
+Verbatim transcript:
+
+```
+sm750-vt: refcnt before any change: 0
+sm750-vt: detaching fbcon; there will be no text console until the reload ends
+sm750-vt: fbcon detached, bind=0
+sm750-vt: unbinding 0000:01:00.0 from sm750hdmidrm to release the framebuffer
+sm750-vt: device unbound, refcnt after the unbind: 0
+sm750-vt: module unloaded
+sm750-vt: device re-bound, /sys/bus/pci/devices/0000:01:00.0/driver -> /sys/bus/pci/drivers/sm750hdmidrm
+fbcon:        detached then re-bound to /sys/class/vtconsole/vtcon1, bind=1
+device:       0000:01:00.0 unbound then re-bound to sm750hdmidrm
+reloaded:     0.6.5 -> 0.6.7 (srcversion=FF25FF6111B7C6D174A72F8 refcnt=1)
+```
+
+Verified after the reload, all read-only:
+
+  * `/sys/module/sm750hdmidrm/version` reads `0.6.7`.
+  * `sm750-smi --query=driver_version,srcversion` reads
+    `0.6.7,FF25FF6111B7C6D174A72F8`.
+  * The DRM minor reset to 0, so the card is `/dev/dri/card0` and the render
+    node `/dev/dri/renderD128` again; the NVIDIA nodes are unchanged.
+  * `dmesg` carries `[drm] Initialized sm750hdmidrm 0.6.7 for 0000:01:00.0 on
+    minor 0`, `fb0: sm750hdmidrmdrm frame buffer device` and
+    `painted a test card: no client has produced a frame (test_pattern=auto)`,
+    with no oops and no warning.
+  * `refcnt` reads 1 again in the fresh load.
+
+What remains unknown is narrower than in section 9 but not closed: which kernel
+object holds the reference while it is held, and what releases it. What is now
+measured is that the release needs no action from the driver, the helper or a
+user, so the practical statement is that a reload is possible but not
+schedulable.
