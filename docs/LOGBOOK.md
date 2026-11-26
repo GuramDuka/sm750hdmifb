@@ -4171,3 +4171,28 @@ the pre-staging figures (54/A55 and 50 transcripts were both stale).
 Lesson repeated for the third time and now treated as a rule: every appended plan decision
 must be verified with yaml.safe_load immediately, because a double-quoted scalar without
 its closing quote breaks the whole plan file with a parse error far from the edit.
+
+### 2026-11-26T22:20Z | orchestrator | pm_test cycle tooling: a helper whose trap cannot leave the host armed
+
+P1 needed a repeatable way to run the host-wide pm_test cycle. Added tools/sm750-pmtest.sh
+(installed later as /usr/local/sbin/sm750-pmtest) and tests/check-pmtest-helper.sh.
+
+The helper exists because three properties are easy to get wrong by hand: an interrupted run
+leaves /sys/power/pm_test armed and every later real suspend becomes a test until reboot; the
+level list is printed by the kernel with the current value bracketed, so a naive readback
+compare always fails; and /sys/power/suspend_stats is a directory of counters, so grepping it
+yields nothing and a stats-based verdict would pass silently. The helper therefore arms an
+EXIT/INT/TERM/HUP trap that always writes none and prints the readback, parses the brackets,
+and diffs each counter file.
+
+run devices is the default. PASS requires both pm: suspend complete and pm: resume complete,
+no pm: .* failed line, and unchanged suspend_stats counters; everything else is FAIL with the
+added journal lines and the stats delta. status is read-only. reset writes none and verifies.
+
+Gate: 10 assertions and 6 planted controls, wired into check-drm-policy.sh so make check stays
+at 18 commands, and both new scripts are in the scratch census (now 23 entries). Counts moved
+to 149 payload files and 32 gate scripts; README and DELIVERABLES rows updated.
+
+Still blocked on the host: the installed 0.6.8 cannot be loaded while chromium holds
+renderD128, because DRM fops set .owner = THIS_MODULE. That is the owner's process, so the
+reload and the cycle wait on him.

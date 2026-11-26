@@ -265,6 +265,16 @@ test "$stage_count" -ge 6 || {
 # while preserving the status. Source-level only; it never writes sysfs, calls
 # modprobe or needs root.
 ./tests/check-vt-helper.sh
+# T61: the deferred PM cycle helper tools/sm750-pmtest.sh, installed as
+# /usr/local/sbin/sm750-pmtest and allowlisted in docs/ROOT-ACTIONS.md 3.14.
+# The host has no S3, so the driver callbacks are reached through
+# /sys/power/pm_test, and a forgotten level turns every later real suspend into
+# a test until reboot. The gate pins the root check before the first write, the
+# level validated against the explicit list, `none` written by the EXIT trap,
+# the readback after every write, the journal snapshot taken before the freeze,
+# the verdict that needs both completion lines, and the absence of fb0 as a
+# success criterion. Source-level; it never writes sysfs, suspends or needs root.
+./tests/check-pmtest-helper.sh
 # Runtime guard properties found by the 2026-11-26 production-readiness
 # review (docs/evidence/review/02-production-readiness-runtime.txt): D1 (the
 # direct scanout path must not read past the plane object or VRAM), D2 (the

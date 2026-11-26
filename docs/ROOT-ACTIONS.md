@@ -31,7 +31,10 @@ section "If the card stops working after removing the package".
 
 Row 12 is proposed and gated on a reboot: manual VFIO binding of the card to a
 guest (section 3.13). It is inert until the host boots with `intel_iommu=on`,
-and it does not close P1.
+and it does not close P1. Row 13 is proposed and needs a maintenance window: the
+PM test helper (section 3.14) runs the host-wide cycle that does exercise the
+host's own suspend and resume callbacks, and it is the only row that can close
+that half of P1.
 
 | # | Date (UTC) | Action | Closes |
 | --- | --- | --- | --- |
@@ -47,6 +50,7 @@ and it does not close P1.
 | 10 | 2026-11-22T08:41Z | install `/usr/local/sbin/sm750-pkg` and one NOPASSWD line `/etc/sudoers.d/30-sm750-pkg` (section 3.8); source is 487 lines, sha256 `ca6e7b0a66fae43b6b332135ea8da62f61a917385accacc4d48f114e9149cf16`, but the installed body is stale, refresh required (11873 bytes, sha256 `e923a85a3389a13211869f32808b7b7cb77083355f90c5149b6c94cdaf9b976e`) | replaces the per-version `dnf install` allowlist entries; privileged install, remove, status and reload work for any version without the owner |
 | 11 | proposed | refresh `/usr/local/sbin/sm750-vt` from the tree (the installed body is the first version, which fails) and use the two NOPASSWD lines already in place for `/usr/local/sbin/sm750-vt off` and `/usr/local/sbin/sm750-vt on` (section 3.12), then run `sm750-vt off` to load the 0.6.7 module without a reboot | the reload blocker: a rebuilt module cannot be loaded while the vtconsole holds the framebuffer reference (`modprobe: FATAL: Module sm750hdmidrm is in use.`), and detaching the vtconsole alone does not release it (A51) |
 | 12 | proposed | reboot with `intel_iommu=on iommu=pt`, then bind `0000:01:00.0` to `vfio-pci` for a guest (section 3.13) | no GAP and no P1: the guest runs its own copies of `sm750_pm_suspend()` / `sm750_pm_resume()`, the host's copies never execute, and the chip stays in D0 from the host's point of view |
+| 13 | proposed | install the PM test helper with `sudo install -m 0755 -o root -g root tools/sm750-pmtest.sh /usr/local/sbin/sm750-pmtest`, add `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-pmtest` (section 3.14), then run `sm750-pmtest run devices` in a maintenance window | the host-wide `pm_test` cycle that P1 needs, still deferred to the owner's window; the helper makes the cycle repeatable and cannot leave `pm_test` armed |
 
 Sections below are ordered by subject, not by date: allowlist, recovery recipe,
 helpers, udev rule, installed state and re-verification, gap map.
@@ -1569,6 +1573,65 @@ in `dmesg` is four `pm:` lines from `src/sm750_drm.c`: `pm: suspend entry`
 (`:5476`), `pm: suspend complete` (`:5486`), `pm: resume entry` (`:5496`) and
 `pm: resume complete` (`:5515`), with no `pm: suspend failed:` (`:5479`) or
 `pm: resume failed:` (`:5499`, `:5507`, `:5512`) line in the same cycle.
+
+### 3.14 The deferred PM cycle
+
+This helper exists to execute the host-wide `pm_test` cycle that P1 needs. The
+guest work in section 3.13 proves the driver's code paths inside the guest and
+nothing about the host's power state, so the host still owes one cycle that runs
+the host's own `sm750_pm_suspend()` and `sm750_pm_resume()`. The helper makes
+that cycle repeatable and safe to run; it does not make the test automatic, and
+it does not run itself.
+
+Install (repo-relative source; the installed copy is byte-identical):
+
+```sh
+sudo install -m 0755 -o root -g root tools/sm750-pmtest.sh /usr/local/sbin/sm750-pmtest
+```
+
+One NOPASSWD line, with no colon in the command line (section 1 rule):
+
+```sh
+coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-pmtest
+```
+
+The host has no S3: ACPI reports S0 S4 S5 only and `/sys/power/mem_sleep` is
+`[s2idle]`, so `mem` and `freeze` are the same state and `freeze` is the correct
+spelling. A plain `freeze` would suspend the whole machine with no wake source
+on this console-only host, so the driver callbacks are reached through
+`/sys/power/pm_test` instead. The levels are
+`none core processors platform devices freezer`:
+
+- `core` and `processors` are refused on s2idle with
+  `Unsupported test mode for suspend to idle` and `-EAGAIN`; the helper accepts
+  them only because the kernel lists them, and they fail the cycle rather than
+  run it.
+- `devices` runs every driver's `.suspend`/`.resume` but skips
+  `dpm_suspend_noirq`, so no device leaves D0 and PCI config is not saved. It
+  proves the callbacks run and log both edges; it does not prove the device can
+  leave D0.
+- `platform` additionally saves PCI config and enters D3hot, which is the level
+  that proves the device can leave D0 and come back. That is the D3-capable
+  level; `devices` is the default only because it is the least invasive.
+
+The trap matters because a forgotten `pm_test` level is a global: every later
+real suspend stays a test until reboot, and the fingerprint is the line
+`suspend debug: Waiting for`. The helper clears a stale level at the start, names
+the risk when it finds one, and arms an EXIT trap that always writes `none` back,
+reads it back and prints the readback, so an interrupted run cannot leave the
+machine in a test mode. The verdict needs both completion lines, no failure line
+and unchanged `suspend_stats` error counters; anything less is `FAIL`.
+
+Run it in a maintenance window:
+
+```sh
+sudo -n /usr/local/sbin/sm750-pmtest run devices
+sudo -n /usr/local/sbin/sm750-pmtest status
+```
+
+The proof to look for is the same four `pm:` lines named in section 3.13, with
+no `pm: suspend failed:` or `pm: resume failed:` line in the same cycle, and
+`PANEL_CURRENT_LINE` advancing between two reads.
 
 ## 4. udev ACL rule
 

@@ -109,6 +109,7 @@ exports `TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}`), never to `/tmp`.
 | S24 | In-repo `tests/check-vt-helper.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the root-only helper `tools/sm750-vt.sh`, which hot-reloads `sm750hdmidrm` by unbinding fbcon from the SM750 vtconsole (A50): POSIX `sh` that passes `sh -n`, the three modes `show`, `off`, `on` in the usage and in the dispatcher with `usage` exiting 2 for anything else, a root check that still lets `show` run unprivileged, the target vtconsole resolved by globbing `/sys/class/vtconsole/vtcon*` and confirmed against `basename $(readlink -f /sys/bus/pci/devices/0000:01:00.0/driver)` = `sm750hdmidrm` with no executed `vtconN` literal, zero and multiple candidates both refused, `write_bind "$TARGET" 0` to detach and `write_bind "$TARGET" 1` to restore with every write read back from the `bind` file, one EXIT trap that restores the module, the device and then the console on a non-zero exit, disarmed by `FINISHED=1` so a successful run does not undo itself, with a restore function that ends in an explicit `return`, the userspace holder refusal gating the unload with the scan matched on node identity - the by-path card and render links resolved to a `dev:inode` pair and compared against each fd target - rather than on a node name, since the card is not `card0` after a reload, the PCI unbind step that releases the framebuffer reference (A51) between the console detach and the unload with the refcount printed before it and again after it, the device re-bound and read back after the load, `modprobe -r` before `modprobe` by line order, and the loaded version read back from `/sys/module/sm750hdmidrm/version` after the load with a missing file failing as `is missing after the load`. Static only: it writes no sysfs, calls no modprobe, needs no root and never runs the helper | PASS (2026-11-26); thirteen assertions and ten planted defects rejected (`never-restore`, `hardcoded-vtcon`, `modprobe-order-reversed`, `version-readback-removed`, `holder-check-dropped`, `pci-unbind-dropped`, `pci-rebind-dropped`, `refcount-not-reported`, `trap-restores-fbcon-only`, `holder-scan-name-glob`) plus a pristine control accepted, in `--self-test`; the reload itself is NOT YET OBSERVED |
 | S25 | None (observed by hand; no script, no gate) | Panel-level proof of the 0.6.7 modifier withdrawal (A47), recorded as evidence rather than enforced: with the module loaded by the hot reload, a userspace probe on the same 1920x1080 buffer gets `OK fb=42` for plain XRGB8888 AddFB2 and `FAIL errno=22` for `MODIFIERS + LINEAR`, where 0.6.5 accepted both; a KWin 6.7.5 session started with `KWIN_DRM_USE_MODIFIERS` explicitly unset logs `drmModeAddFB2WithModifiers is not supported on GPU "/dev/dri/card0"`, reaches an initialised compositor with output PHL 243V7, and `grep -c 'Failed to create framebuffer'` returns **0** where the 0.6.5 session returned **359**; `PANEL_CURRENT_LINE` advances and twelve scanout samples read `nonzero 262144` with `crc32 0x976e751b` while the offset alternates between 0 and 4147200 | OBSERVED 2026-11-26, module 0.6.7 on kernel `7.3.4-100.fc43.x86_64` with kwin and Plasma `6.7.5`. Evidence, not a gate: there is no script and no new `make check` recipe, so `make check` stays at 18 commands, and no CI job reproduces it. Input injection and screencast are unmeasured, as S22 records; `docs/evidence/runtime/42-modifier-withdrawal-proof.txt` is the transcript |
 | S26 | In-repo `tests/check-headless-helper.sh`, extended (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the `x11` mode of `tools/sm750-headless.sh`: the arm writes its server config once per run, execs `/usr/libexec/Xorg :1` directly (never the setuid-capable wrapper) from the run directory with a bare `-config` filename, carries `-sharevts -novtswitch` and `-nolisten tcp`, declares `AutoAddDevices` off with no `InputDevice` section so a root server opens no input device, must not pass an absolute or `..`-bearing config path, clamps the run length, and generates `run-plasma-x11.sh` with the `/etc/environment` variables unset and `DISPLAY=:1` exported; the plan text must name those variables and the four-crash consequence of leaking them. Static only: it starts no server, needs no root and never touches the card | PASS (2026-11-26); fourteen assertions and twenty planted controls, six of them x11-specific (`x11-sharevts-dropped`, `x11-input-device`, `x11-abspath-config`, `x11-primarygpu-reintroduced`, `x11-env-note-dropped`, `x11-session-script-unset-dropped`). The arm then ran once as root on 2026-11-26 (`x11 240`) and reached the panel: the server was up on `:1` in 4 s with `kmsdev` `/dev/dri/card0`, `kwin_x11` held pid 1979033 with zero crash lines, and the connector read `enabled` |
+| S27 | In-repo `tests/check-pmtest-helper.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the PM test helper `tools/sm750-pmtest.sh`, installed as `/usr/local/sbin/sm750-pmtest`: POSIX `sh` that passes `sh -n`, the three subcommands with a usage path that exits 2 for anything else, the root check read out of `require_root` and pinned to precede the first write to `/sys/power/pm_test`, the level validated against `none core processors platform devices freezer`, the EXIT trap that writes `none` and prints the readback, the trap armed before the level write, the journal snapshot taken before `freeze` is written to `/sys/power/state` with only the delta read, the verdict requiring `pm: suspend complete`, `pm: resume complete`, no `pm: .* failed` line and unchanged `suspend_stats` error counters, no `fb0`, `/dev/fb*` or `/sys/class/graphics` in executable text, and the no-S3 explanation (`s2idle`, `freeze`, `D3hot`, the `suspend debug: Waiting for` fingerprint) in the usage. Static only: it writes no sysfs, suspends nothing, needs no root and never runs the helper | PASS (2026-11-26); ten assertion sections and six planted controls rejected (trap removed, level validation removed, readback removed, verdict passes without the completion lines, journal snapshot removed, suspend_stats read as a flat file instead of the directory this kernel publishes) plus a pristine copy accepted. No hardware run: the host-wide `pm_test` cycle itself stays deferred to the owner's maintenance window |
 ### S1: in-repo `make check`
 
 - Package/version: the repository itself at 0.5.9; no external package. The
@@ -846,6 +847,53 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   server has no GLX, so kwin composites through XRender on llvmpipe - the
   panel observation is software-composited, not accelerated, and `plasmashell`
   itself was not sampled for.
+
+### S27: PM test helper gate
+
+- Command: `./tests/check-pmtest-helper.sh`; `./tests/check-pmtest-helper.sh
+  --self-test` runs the same gate under the planted controls. It is also reached
+  from `make check` through `tests/check-drm-policy.sh`, and adds no recipe
+  command, so the recipe stays at 18.
+- What it protects: the helper runs the host-wide cycle that P1 needs, and the
+  host has no S3 (ACPI reports S0 S4 S5 only and `/sys/power/mem_sleep` is
+  `[s2idle]`, so `mem` and `freeze` are the same state and `freeze` is the
+  correct spelling). The driver's callbacks are reached through
+  `/sys/power/pm_test` instead, which is a global: a forgotten level turns every
+  later real suspend into a test until reboot, and the fingerprint is the line
+  `suspend debug: Waiting for`. The gate therefore pins the two properties that
+  keep that window closed - the EXIT trap always writes `none` with a readback,
+  and the root check precedes the first write - plus the level list, the journal
+  snapshot before the freeze, and the verdict.
+- Holds, in sections a..i of the gate: `#!/bin/sh` and `sh -n`; the three
+  subcommands and `exit 2` for anything else; the level list
+  `none|core|processors|platform|devices|freezer` with an unknown level reaching
+  `usage`; `require_root` containing the `id -u` test and `must run as root`,
+  called before the first `> "$PMTEST"`; the `cleanup` body writing
+  `printf 'none\n' > "$PMTEST"`, calling `read_pm_test` and printing
+  `readback after cleanup`, with the `trap 'cleanup; exit $?' EXIT` armed before
+  the level write; the readback parsing the bracketed level list
+  (`[none] core ...`, which is what this kernel prints) with a first-field
+  fallback; `journal_before=` before `echo freeze > "$STATE"` and
+  `journal_before + 1` when the delta is selected; the four verdict reductions
+  (`suspend_complete -ge 1`, `resume_complete -ge 1`, `failed -eq 0`,
+  `stats_same`); the `suspend_stats` counters read from the directory entries
+  `fail`, `failed_*` and `last_failed_*` that this kernel publishes, with
+  `status` printing the same directory; no `fb0` or `/dev/fb` outside a comment;
+  and the no-S3 explanation in the usage.
+- Planted controls, six, each deleting a property rather than a sentence:
+  `trap-removed` (an interrupted run would leave `pm_test` armed),
+  `level-validation-removed` (any string would be written to `pm_test`),
+  `readback-removed` (the armed level would be trusted, not read),
+  `verdict-without-completion` (`PASS` without both completion lines),
+  `journal-snapshot-removed` (the whole boot log would be read, so an older
+  cycle could satisfy the verdict) and `stats-file-only` (a `grep` on the
+  `suspend_stats` directory returns nothing, so a failing cycle would pass).
+  A pristine copy must still be accepted.
+- Limits: static only. It writes no sysfs, suspends nothing, needs no root and
+  never runs the helper, so the cycle itself remains a deferred hardware test
+  in `docs/ROOT-ACTIONS.md` section 3.14; a green S27 says the helper cannot
+  leave the machine in a test mode and cannot report a false `PASS`, not that
+  the device left D0.
 
 ## 3. `make check`: the recipe commands
 
