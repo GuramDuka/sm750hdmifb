@@ -1,7 +1,7 @@
-# utc: 2026-11-25T19:46:33Z
+# utc: 2026-11-26T17:29:44Z
 # running kernel: 7.3.4-100.fc43.x86_64
 # uid: 1005
-# command: rpm -qlp / -qplv / -qpc /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.7-1.fc43.noarch.rpm
+# command: rpm -qlp / -qplv / -qpc /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.8-1.fc43.noarch.rpm
 # workdir: /home/coder/sm750hdmifb
 
 --- output ---
@@ -16,35 +16,35 @@
 /usr/share/doc/sm750hdmifb/RELEASE-NOTES.md
 /usr/share/doc/sm750hdmifb/TESTING.md
 /usr/share/doc/sm750hdmifb/copyright
-/usr/src/sm750hdmifb-0.6.7
-/usr/src/sm750hdmifb-0.6.7/LICENSE
-/usr/src/sm750hdmifb-0.6.7/Makefile
-/usr/src/sm750hdmifb-0.6.7/README.md
-/usr/src/sm750hdmifb-0.6.7/dkms.conf
-/usr/src/sm750hdmifb-0.6.7/src
-/usr/src/sm750hdmifb-0.6.7/src/Kconfig
-/usr/src/sm750hdmifb-0.6.7/src/Makefile
-/usr/src/sm750hdmifb-0.6.7/src/ddk750.h
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_chip.c
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_chip.h
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_display.c
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_display.h
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_hwi2c.c
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_hwi2c.h
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_mode.c
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_mode.h
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_power.c
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_power.h
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_reg.h
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_swi2c.c
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_swi2c.h
-/usr/src/sm750hdmifb-0.6.7/src/sii902x.c
-/usr/src/sm750hdmifb-0.6.7/src/sii902x.h
-/usr/src/sm750hdmifb-0.6.7/src/sm750_dither.c
-/usr/src/sm750hdmifb-0.6.7/src/sm750_dither.h
-/usr/src/sm750hdmifb-0.6.7/src/sm750_drm.c
-/usr/src/sm750hdmifb-0.6.7/src/sm750_drm_mode.c
-/usr/src/sm750hdmifb-0.6.7/src/sm750_drm_mode.h
+/usr/src/sm750hdmifb-0.6.8
+/usr/src/sm750hdmifb-0.6.8/LICENSE
+/usr/src/sm750hdmifb-0.6.8/Makefile
+/usr/src/sm750hdmifb-0.6.8/README.md
+/usr/src/sm750hdmifb-0.6.8/dkms.conf
+/usr/src/sm750hdmifb-0.6.8/src
+/usr/src/sm750hdmifb-0.6.8/src/Kconfig
+/usr/src/sm750hdmifb-0.6.8/src/Makefile
+/usr/src/sm750hdmifb-0.6.8/src/ddk750.h
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_chip.c
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_chip.h
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_display.c
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_display.h
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_hwi2c.c
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_hwi2c.h
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_mode.c
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_mode.h
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_power.c
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_power.h
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_reg.h
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_swi2c.c
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_swi2c.h
+/usr/src/sm750hdmifb-0.6.8/src/sii902x.c
+/usr/src/sm750hdmifb-0.6.8/src/sii902x.h
+/usr/src/sm750hdmifb-0.6.8/src/sm750_dither.c
+/usr/src/sm750hdmifb-0.6.8/src/sm750_dither.h
+/usr/src/sm750hdmifb-0.6.8/src/sm750_drm.c
+/usr/src/sm750hdmifb-0.6.8/src/sm750_drm_mode.c
+/usr/src/sm750hdmifb-0.6.8/src/sm750_drm_mode.h
 --- mode-qualified listing ---
 /etc/modprobe.d/sm750hdmidrm.conf	-rw-r--r--
 /etc/modules-load.d/sm750hdmidrm.conf	-rw-r--r--
@@ -57,81 +57,81 @@
 /usr/share/doc/sm750hdmifb/RELEASE-NOTES.md	-rw-r--r--
 /usr/share/doc/sm750hdmifb/TESTING.md	-rw-r--r--
 /usr/share/doc/sm750hdmifb/copyright	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7	drwxr-xr-x
-/usr/src/sm750hdmifb-0.6.7/LICENSE	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/Makefile	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/README.md	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/dkms.conf	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src	drwxr-xr-x
-/usr/src/sm750hdmifb-0.6.7/src/Kconfig	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/Makefile	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/ddk750.h	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_chip.c	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_chip.h	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_display.c	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_display.h	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_hwi2c.c	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_hwi2c.h	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_mode.c	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_mode.h	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_power.c	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_power.h	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_reg.h	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_swi2c.c	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_swi2c.h	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/sii902x.c	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/sii902x.h	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/sm750_dither.c	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/sm750_dither.h	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/sm750_drm.c	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/sm750_drm_mode.c	-rw-r--r--
-/usr/src/sm750hdmifb-0.6.7/src/sm750_drm_mode.h	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8	drwxr-xr-x
+/usr/src/sm750hdmifb-0.6.8/LICENSE	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/Makefile	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/README.md	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/dkms.conf	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src	drwxr-xr-x
+/usr/src/sm750hdmifb-0.6.8/src/Kconfig	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/Makefile	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/ddk750.h	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_chip.c	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_chip.h	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_display.c	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_display.h	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_hwi2c.c	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_hwi2c.h	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_mode.c	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_mode.h	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_power.c	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_power.h	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_reg.h	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_swi2c.c	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_swi2c.h	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/sii902x.c	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/sii902x.h	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/sm750_dither.c	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/sm750_dither.h	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/sm750_drm.c	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/sm750_drm_mode.c	-rw-r--r--
+/usr/src/sm750hdmifb-0.6.8/src/sm750_drm_mode.h	-rw-r--r--
 --- directories ---
 /usr/lib/sm750hdmifb
 /usr/share/doc/sm750hdmifb
-/usr/src/sm750hdmifb-0.6.7
-/usr/src/sm750hdmifb-0.6.7/src
+/usr/src/sm750hdmifb-0.6.8
+/usr/src/sm750hdmifb-0.6.8/src
 --- verbose ---
--rw-r--r--    1 root     root                      268 Nov 25 03:00 /etc/modprobe.d/sm750hdmidrm.conf
--rw-r--r--    1 root     root                       53 Nov 25 03:00 /etc/modules-load.d/sm750hdmidrm.conf
-drwxr-xr-x    2 root     root                        0 Nov 25 03:00 /usr/lib/sm750hdmifb
--rwxr-xr-x    1 root     root                     1874 Nov 25 03:00 /usr/lib/sm750hdmifb/write-xorg-config
--rw-r--r--    1 root     root                      252 Nov 25 03:00 /usr/share/X11/xorg.conf.d/20-sm750hdmidrm.conf
-drwxr-xr-x    2 root     root                        0 Nov 25 03:00 /usr/share/doc/sm750hdmifb
+-rw-r--r--    1 root     root                      268 Nov 26 03:00 /etc/modprobe.d/sm750hdmidrm.conf
+-rw-r--r--    1 root     root                       53 Nov 26 03:00 /etc/modules-load.d/sm750hdmidrm.conf
+drwxr-xr-x    2 root     root                        0 Nov 26 03:00 /usr/lib/sm750hdmifb
+-rwxr-xr-x    1 root     root                     1874 Nov 26 03:00 /usr/lib/sm750hdmifb/write-xorg-config
+-rw-r--r--    1 root     root                      252 Nov 26 03:00 /usr/share/X11/xorg.conf.d/20-sm750hdmidrm.conf
+drwxr-xr-x    2 root     root                        0 Nov 26 03:00 /usr/share/doc/sm750hdmifb
 -rw-r--r--    1 root     root                    17984 Nov 17 18:40 /usr/share/doc/sm750hdmifb/LICENSE
--rw-r--r--    1 root     root                    63919 Nov 25 03:00 /usr/share/doc/sm750hdmifb/README.md
--rw-r--r--    1 root     root                    17601 Nov 25 03:00 /usr/share/doc/sm750hdmifb/RELEASE-NOTES.md
+-rw-r--r--    1 root     root                    69170 Nov 26 03:00 /usr/share/doc/sm750hdmifb/README.md
+-rw-r--r--    1 root     root                    20604 Nov 26 03:00 /usr/share/doc/sm750hdmifb/RELEASE-NOTES.md
 -rw-r--r--    1 root     root                     4173 Nov 18 22:07 /usr/share/doc/sm750hdmifb/TESTING.md
 -rw-r--r--    1 root     root                      686 Nov 17 18:40 /usr/share/doc/sm750hdmifb/copyright
-drwxr-xr-x    2 root     root                        0 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7
--rw-r--r--    1 root     root                    17984 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/LICENSE
--rw-r--r--    1 root     root                     6727 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/Makefile
--rw-r--r--    1 root     root                    63919 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/README.md
--rw-r--r--    1 root     root                      336 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/dkms.conf
-drwxr-xr-x    2 root     root                        0 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src
--rw-r--r--    1 root     root                      385 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/Kconfig
--rw-r--r--    1 root     root                     1067 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/Makefile
--rw-r--r--    1 root     root                      415 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/ddk750.h
--rw-r--r--    1 root     root                     9730 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/ddk750_chip.c
--rw-r--r--    1 root     root                     2697 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/ddk750_chip.h
--rw-r--r--    1 root     root                     5437 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/ddk750_display.c
--rw-r--r--    1 root     root                     2972 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/ddk750_display.h
--rw-r--r--    1 root     root                     2671 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/ddk750_hwi2c.c
--rw-r--r--    1 root     root                      434 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/ddk750_hwi2c.h
--rw-r--r--    1 root     root                    12406 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/ddk750_mode.c
--rw-r--r--    1 root     root                      968 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/ddk750_mode.h
--rw-r--r--    1 root     root                     2889 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/ddk750_power.c
--rw-r--r--    1 root     root                      910 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/ddk750_power.h
--rw-r--r--    1 root     root                    80145 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/ddk750_reg.h
--rw-r--r--    1 root     root                    15432 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/ddk750_swi2c.c
--rw-r--r--    1 root     root                     2101 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/ddk750_swi2c.h
--rw-r--r--    1 root     root                    41290 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/sii902x.c
--rw-r--r--    1 root     root                     1047 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/sii902x.h
--rw-r--r--    1 root     root                    17855 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/sm750_dither.c
--rw-r--r--    1 root     root                     3155 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/sm750_dither.h
--rw-r--r--    1 root     root                   176143 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/sm750_drm.c
--rw-r--r--    1 root     root                     2305 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/sm750_drm_mode.c
--rw-r--r--    1 root     root                      658 Nov 25 03:00 /usr/src/sm750hdmifb-0.6.7/src/sm750_drm_mode.h
+drwxr-xr-x    2 root     root                        0 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8
+-rw-r--r--    1 root     root                    17984 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/LICENSE
+-rw-r--r--    1 root     root                     6727 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/Makefile
+-rw-r--r--    1 root     root                    69170 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/README.md
+-rw-r--r--    1 root     root                      336 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/dkms.conf
+drwxr-xr-x    2 root     root                        0 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src
+-rw-r--r--    1 root     root                      385 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/Kconfig
+-rw-r--r--    1 root     root                     1067 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/Makefile
+-rw-r--r--    1 root     root                      415 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/ddk750.h
+-rw-r--r--    1 root     root                     9730 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/ddk750_chip.c
+-rw-r--r--    1 root     root                     2697 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/ddk750_chip.h
+-rw-r--r--    1 root     root                     5437 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/ddk750_display.c
+-rw-r--r--    1 root     root                     2972 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/ddk750_display.h
+-rw-r--r--    1 root     root                     2671 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/ddk750_hwi2c.c
+-rw-r--r--    1 root     root                      434 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/ddk750_hwi2c.h
+-rw-r--r--    1 root     root                    12406 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/ddk750_mode.c
+-rw-r--r--    1 root     root                      968 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/ddk750_mode.h
+-rw-r--r--    1 root     root                     2889 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/ddk750_power.c
+-rw-r--r--    1 root     root                      910 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/ddk750_power.h
+-rw-r--r--    1 root     root                    80145 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/ddk750_reg.h
+-rw-r--r--    1 root     root                    15432 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/ddk750_swi2c.c
+-rw-r--r--    1 root     root                     2101 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/ddk750_swi2c.h
+-rw-r--r--    1 root     root                    41290 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/sii902x.c
+-rw-r--r--    1 root     root                     1047 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/sii902x.h
+-rw-r--r--    1 root     root                    17855 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/sm750_dither.c
+-rw-r--r--    1 root     root                     3155 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/sm750_dither.h
+-rw-r--r--    1 root     root                   182374 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/sm750_drm.c
+-rw-r--r--    1 root     root                     2305 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/sm750_drm_mode.c
+-rw-r--r--    1 root     root                      658 Nov 26 03:00 /usr/src/sm750hdmifb-0.6.8/src/sm750_drm_mode.h
 --- config files ---
 /etc/modprobe.d/sm750hdmidrm.conf
 /etc/modules-load.d/sm750hdmidrm.conf
@@ -145,40 +145,40 @@ drwxr-xr-x    2 root     root                        0 Nov 25 03:00 /usr/src/sm7
 /usr/share/doc/sm750hdmifb/RELEASE-NOTES.md
 /usr/share/doc/sm750hdmifb/TESTING.md
 /usr/share/doc/sm750hdmifb/copyright
-/usr/src/sm750hdmifb-0.6.7/LICENSE
-/usr/src/sm750hdmifb-0.6.7/Makefile
-/usr/src/sm750hdmifb-0.6.7/README.md
-/usr/src/sm750hdmifb-0.6.7/dkms.conf
-/usr/src/sm750hdmifb-0.6.7/src/Kconfig
-/usr/src/sm750hdmifb-0.6.7/src/Makefile
-/usr/src/sm750hdmifb-0.6.7/src/ddk750.h
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_chip.c
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_chip.h
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_display.c
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_display.h
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_hwi2c.c
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_hwi2c.h
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_mode.c
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_mode.h
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_power.c
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_power.h
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_reg.h
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_swi2c.c
-/usr/src/sm750hdmifb-0.6.7/src/ddk750_swi2c.h
-/usr/src/sm750hdmifb-0.6.7/src/sii902x.c
-/usr/src/sm750hdmifb-0.6.7/src/sii902x.h
-/usr/src/sm750hdmifb-0.6.7/src/sm750_dither.c
-/usr/src/sm750hdmifb-0.6.7/src/sm750_dither.h
-/usr/src/sm750hdmifb-0.6.7/src/sm750_drm.c
-/usr/src/sm750hdmifb-0.6.7/src/sm750_drm_mode.c
-/usr/src/sm750hdmifb-0.6.7/src/sm750_drm_mode.h
+/usr/src/sm750hdmifb-0.6.8/LICENSE
+/usr/src/sm750hdmifb-0.6.8/Makefile
+/usr/src/sm750hdmifb-0.6.8/README.md
+/usr/src/sm750hdmifb-0.6.8/dkms.conf
+/usr/src/sm750hdmifb-0.6.8/src/Kconfig
+/usr/src/sm750hdmifb-0.6.8/src/Makefile
+/usr/src/sm750hdmifb-0.6.8/src/ddk750.h
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_chip.c
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_chip.h
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_display.c
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_display.h
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_hwi2c.c
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_hwi2c.h
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_mode.c
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_mode.h
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_power.c
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_power.h
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_reg.h
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_swi2c.c
+/usr/src/sm750hdmifb-0.6.8/src/ddk750_swi2c.h
+/usr/src/sm750hdmifb-0.6.8/src/sii902x.c
+/usr/src/sm750hdmifb-0.6.8/src/sii902x.h
+/usr/src/sm750hdmifb-0.6.8/src/sm750_dither.c
+/usr/src/sm750hdmifb-0.6.8/src/sm750_dither.h
+/usr/src/sm750hdmifb-0.6.8/src/sm750_drm.c
+/usr/src/sm750hdmifb-0.6.8/src/sm750_drm_mode.c
+/usr/src/sm750hdmifb-0.6.8/src/sm750_drm_mode.h
 
 === sm750hdmifb-tools: rpm -qlp / -qplv / -qpR ===
 /usr/bin/sm750-smi
 --- mode-qualified listing ---
 /usr/bin/sm750-smi	-rwxr-xr-x
 --- verbose ---
--rwxr-xr-x    1 root     root                    54536 Nov 25 03:00 /usr/bin/sm750-smi
+-rwxr-xr-x    1 root     root                    54536 Nov 26 03:00 /usr/bin/sm750-smi
 --- dependencies ---
 libc.so.6()(64bit)
 libc.so.6(GLIBC_2.14)(64bit)

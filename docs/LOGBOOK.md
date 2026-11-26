@@ -4072,3 +4072,102 @@ Lesson worth keeping beyond this host: a root helper launched through `sudo`
 cannot be stopped by killing the `sudo` pid - the child keeps running until the
 helper's own `seconds` value expires, so an early teardown has to shorten
 `seconds` instead of reaching for a kill.
+
+### 2026-11-26T20:10Z | orchestrator | 0.6.8: ten review-driven fixes, A54 and A55, and a helper that gives the console back
+
+The first production-readiness pass produced two independent reports and eight
+fixes, all of them in code that a test could reach but no test did. The runtime
+review's worst finding was structural rather than exotic: on the direct scanout
+path nothing checked that a plane's framebuffer actually covered the mode, nor
+that the window it programmed stayed inside VRAM, so any DRM master committing a
+small buffer could make the engine read past the GEM object. `sm750_pipe_check`
+now rejects an undersized primary plane and the direct branch bounds
+`offset + frame_size` against the VRAM size. The same review found the
+`test_pattern` module parameter read with `strcmp` on the commit path (a
+root-replaceable `charp`), the SWI2C pin numbers truncated to `u8` without
+validation, a VRAM-size subtraction that could underflow on a small strap, and a
+DMA timeout declared without re-reading the completion. Each fix carries an
+assertion and a planted control that removes the property the assertion guards.
+
+The architecture review pushed back on its own first instinct, which is worth
+recording: it suspected a NULL primary-plane framebuffer would dereference at
+`sm750_pipe_enable`, then proved the core cannot reach that state because
+`drm_simple_kms_crtc_check` stays installed through `crtc->helper_private`. What
+it did confirm matters more. A failed hardware enable used to log, then arm
+vblank, resume CRC and consume the commit event - a commit reported success on a
+dark panel. It now leaves the pipe down, names the stage in the message, and
+lets the commit time out visibly. EDID used to retry once with a three-second
+sleep inside `get_modes` under `connection_mutex`, so a monitor with absent DDC
+stalled unrelated modesets for three seconds every ten-second poll; there is now
+one bounded read. `drm_crtc_vblank_get` moved out from under `event_lock`, and
+`INT_MASK_DMA1` is re-armed after `ddk750_init_hw` so the first upload after a
+resume cannot poison the DMA path for the rest of the load.
+
+Two findings are recorded as open rather than closed. Suspend and resume have
+never been exercised on this hardware, so P1 waits for one owner-run
+`sudo systemctl suspend` cycle. And A54, the dark panel after the last client
+exits, is diagnosed but not explained: the DRM core disables the CRTC by design
+when the last client drops its framebuffer, the fbdev last-close restore never
+issued a commit across about a dozen exits even though the same function works
+when fbcon calls it, and the stray open file descriptor that would explain it
+could not be proven - `sm750-headless diagnose` then showed a module refcount of
+1 with no holder on either node. The user-visible symptom is gone anyway,
+because the helper now records the VT before it starts a compositor and puts a
+text VT back on teardown, refusing to steal a VT that moved and tolerating a
+missing `chvt`.
+
+The companion defect A55 came out of that same trace: the CRC reader printed
+`0x0 pitch 3840` - a dead window with the previous mode's pitch - because a zero
+mode did not count as a missing region and `sm750_pipe_disable` never cleared the
+geometry. A zero mode is now a missing region, the disable clears pitch and frame
+size, the shadow upload refuses zero geometry, and the dump says so in words.
+
+Release 0.6.8 carries the lot. Verification: `make all` with zero warnings,
+`make check` with 13 assertions and 13 planted controls in `check-drm-policy`
+and 14 and 20 in `check-headless-helper`, the live vblank probe running instead
+of skipping at 75.16 vblanks per second, and the two reviewer reports committed
+as evidence beside a condensed transcript.
+
+Lesson worth keeping: the first production-readiness pass found almost nothing in
+the code that was hard to write and almost everything in the interfaces between
+subsystems - the plane contract, the commit event, the lock a sleep runs under.
+Reading the driver's own guarantees against the core's documentation is cheaper
+than waiting for the failure.
+
+### 2026-11-26T21:10Z | orchestrator | 0.6.8 staged: review fixes, A54-A64, P1 deferred with its route measured
+
+The production-readiness review produced ten code fixes and the defect ledger grew to A64
+(63 rows, A01-A30 plus A32-A64); 0.6.8 is the release that carries them.
+
+What is in the batch:
+
+- A1 supersedes A27: a failed hardware enable leaves the pipe down, the commit times out
+  visibly instead of silently succeeding, and sm750_pipe_update() retries.
+- E1 bounds the EDID read, C1 moves drm_crtc_vblank_get() out of event_lock, P2 re-arms
+  INT_MASK_DMA1 after ddk750_init_hw, R2 re-reads completion_done() before declaring a DMA
+  timeout, D1 bounds the direct scanout plane, D2 parses test_pattern at probe, D3 validates
+  the SWI2C pin range, D4 enforces a minimum VRAM.
+- A55 rejects a zero-mode CRC window and sm750_pipe_disable() clears the geometry.
+- The headless helper records the VT before the compositor and restores a text VT in its
+  cleanup, so the panel is not left with no client, and its diagnose mode matches nodes by
+  sysfs device number instead of the literal card0.
+- The PM callbacks now log both edges of a cycle and every failure path, so a future
+  suspend test leaves proof in the journal.
+
+P1 (suspend and resume never exercised) is DEFERRED by the owner's decision, and the reason
+is recorded rather than glossed: a host-wide cycle would drive the same machine that
+carries the owner's session, and VFIO passthrough cannot substitute because IOMMU DMA
+translation is off on this host and a guest only runs its own copy of the callbacks.
+Measured while deciding: the host has no S3 at all (ACPI S0 S4 S5 only, mem_sleep is
+s2idle), mem and freeze are the same state, pm_test=devices runs every driver suspend but
+skips dpm_suspend_noirq so no device leaves D0, and platform is the level that does save
+PCI config and reach D3hot. Evidence in docs/evidence/runtime/45-suspend-route-assessment.txt
+and 46-pm-test-levels.txt, plan decision 94.
+
+Counts re-measured after staging: 147 payload files, 31 gates, 53 runtime transcripts,
+28 build transcripts, 7 packaging transcripts, 63 defect rows. README rows corrected from
+the pre-staging figures (54/A55 and 50 transcripts were both stale).
+
+Lesson repeated for the third time and now treated as a rule: every appended plan decision
+must be verified with yaml.safe_load immediately, because a double-quoted scalar without
+its closing quote breaks the whole plan file with a parse error far from the edit.

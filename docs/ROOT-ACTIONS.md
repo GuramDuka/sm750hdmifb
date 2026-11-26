@@ -29,6 +29,10 @@ one-line refresh. Its single allowlist line replaces the per-version
 a reboot leaves the card with no driver; the recovery runbook is in `README.md`,
 section "If the card stops working after removing the package".
 
+Row 12 is proposed and gated on a reboot: manual VFIO binding of the card to a
+guest (section 3.13). It is inert until the host boots with `intel_iommu=on`,
+and it does not close P1.
+
 | # | Date (UTC) | Action | Closes |
 | --- | --- | --- | --- |
 | 1 | 2026-11-18T06:15Z | install `/etc/udev/rules.d/99-sm750-coder-acl.rules` | GAP-B3 (partial) |
@@ -42,6 +46,7 @@ section "If the card stops working after removing the package".
 | 9 | 2026-11-21T10:28Z | install the console helper `/usr/local/sbin/sm750-console` (144-line source `tools/sm750-console.sh`, sha256 `6e7f5dc758ec6b8d7993466784ffa5b1ab379da4f7442a6228c620829f2b1338`; the installed copy is byte-identical) and add one NOPASSWD line for it (section 3.4) | the one-command `KD_TEXT` route for a panel that looks dead (A34); no GAP |
 | 10 | 2026-11-22T08:41Z | install `/usr/local/sbin/sm750-pkg` and one NOPASSWD line `/etc/sudoers.d/30-sm750-pkg` (section 3.8); source is 487 lines, sha256 `ca6e7b0a66fae43b6b332135ea8da62f61a917385accacc4d48f114e9149cf16`, but the installed body is stale, refresh required (11873 bytes, sha256 `e923a85a3389a13211869f32808b7b7cb77083355f90c5149b6c94cdaf9b976e`) | replaces the per-version `dnf install` allowlist entries; privileged install, remove, status and reload work for any version without the owner |
 | 11 | proposed | refresh `/usr/local/sbin/sm750-vt` from the tree (the installed body is the first version, which fails) and use the two NOPASSWD lines already in place for `/usr/local/sbin/sm750-vt off` and `/usr/local/sbin/sm750-vt on` (section 3.12), then run `sm750-vt off` to load the 0.6.7 module without a reboot | the reload blocker: a rebuilt module cannot be loaded while the vtconsole holds the framebuffer reference (`modprobe: FATAL: Module sm750hdmidrm is in use.`), and detaching the vtconsole alone does not release it (A51) |
+| 12 | proposed | reboot with `intel_iommu=on iommu=pt`, then bind `0000:01:00.0` to `vfio-pci` for a guest (section 3.13) | no GAP and no P1: the guest runs its own copies of `sm750_pm_suspend()` / `sm750_pm_resume()`, the host's copies never execute, and the chip stays in D0 from the host's point of view |
 
 Sections below are ordered by subject, not by date: allowlist, recovery recipe,
 helpers, udev rule, installed state and re-verification, gap map.
@@ -1363,6 +1368,207 @@ host with `bind now: 1` and print `driver dir:
 this refresh is the old body's, so a matching pair is the proof that the PCI
 step is on the host. Run `off` from another terminal, never from the SM750
 monitor at `tty1`.
+
+### 3.13 Manual VFIO binding for a guest (only after intel_iommu=on)
+
+Status: proposed, not performed. Nothing in this subsection has been run, and
+nothing here is allowlisted. Two things have to be true before the binding
+commands do anything: the host must boot with `intel_iommu=on iommu=pt`, and an
+interactive root shell must be open, because section 1's zero-colon rule cannot
+express these paths (see "Why the allowlist cannot carry this" below).
+
+**The IOMMU is off on this host, measured 2026-11-26.**
+
+```sh
+$ ls /sys/kernel/iommu_groups | wc -l
+0
+$ ls /sys/class/iommu
+$ dmesg | grep -c 'DMAR: IOMMU enabled'
+0
+$ dmesg | grep 'DMAR-IR'
+DMAR-IR: Enabled IRQ remapping in x2apic mode
+$ grep -c 'intel_iommu=on' /proc/cmdline
+0
+$ grep CONFIG_INTEL_IOMMU_DEFAULT_ON /boot/config-7.3.4-100.fc43.x86_64
+# CONFIG_INTEL_IOMMU_DEFAULT_ON is not set
+```
+
+`ls /sys/class/iommu` prints nothing at all. The `DMAR-IR` line is the trap: it
+proves interrupt remapping alone is on, which is not a DMA translation domain.
+With no IOMMU group, binding the device to `vfio-pci` appears to succeed, but
+opening `/dev/vfio/vfio` fails with
+
+```text
+VFIO: No available IOMMU models
+```
+
+so the whole recipe is inert until the reboot.
+
+**The reboot line.**
+
+```sh
+sudo grubby --update-kernel=ALL --args="intel_iommu=on iommu=pt"
+```
+
+Undo, if the next boot misbehaves:
+
+```sh
+sudo grubby --update-kernel=ALL --remove-args="intel_iommu=on iommu=pt"
+```
+
+`iommu=pt` is not decoration. It keeps identity domains for host-owned devices,
+so the desktop GPU keeps working normally and only the device bound to
+`vfio-pci` gets DMA translation. Three things that look reasonable are
+deliberately absent:
+
+- no `vfio-pci.ids=126f:0750` on the command line: it would claim the card at
+  every boot and cost the host its only console;
+- no `vfio_iommu_type1.allow_unsafe_interrupts`: interrupt remapping is already
+  on, so the flag would only weaken a boundary that is working;
+- no `pcie_acs_override`: the group contents have not been measured yet, and the
+  override belongs after that measurement, not before it.
+
+**Verify the reboot before binding anything.** All four readings must hold:
+
+```sh
+ls /sys/kernel/iommu_groups | wc -l
+dmesg | grep 'DMAR: IOMMU enabled'
+readlink -f /sys/bus/pci/devices/0000:01:00.0/iommu_group
+ls /sys/kernel/iommu_groups/<N>/devices
+```
+
+The count is greater than zero, the `DMAR: IOMMU enabled` line is present, the
+`iommu_group` link resolves, and the last listing shows `0000:01:00.0` alone in
+its group. A group shared with another device means the binding takes that other
+device's driver down too, and the answer is a different slot, not an override.
+
+**Binding sequence.**
+
+```sh
+sudo modprobe vfio-pci
+echo 0 | sudo tee /sys/class/vtconsole/vtcon1/bind
+echo 0000:01:00.0 | sudo tee /sys/bus/pci/drivers/sm750hdmidrm/unbind
+echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:01:00.0/driver_override
+echo 0000:01:00.0 | sudo tee /sys/bus/pci/drivers_probe
+readlink -f /sys/bus/pci/devices/0000:01:00.0/driver
+ls /dev/vfio/
+```
+
+The `vtcon1` detach is the step section 3.12 measured: it drops the console
+binding, and the PCI unbind that follows is what releases the framebuffer
+reference. `readlink` must resolve to `/sys/bus/pci/drivers/vfio-pci`, and
+`/dev/vfio/` must now list a numbered node besides `vfio`.
+
+**The alternative, and why it is inferior.**
+
+```sh
+echo "126f 0750" | sudo tee /sys/bus/pci/drivers/vfio-pci/new_id
+```
+
+It binds by vendor:device instead of BDF, so it needs no `driver_override` and
+no probe step, but it also claims any future card with the same pair and leaves
+the id registered. Undo it with `remove_id` before unbinding:
+
+```sh
+echo "126f 0750" | sudo tee /sys/bus/pci/drivers/vfio-pci/remove_id
+```
+
+**Unwind.**
+
+```sh
+echo 0000:01:00.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/unbind
+echo | sudo tee /sys/bus/pci/devices/0000:01:00.0/driver_override
+echo 0000:01:00.0 | sudo tee /sys/bus/pci/drivers_probe
+sudo modprobe sm750hdmidrm
+echo 1 | sudo tee /sys/class/vtconsole/vtcon1/bind
+```
+
+**What the host loses while the card is in the guest.** The SM750 is this
+host's only console: the ASPEED is blacklisted with
+`module_blacklist=nova_core,ast`, because an `ast` without a working DRM driver
+makes Plasma hang with several cards present. From the unbind until the rebind
+the panel is dark, there is no `/dev/fb*` on this host at all (section 3.12:
+`CONFIG_FB_DEVICE` is unset), and every `sm750-*` tool stops working -
+`sm750-regs` exits 1 with `SM750 not bound to a DRM driver` (section 3.1). Work
+over ssh, or accept a dark monitor. The owner's desktop session is on the NVIDIA
+card and is unaffected.
+
+**QEMU side.**
+
+```text
+-device vfio-pci,host=0000:01:00.0,x-vga=off
+```
+
+`x-vga=on` is not viable here: the option ROM is disabled and the 48 KiB image
+behind the `55aa` signature is a Silicon Motion image, not a VGA BIOS (section
+3.3 captured it). The endpoint advertises only D3hot, no D3cold. `/dev/vfio/<N>`
+must be readable by whoever starts QEMU; the udev rule in section 4 grants the
+card node to `coder` and nothing under `/dev/vfio`, so start QEMU as root or add
+a grant for that node.
+
+**Why the allowlist cannot carry this.** The project rule in section 1 is that a
+sudoers command line contains zero colons, and `0000:01:00.0` contains them, so
+no NOPASSWD line can express these writes: they run in an interactive root shell
+(section 2 shows two ways to get one). A root helper script in
+`/usr/local/sbin` would make each step allowlistable in the shape of section 3,
+and it does not exist yet.
+
+**What a guest run does and does not prove.** Passing the card to a guest runs
+the GUEST copy of `sm750_pm_suspend()` and `sm750_pm_resume()`. The host's
+copies (`src/sm750_drm.c:5470` and `:5490`, registered through
+`DEFINE_SIMPLE_DEV_PM_OPS` at `:5519`) never execute, and the chip never leaves
+D0 from the host's point of view. So this does not close P1, and the full route
+assessment is in `docs/evidence/runtime/45-suspend-route-assessment.txt`.
+
+**Return to the host when the guest work is done.** The guest side is the
+tempting place to stop; the host side is where the driver has to be handed back.
+In this order:
+
+1. Shut the guest down. A running guest holds the device, and every write below
+   fails or is ignored while it does.
+2. Unbind from `vfio-pci`, clear the override, probe the device back to
+   `sm750hdmidrm`, and load it. The probe path is `/sys/bus/pci/drivers_probe`;
+   `/sys/bus/pci/drivers/probe` does not exist:
+
+   ```sh
+   echo 0000:01:00.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/unbind
+   echo | sudo tee /sys/bus/pci/devices/0000:01:00.0/driver_override
+   echo 0000:01:00.0 | sudo tee /sys/bus/pci/drivers_probe
+   sudo modprobe sm750hdmidrm
+   ```
+
+3. Re-bind the frame buffer console:
+
+   ```sh
+   echo 1 | sudo tee /sys/class/vtconsole/vtcon1/bind
+   ```
+
+4. Verify, and read the values as stated:
+
+   ```sh
+   readlink -f /sys/bus/pci/devices/0000:01:00.0/driver
+   cat /sys/module/sm750hdmidrm/version
+   sudo -n /usr/local/sbin/sm750-regs | head
+   sudo -n /usr/bin/sm750-smi
+   ```
+
+   The driver link resolves to `/sys/bus/pci/drivers/sm750hdmidrm`. The version
+   file names the installed module version, not the guest's. The register dump
+   shows a live mode in `PANEL_CURRENT_LINE`, which advances between two reads;
+   a frozen value or a zero is a dark panel, not a working one. `sm750-smi`
+   reports the card normally again (the path is the one granted in section 1).
+
+Guest work proves the driver's code paths inside the guest and nothing about
+the host's power state. When the guest work is finished the host side still owes
+one deferred test: the host-wide `pm_test=devices` cycle that exercises
+`sm750_pm_suspend()` and `sm750_pm_resume()` on the host itself. That cycle
+remains deferred by the owner's decision until a maintenance window exists; the
+route and its risks are assessed in
+`docs/evidence/runtime/45-suspend-route-assessment.txt`. The proof to look for
+in `dmesg` is four `pm:` lines from `src/sm750_drm.c`: `pm: suspend entry`
+(`:5476`), `pm: suspend complete` (`:5486`), `pm: resume entry` (`:5496`) and
+`pm: resume complete` (`:5515`), with no `pm: suspend failed:` (`:5479`) or
+`pm: resume failed:` (`:5499`, `:5507`, `:5512`) line in the same cycle.
 
 ## 4. udev ACL rule
 

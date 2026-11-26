@@ -1,0 +1,147 @@
+Suspend/resume route assessment - why P1 cannot be closed on this host yet
+==========================================================================
+Recorded 2026-11-26 by the orchestrator, from two read-only investigations
+plus measurements taken directly on the host. Nothing in this file was
+obtained by suspending the machine: at the time of writing
+`/sys/power/pm_test` reads `[none] core processors platform devices freezer`
+and the machine has never entered a system sleep state during this project.
+
+1. The question
+---------------
+P1: `sm750_pm_suspend()` and `sm750_pm_resume()`
+(`src/sm750_drm.c:5470` and `:5490`, registered through
+`DEFINE_SIMPLE_DEV_PM_OPS` at `:5519`) have never been executed on this
+hardware. Everything they do - `drm_mode_config_helper_suspend()`,
+`sm750_vblank_timer_stop()`, `sm750_sii902x_shutdown()`, then
+`sm750_hw_init()`, `sm750_sii902x_prepare()` and
+`drm_mode_config_helper_resume()` - is therefore unproven against a real
+D3hot transition.
+
+The owner declined one host-wide `sudo systemctl suspend` cycle, because the
+NVIDIA card that carries their desktop session is on the same host. The
+question became: which route executes the host driver's PM callbacks without
+risking that session.
+
+2. Route A - VFIO passthrough into a QEMU/KVM guest: BLOCKED
+------------------------------------------------------------
+Measured on the host:
+
+  qemu-system-x86_64              10.1.5, `-device vfio-pci` compiled in
+  libvirt / virt-install          11.6.0 / 5.1.0 (libvirtd not running;
+                                  `qemu:///session` works unprivileged)
+  vfio-pci, vfio_iommu_type1      present as modules under
+                                  /lib/modules/7.3.4-100.fc43.x86_64/
+  `dmesg | grep -c 'DMAR: IOMMU enabled'`
+                                  0
+  IOMMU state                     `DMAR-IR: Enabled IRQ remapping in
+                                  x2apic mode` only - interrupt remapping
+                                  is on, DMA translation is NOT
+  /sys/kernel/iommu_groups        0 entries
+  /sys/class/iommu                0 entries
+  CONFIG_INTEL_IOMMU_DEFAULT_ON   not set
+  `intel_iommu=on` in cmdline     absent
+
+A correction to an earlier note in this project: `/sys/bus/pci/devices/
+0000:01:00.0/iommu_group` does not exist at all. An earlier `readlink -f` of
+that path printed a canonicalised string for a missing final component,
+which was misread as an existing group. With zero groups there is nothing to
+hand to `vfio-pci`.
+
+Topology, for the day DMA translation is enabled: only `01:00.0` sits behind
+root port `00:01.0` (`primary=00 secondary=01 subordinate=01`), `01:00.1`
+does not exist, and the endpoint has no ACS capability. PCIe ACS on the root
+port is unreadable without privileges and remains unverified.
+
+VGA is not the obstacle it usually is: `boot_vga` = 0 for `01:00.0` (the
+ASPEED at `09:00.0` is the boot VGA), the root-port bridge control at 0x3c
+has VGA Enable clear, the endpoint command register is `0x0146` (I/O decode
+off), and the option ROM is disabled with a 48 KiB Silicon Motion blob
+behind the `55aa` signature - that is not a VGA BIOS, so `x-vga=on` is not
+viable and `x-vga=off` avoids the whole question. The endpoint advertises
+`D3hot+` only, no `D3cold`.
+
+Functional objection, independent of the IOMMU: a guest would run the GUEST
+copy of the driver against a chip that never leaves D0 from the host's point
+of view. The host's `sm750_pm_suspend()`/`sm750_pm_resume()` would still
+never execute, and the class of bug that matters here - the chip losing
+register or VRAM state across a real power transition - is unreachable.
+
+Cost of enabling it anyway: one reboot with `intel_iommu=on` on the kernel
+command line (the owner's call, and it ends their session anyway), four new
+sudoers helper lines (the project's "zero colons in a sudoers line" rule
+forbids writing `0000:01:00.0` or `126f 0750` there), ownership of
+`/dev/vfio/<group>`, a guest image, a module build for the guest kernel, and
+the host's only console is gone for the duration - `vtcon1` is the bound
+frame buffer device, the ASPEED is blacklisted via
+`module_blacklist=...,ast`, there is no `/dev/fb*`, and `/proc/consoles`
+lists only `tty0`.
+
+3. Route B - `pm_test=devices` plus `echo mem`: WORKS, but host-wide
+--------------------------------------------------------------------
+With `/sys/power/pm_test` set to `devices` and `mem` written to
+`/sys/power/state`, the kernel runs the full device phase of a suspend -
+`dpm_suspend_start()` and `dpm_suspend_noirq()`, which is where the PCI core
+puts every device into D3hot and saves its config space - and then reaches
+`suspend_test(TEST_DEVICES)`, which prints `PM: Devices have been
+suspended` and jumps to `Resume_devices:`. The platform state is never
+entered and userspace is not frozen.
+
+Consequences, measured or read from the code path:
+
+  - the host does NOT sleep and does not need a wakeup source;
+  - `sm750_pm_suspend()` and `sm750_pm_resume()` DO execute, with a real
+    D3hot -> D0 transition on the SM750;
+  - every other device executes the same cycle, including the NVIDIA card
+    that carries the owner's session (`kwin_wayland` pid 2271 at the time of
+    writing) and the USB devices carrying input;
+  - `/sys/power/pm_test` is world-readable and root-writable
+    (`-rw-r--r--`), and it does not reset itself: forgetting
+    `echo none > /sys/power/pm_test` leaves the next real suspend stuck in
+    the test, which is a footgun that must be handled with a trap, not by
+    hand.
+
+The blast radius cannot be narrowed: there is no per-device system-PM test
+interface in this kernel, and `/sys/power/pm_test` has no exclusion list.
+
+4. Route C - unbind and rebind the PCI device: not an answer
+-----------------------------------------------------------
+Already exercised for the hot-reload work (A52). It runs `remove()` and
+`probe()` and never calls the PM callbacks, so it cannot close P1.
+
+5. Decision
+-----------
+The owner chose to DEFER the suspend test rather than accept a host-wide
+device cycle while their desktop session is live. Recorded consequence:
+
+  P1 remains OPEN. It is not "fixed", not "waived as passing", and not
+  "tested by proxy". The exact reason is that no route on this host
+  executes the host driver's PM callbacks without putting the owner's GPU
+  and input devices through a D3hot cycle, and the owner declined that.
+
+6. What would close it
+----------------------
+Either of:
+
+  a) a maintenance window in which `pm_test=devices` plus `echo mem` is run
+     once, behind an allowlisted helper that sets the mode and resets it in
+     a trap, with `kwin_wayland` pid and the panel registers sampled before
+     and after; or
+
+  b) a reboot with `intel_iommu=on` and a guest that holds the card - which
+     proves the driver's own PM paths only if the guest runs the same
+     module, and even then proves nothing about the host's D0 state.
+
+(a) is the only route that answers the question. (b) does not.
+
+7. Evidence that will exist when (a) is finally run
+---------------------------------------------------
+The driver did not log its PM entry points at all when this assessment was
+written, so a cycle would have left nothing in `dmesg` to point at. That is
+being fixed: `sm750_pm_suspend()` and `sm750_pm_resume()` now print
+`pm: suspend entry` (`src/sm750_drm.c:5476`), `pm: suspend complete`
+(`:5486`), `pm: resume entry` (`:5496`) and `pm: resume complete`
+(`:5515`), and each early-return failure path prints
+`pm: suspend failed: <err>` (`:5479`) or `pm: resume failed: <err>`
+(`:5499`, `:5507`, `:5512`). Four of those
+lines in `dmesg` are the proof that the cycle ran the driver's code, and the
+absence of the matching `complete` line is the proof that it failed.

@@ -1,0 +1,138 @@
+What the kernel pm_test levels actually do, and what they can prove for this driver
+Recorded 2026-11-26 by the orchestrator, from an upstream 7.3.4 source reading
+(sources.debian.org linux 7.3.4-1, matching the running 7.3.4-100.fc43 string
+but not byte-verified against the Fedora build) plus measured host state.
+Status: P1 remains DEFERRED by owner decision. Nothing in this file has been
+executed on this host.
+
+--------------------------------------------------------------------------------
+1. Correction: this host has no S3, so "mem" and "freeze" are the same state
+--------------------------------------------------------------------------------
+
+An earlier statement in this project treated /sys/power/state listing "mem" as
+evidence that S3 works. That was wrong. Measured and read:
+
+  - the boot log says "ACPI: PM: (supports S0 S4 S5)" - no S1..S3;
+  - /sys/power/mem_sleep is "[s2idle]" only;
+  - acpi_sleep_suspend_setup() therefore never calls suspend_set_ops(), so
+    suspend_ops stays NULL and valid_state(PM_SUSPEND_MEM) fails;
+  - s2idle_set_ops() is installed unconditionally;
+  - pm_labels[PM_SUSPEND_TO_IDLE] is the string "freeze" and
+    mem_sleep_current is PM_SUSPEND_TO_IDLE, and state_store() rewrites a
+    request for "mem" into mem_sleep_current without a support check.
+
+So "echo mem" and "echo freeze" both mean suspend-to-idle and both print
+"suspend entry (s2idle)". There is no firmware sleep state to enter on this
+machine: the deepest suspend available is s2idle, and hibernation (disk) is
+separately configured.
+
+Consequence for the driver: the D3 transition that a real cycle performs is
+reached only by a real s2idle cycle (or by the platform level of pm_test, see
+section 3), not by anything called "mem" specially.
+
+--------------------------------------------------------------------------------
+2. What each pm_test level stops
+--------------------------------------------------------------------------------
+
+Levels are gated by suspend_test() call sites inside the suspend path:
+
+  freezer     stops in enter_state() before ANY device callback runs.
+  devices     runs dpm_suspend_start(), i.e. every driver's .suspend, then
+              jumps to Recover_platform. It never reaches dpm_suspend_noirq(),
+              so pci_pm_suspend_noirq() does not run: pci_save_state() is
+              skipped and no device changes D-state. Hardware stays in D0.
+  platform    runs dpm_suspend_late() and dpm_suspend_noirq() as well, so
+              pci_pm_suspend_noirq() DOES run: config space is saved and the
+              device goes to D3hot. ACPI s2idle prepare (SCI wake arming,
+              GPE masks, wakeup device enable) also runs. It stops inside
+              suspend_enter() before s2idle_loop(), so no low-power platform
+              entry happens and no wake source has to fire.
+  processors  refused on s2idle with -EAGAIN
+              ("Unsupported test mode for suspend to idle, please choose
+              none/freezer/devices/platform.").
+  core        refused the same way.
+
+What NO level can do: enter the low-power state, exercise the wake path, or
+model S4. Whatever is not reached by "platform" is not testable on this host
+without a real s2idle cycle.
+
+suspend_test() itself only sleeps: it prints
+"suspend debug: Waiting for N second(s)." and waits up to pm_test_delay
+(default 5, /sys/module/suspend/parameters/pm_test_delay).
+
+--------------------------------------------------------------------------------
+3. What each level proves about THIS driver
+--------------------------------------------------------------------------------
+
+  devices   runs sm750_pm_suspend() and sm750_pm_resume(), which is
+            drm_mode_config_helper_suspend() / drm_mode_config_helper_resume(),
+            the same callbacks a real cycle calls first. It proves the fbdev
+            client suspends and the mode comes back, the SII902x prepare path
+            runs, and the four "pm:" log lines appear in order. It does NOT
+            prove anything about register, VRAM or config-space loss, because
+            nothing was lost: the chip never left D0.
+  platform  additionally proves PCI config save/restore and D3hot entry/exit
+            around our device, i.e. the class of bug where a driver forgets
+            that BARs and config space are gone after resume. This is the
+            closest to a real cycle that exists on this host.
+  real      "echo freeze > /sys/power/state" with pm_test=none would prove the
+  s2idle    whole path including the actual low-power entry, but it suspends
+            the machine until an interrupt arrives.
+
+Cost ladder, measured against this host's live setup: at every level processes
+are frozen, filesystems sync, and the console is suspended (console_suspend is
+enabled, no_console_suspend is not on the cmdline), and everything is restored
+afterwards. The owner's Plasma session lives on the NVIDIA card, so it takes
+the same treatment in all three cases; "devices" additionally does NOT move
+that GPU's power state, while "platform" does.
+
+--------------------------------------------------------------------------------
+4. Failure semantics worth knowing before running it
+--------------------------------------------------------------------------------
+
+  - dpm_suspend() appends each device to the suspended list before calling its
+    callback, and on the first error splices the whole prepared list in, so
+    dpm_resume() walks everything that was attempted;
+  - device_resume() skips any device whose is_suspended is false, and that flag
+    is set only after a successful .suspend, so the device that FAILED gets no
+    .resume at all while the earlier ones do;
+  - the kernel logs "Some devices failed to suspend, or early wake event
+    detected" and records last_failed_dev, last_failed_errno and last_failed_step
+    in /sys/power/suspend_stats (mode 0444).
+
+--------------------------------------------------------------------------------
+5. Reset and the fingerprint of a forgotten level
+--------------------------------------------------------------------------------
+
+pm_test does not reset itself. "echo none > /sys/power/pm_test" restores normal
+operation. A forgotten level is a global kernel variable that turns every later
+real suspend into a test until the next reboot; the fingerprint in the journal
+is "PM: suspend debug: Waiting for N second(s)." followed by a success increment
+in suspend_stats with no actual sleep.
+
+--------------------------------------------------------------------------------
+6. How to capture the evidence on this host
+--------------------------------------------------------------------------------
+
+kernel.dmesg_restrict is 1 and user coder is in groups "coder video vtune"
+only, so plain dmesg and unprivileged journalctl -k show nothing; both are
+allowed through sudo. journalctl -k -b --no-pager is the better source because
+it is boot-scoped and survives ring-buffer wrap. Register and panel proof comes
+from the allowlisted helpers (sm750-lspci, sm750-regs, sm750-crc probe) and from
+/sys/class/drm/card0-HDMI-A-1/{status,enabled,modes}. /sys/kernel/debug is 0700
+root, so the register helper must be run through sudo.
+
+Missing success criterion to avoid: fb0 does not exist on this host after many
+module reloads (/sys/class/graphics holds only fbcon, there is no /proc/fb and
+no /dev/fb*), even though the boot log has "fb0: sm750hdmidrmdrm frame buffer
+device". "fb0 came back" is therefore not a usable check; use the four "pm:"
+lines plus a live PANEL_CURRENT_LINE.
+
+--------------------------------------------------------------------------------
+7. Status
+--------------------------------------------------------------------------------
+
+P1 stays open and deferred. Neither level has been run. No sudoers entry can
+write /sys/power/*, so this is an owner-run procedure by construction; the
+honest summary is that the driver's suspend and resume callbacks are still
+unexercised on real hardware.

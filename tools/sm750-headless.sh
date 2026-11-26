@@ -243,22 +243,84 @@ x11) prog=/usr/libexec/Xorg ;;
 *) prog= ;;
 esac
 if [ "$mode" = diagnose ]; then
-	# Enumerate userspace holders of the card over the whole fd table
-	# (running as root, this sees every process).  The kernel fbdev
-	# client never appears there: an empty table together with the
-	# EBUSY from SET_MASTER means a kernel-internal client master.
-	ino=$(stat -c %i "$CARD")
-	{
-		echo "# fd-table holders of the card inode $ino"
-		for p in /proc/[0-9]*; do
-			for f in "$p"/fd/*; do
-				t=$(readlink "$f" 2>/dev/null) || continue
-				case $t in *card0*)
-					echo "holder pid=${p#/proc/} fd=${f##*/} -> $t comm=$(cat "$p/comm" 2>/dev/null) cmd=$(tr '\0' ' ' <"$p/cmdline" 2>/dev/null | cut -c1-90)"
-					;;
-				esac
-			done
+	# Enumerate userspace holders of every node belonging to this device,
+	# not of card0 alone. DRIVER_RENDER also publishes /dev/dri/renderD<N>
+	# (crw-rw-rw-), and a holder of it keeps dev->open_count above zero,
+	# which is exactly what suppresses the kernel's last-close restore.
+	# Nodes are matched by the device number read through sysfs and holders
+	# by canonical node path, so a render or control node is found as well and
+	# no rename or by-path alias can hide one.
+	card_ino=$(stat -Lc %i "$CARD" 2>/dev/null || echo '?')
+	drm_devs=
+	for d in "$DEV_ATTRS"/drm/*/dev; do
+		[ -r "$d" ] || continue
+		drm_devs="$drm_devs $(cat "$d" 2>/dev/null)"
+	done
+	nodesf=$out/04-nodes.txt
+	: >"$nodesf"
+	seen=" "
+	for n in /sys/class/drm/card*/device/drm/* /sys/class/drm/renderD*/device/drm/*; do
+		[ -r "$n/dev" ] || continue
+		dev_of=$(cat "$n/dev" 2>/dev/null) || continue
+		own=0
+		for d in $drm_devs; do
+			if [ "$dev_of" = "$d" ]; then
+				own=1
+				break
+			fi
 		done
+		[ "$own" -eq 1 ] || continue
+		node=$(readlink -f "/dev/dri/${n##*/}" 2>/dev/null) || continue
+		[ -n "$node" ] && [ -e "$node" ] || continue
+		case $seen in *" $node "*) continue ;; esac
+		seen="$seen$node "
+		printf '%s %s %s\n' "$node" "$dev_of" \
+			"$(stat -c %i "$node" 2>/dev/null || echo '?')" >>"$nodesf"
+	done
+	# One pass over every fd table. A directory this account cannot list is
+	# a place a holder can hide, so it is counted and reported, not skipped
+	# silently: 673 of 906 were unreadable at the 2026-11-26 measurement.
+	fd_seen=0
+	fd_dark=0
+	raw=$out/04-holders.raw
+	: >"$raw"
+	for p in /proc/[0-9]*; do
+		fd_seen=$((fd_seen + 1))
+		if ! ls -A "$p/fd" >/dev/null 2>&1; then
+			fd_dark=$((fd_dark + 1))
+			continue
+		fi
+		for f in "$p"/fd/*; do
+			# readlink -f resolves the magic fd link and any by-path alias,
+			# so the comparison is against the node's canonical path.
+			t=$(readlink -f "$f" 2>/dev/null) || continue
+			case $seen in *" $t "*) ;; *) continue ;; esac
+			printf 'holder node=%s pid=%s fd=%s -> %s comm=%s cmd=%s\n' \
+				"$t" "${p#/proc/}" "${f##*/}" "$t" \
+				"$(cat "$p/comm" 2>/dev/null)" \
+				"$(tr '\0' ' ' <"$p/cmdline" 2>/dev/null | tr '\n' ' ' | cut -c1-90)" >>"$raw"
+		done
+	done
+	{
+		echo "# fd-table holders of the card inode $card_ino"
+		echo "# nodes of $BDF, matched by device number:"
+		if [ -s "$nodesf" ]; then
+			while read -r node dev_of node_ino; do
+				printf 'node %s dev=%s inode=%s\n' "$node" "$dev_of" "$node_ino"
+			done <"$nodesf"
+		else
+			echo "# none: no node of $BDF is present under /dev/dri"
+		fi
+		echo "# fd tables: $fd_seen processes, $fd_dark unreadable for this account (a holder can hide in one)"
+		if [ -s "$nodesf" ]; then
+			while read -r node dev_of node_ino; do
+				if grep -qF "node=$node " "$raw" 2>/dev/null; then
+					grep -F "node=$node " "$raw"
+				else
+					echo "holder node=$node none"
+				fi
+			done <"$nodesf"
+		fi
 		echo "# module refcount: $(awk '/^sm750hdmidrm /{print $3}' /proc/modules 2>/dev/null || echo '?')"
 		echo "# fbcon bind: $(cat /sys/class/vtconsole/vtcon1/bind 2>/dev/null || echo '?')"
 	} >"$out/04-holders.txt" 2>&1
@@ -269,6 +331,94 @@ if [ "$mode" = diagnose ]; then
 fi
 [ -n "$prog" ] || { echo "$PROG: internal error, no program for mode $mode" >&2; exit 1; }
 [ -x "$prog" ] || { echo "$PROG: $prog is not installed" >&2; exit 1; }
+
+# --- console state a session can leave broken -------------------------------
+# The DRM core disables the CRTC when the last client removes its framebuffer
+# (drm_framebuffer.c atomic_remove_fb), and the kernel's only recovery there,
+# drm_lastclose() -> drm_client_dev_restore(), never runs while any other
+# process still holds a node of the device. Independently the console cannot
+# repaint while the foreground VT is KD_GRAPHICS, because the kernel console
+# drops output before fbcon (drivers/tty/vt/vt.c do_con_write), so the panel
+# stays dark with no client behind it. A switch to a text VT makes fbcon
+# program the display again; measured on the SM750 on 2026-11-26, that put
+# PANEL_DISPLAY_CTRL back to 0x0f010105 and the raster back within 2 s.
+#
+# KDGETMODE is 0x4B3B: 0 KD_TEXT, 1 KD_GRAPHICS, 4 KD_KDWANTED.
+CHVT=/usr/bin/chvt
+vt_mode() {
+	python3 - "$1" <<'PY' 2>/dev/null
+import fcntl, struct, sys
+f = open(sys.argv[1], "rb")
+sys.stdout.write(str(struct.unpack("i", fcntl.ioctl(f.fileno(), 0x4B3B,
+                                                    struct.pack("i", 0)))[0]))
+PY
+}
+
+# Record what a session may destroy. Called only by the modes that start a
+# client: probe and diagnose never take a VT, so they must not record one.
+vt_record() {
+	start_vt=$(cat /sys/class/tty/tty0/active 2>/dev/null || true)
+	start_mode=$(vt_mode /dev/tty0 || true)
+}
+
+# vt_restore - put the console back once the client is gone. Never fails the
+# run, and never switches a VT that is not the one this run left us on.
+vt_restore() {
+	[ -n "${start_vt:-}" ] || return 0
+	now_mode=$(vt_mode /dev/tty0 || true)
+	[ -n "$now_mode" ] || {
+		echo "$PROG: cannot read the VT mode; the console may stay dark" >&2
+		return 0
+	}
+	# A text-mode VT needs no repair: fbcon owns it and the console repaints.
+	[ "$now_mode" = 0 ] && return 0
+	now_vt=$(cat /sys/class/tty/tty0/active 2>/dev/null || true)
+	[ -n "$now_vt" ] || {
+		echo "$PROG: cannot read the active VT; the console may stay dark" >&2
+		return 0
+	}
+	# The session moved the foreground somewhere else, or another user's
+	# session owns it now: that VT is not ours to switch.
+	if [ "$now_vt" != "$start_vt" ]; then
+		echo "$PROG: foreground VT is $now_vt, not $start_vt; left it alone, it is not ours to switch" >&2
+		return 0
+	fi
+	# ttyN/active is 1 only for the foreground VT: re-read it for the recorded
+	# VT so a switch that raced this run is not undone.
+	if [ -r "/sys/class/tty/$start_vt/active" ] &&
+	   [ "$(cat "/sys/class/tty/$start_vt/active")" != 1 ]; then
+		echo "$PROG: $start_vt is no longer the foreground VT; left it alone, it is not ours to switch" >&2
+		return 0
+	fi
+	# Prefer the VT this run started on when it was a text VT, else the first
+	# spare text VT. Never the foreground VT: VT_ACTIVATE to the active VT is
+	# a no-op and repaints nothing.
+	target=
+	candidates="tty2 tty3"
+	[ "${start_mode:-1}" = 0 ] && candidates="$start_vt $candidates"
+	for v in $candidates; do
+		[ -e "/dev/$v" ] || continue
+		[ "$v" = "$now_vt" ] && continue
+		[ "$(vt_mode "/dev/$v" || true)" = 0 ] || continue
+		target=$v
+		break
+	done
+	if [ -z "$target" ]; then
+		echo "$PROG: no text VT available; the console may stay dark until the next VT switch" >&2
+		return 0
+	fi
+	if [ ! -x "$CHVT" ]; then
+		echo "$PROG: $CHVT is unavailable; the console may stay dark until the next VT switch" >&2
+		return 0
+	fi
+	"$CHVT" "${target#tty}" 2>/dev/null || {
+		echo "$PROG: chvt ${target#tty} failed; the console may stay dark" >&2
+		return 0
+	}
+	echo "$PROG: restored text console on $target (the panel was left with no client)"
+}
+
+vt_record
 
 export XDG_RUNTIME_DIR=$runtime
 export LIBGL_ALWAYS_SOFTWARE=1
@@ -288,11 +438,15 @@ export KWIN_COMPOSE=Q
 
 pid=
 cleanup() {
+	# Drop the traps first so a signal arriving mid-teardown cannot run this
+	# function a second time and switch the console twice.
+	trap - EXIT INT TERM
 	if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
 		kill -TERM "$pid" 2>/dev/null || true
 		sleep 2
 		kill -KILL "$pid" 2>/dev/null || true
 	fi
+	vt_restore
 }
 trap cleanup EXIT INT TERM
 

@@ -1,6 +1,62 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Release notes
 
+## 0.6.8 - What a production-readiness review found
+
+- **The direct scanout path can no longer be pointed outside its buffer.**
+  Nothing checked that a primary plane's framebuffer covered the mode, nor
+  that the window programmed into the display engine stayed inside VRAM, so
+  any DRM master committing a small buffer made the engine read past the GEM
+  object. `sm750_pipe_check()` now rejects an undersized direct-path plane
+  and the direct branch bounds `offset + frame_size` against the VRAM size.
+  Defect D1.
+- **A failed modeset is now a visible failure.** The hardware enable used to
+  log its error and then arm vblank, resume the CRC source and consume the
+  commit event, so the commit reported success on a dark panel. It now leaves
+  the pipe down and lets the commit time out, and `sm750_pipe_update()`
+  retries the enable on the next commit unless a mode change is pending.
+  Defect A1, superseding the older A27 contract.
+- **A monitor with absent DDC no longer stalls unrelated modesets.**
+  `get_modes` used to retry EDID once with a three-second sleep inside the
+  helper, under the connection mutex, and the connector is polled every ten
+  seconds; there is now a single bounded read. Defect E1.
+- **Two smaller ordering fixes.** `drm_crtc_vblank_get()` moved out from
+  under `event_lock`, so the spinlock only guards the NULL check and the arm;
+  and `INT_MASK_DMA1` is re-armed after `ddk750_init_hw()`, so the first
+  upload after a resume cannot leave the DMA path disabled for the rest of
+  the load. Defects C1 and P2.
+- **Parameter and probe hardening.** `test_pattern` is parsed once at probe
+  into an enum instead of being compared as a string on the commit path,
+  where root could replace the buffer. The SWI2C pin parameters are validated
+  before they narrow to `u8`. A VRAM size below the driver's minimum is
+  refused at probe instead of underflowing the DMA test carve. Defects D2,
+  D3 and D4.
+- **The CRC reader no longer reports a dead window as if it were live.**
+  After the last client exits, the scanout dump printed `0x0 pitch 3840` -
+  no active mode carrying the previous mode's pitch. A zero mode now counts
+  as a missing region, `sm750_pipe_disable()` clears the pitch and frame
+  size, the shadow upload refuses zero geometry, and the dump says
+  `no active mode`. Defect A55.
+- **Nothing else changed.** No new module parameter, no UAPI change, and the
+  module version string, `dkms.conf`, both spec files and the CI recipe all
+  carry 0.6.8.
+- **Suspend and resume remain unexercised, deferred by decision.** No
+  route on this host executes the driver's PM callbacks without a
+  host-wide device cycle: the owner's desktop session runs on the same
+  machine, so a `pm_test=devices` cycle would also put that GPU and its
+  input devices through D3hot, and the owner declined it. The VFIO/QEMU
+  alternative is blocked because IOMMU DMA translation is off here (zero
+  IOMMU groups, only IRQ remapping on; it needs `intel_iommu=on` and a
+  reboot), and it would run the guest copy of the callbacks, not the
+  host's. The driver now logs its PM entry points, so the next attempt,
+  whenever a maintenance window exists, leaves four `pm:` lines in
+  `dmesg` as proof. The panel also goes dark after the last client exits,
+  because the DRM core disables the CRTC by design when the last
+  framebuffer goes away; `tools/sm750-headless.sh` now works around it by
+  restoring a text VT on teardown, while the reason the fbdev last-close
+  restore never issued a commit remains unexplained. Route assessment:
+  `docs/evidence/runtime/45-suspend-route-assessment.txt`.
+
 ## 0.6.7 - The device withdraws framebuffer modifiers
 
 - **KWin 6.7.5 can present instead of failing AddFB2.** A kwin session on

@@ -76,12 +76,12 @@ typedef struct drm_atomic_state sm750_atomic_commit;
 #define SM750_DRM_NAME "sm750hdmidrm"
 /* Keep in step with the package version in build-package.sh and dkms.conf;
  * tests/check-release-version.sh fails when the three disagree. */
-#define SM750_DRM_VERSION "0.6.7"
+#define SM750_DRM_VERSION "0.6.8"
 /* modetest reports these as the driver version, so they must track the release
  * number above; tests/check-release-version.sh fails when they drift. */
 #define DRIVER_MAJOR 0
 #define DRIVER_MINOR 6
-#define DRIVER_PATCHLEVEL 7
+#define DRIVER_PATCHLEVEL 8
 #define SM750_DRM_MAX_WIDTH 2560
 #define SM750_DRM_PHYSICAL_MAX_WIDTH 2048
 #define SM750_DRM_PLL PRIMARY_PLL
@@ -120,6 +120,18 @@ typedef struct drm_atomic_state sm750_atomic_commit;
 #define SM750_DRM_DMA_TIMEOUT_US 5000
 #define SM750_DRM_FLIP_TIMEOUT_US 50000
 #define SM750_DRM_DMA_GUARD_WORDS 4
+/*
+ * Smallest VRAM the probe accepts: the cursor reserve, the DMA1 test carve
+ * with both guards, and one 640x480 XRGB8888 scanout buffer. Below this the
+ * test carve in sm750_dma_init() underflows its u32 destination.
+ */
+#define SM750_DRM_MIN_SCANOUT_WIDTH 640
+#define SM750_DRM_MIN_SCANOUT_HEIGHT 480
+#define SM750_DRM_MIN_VRAM \
+	(SM750_DRM_CURSOR_SIZE + SM750_DRM_DMA_TEST_SIZE + \
+	 SM750_DRM_DMA_GUARD_WORDS * sizeof(u32) + \
+	 ALIGN(SM750_DRM_MIN_SCANOUT_WIDTH * sizeof(u32), \
+	       SM750_DRM_LINE_ALIGN) * SM750_DRM_MIN_SCANOUT_HEIGHT)
 #define SM750_DRM_DAMAGE_SPLIT_GAP 64
 #define SM750_DRM_MAX_DAMAGE_RECTS 32
 /*
@@ -330,6 +342,40 @@ static const char *sm750_mode_stage_name(enum sm750_mode_stage stage)
 }
 
 
+/*
+ * test_pattern is a writable charp: a root write can replace and free the
+ * string while a commit reads it. Parse it once at probe and let the commit
+ * path read only this enum. An unknown value keeps the historical behaviour
+ * of "off" (never paint) without failing probe.
+ */
+enum sm750_test_pattern_mode {
+	SM750_TEST_PATTERN_OFF,
+	SM750_TEST_PATTERN_AUTO,
+	SM750_TEST_PATTERN_ALWAYS,
+};
+
+static const char *const sm750_test_pattern_names[] = {
+	[SM750_TEST_PATTERN_OFF] = "off",
+	[SM750_TEST_PATTERN_AUTO] = "auto",
+	[SM750_TEST_PATTERN_ALWAYS] = "always",
+};
+
+static enum sm750_test_pattern_mode
+sm750_test_pattern_parse(const char *value)
+{
+	if (!strcmp(value, "always"))
+		return SM750_TEST_PATTERN_ALWAYS;
+	if (!strcmp(value, "auto"))
+		return SM750_TEST_PATTERN_AUTO;
+	return SM750_TEST_PATTERN_OFF;
+}
+
+/*
+ * Lock invariants: shadow_lock nests before mode_lock (sm750_shadow_rect()
+ * reaches sm750_present_staged_frame(), which takes mode_lock), and mode_lock
+ * must never wrap sm750_crc_*() or the shadow paths, because crc_mutex and
+ * shadow_lock already nest before mode_lock. A reverse edge deadlocks.
+ */
 struct sm750_drm_device {
 	struct drm_device drm;
 	struct pci_dev *pdev;
@@ -419,6 +465,7 @@ struct sm750_drm_device {
 	bool crc_vblank;
 	struct mutex crc_mutex;
 	enum sm750_mode_stage mode_stage;
+	bool enable_failed;
 	bool phase_falling;
 	bool shadow_scanout;
 	bool rgb565;
@@ -427,6 +474,7 @@ struct sm750_drm_device {
 	bool shadow_source_snapshot_valid;
 	bool rgb565_scanout_snapshot_valid;
 	bool test_pattern_active;
+	enum sm750_test_pattern_mode test_pattern_mode;
 	bool hardware_cursor;
 	bool cursor_image_valid;
 	bool shadow_dma_enabled;
@@ -1082,30 +1130,20 @@ static struct edid *sm750_connector_read_edid(struct drm_connector *connector)
 	struct edid *edid;
 	u8 checksum;
 	unsigned int i;
-	unsigned int attempt;
 	int ret;
 
 	edid = kmalloc(256, GFP_KERNEL);
 	if (!edid)
 		return NULL;
-	for (attempt = 0; attempt < 2; attempt++) {
-		mutex_lock(&sdev->mode_lock);
-		ret = sm750_sii902x_read_edid(&sdev->pdev->dev,
-					   (u8 *)edid, 256);
-		mutex_unlock(&sdev->mode_lock);
-		if (!ret)
-			break;
-		if (!attempt) {
-			/* A waking monitor may assert HPD before DDC is ready.
-			 * Retry before publishing missing EDID/fallback modes,
-			 * without holding the hardware lock during warm-up.
-			 */
-			drm_dbg_kms(connector->dev,
-				    "monitor EDID read failed: %d; retrying in 3 seconds\n",
-				    ret);
-			msleep(3000);
-		}
-	}
+	/*
+	 * One bounded DDC attempt. ->get_modes runs under connection_mutex
+	 * and the connector is polled every 10 s, so a retry with a
+	 * multi-second sleep here would stall every modeset in the system.
+	 * A monitor that is still waking up gets its modes on a later poll.
+	 */
+	mutex_lock(&sdev->mode_lock);
+	ret = sm750_sii902x_read_edid(&sdev->pdev->dev, (u8 *)edid, 256);
+	mutex_unlock(&sdev->mode_lock);
 	if (ret) {
 		kfree(edid);
 		drm_connector_update_edid_property(connector, NULL);
@@ -1616,6 +1654,15 @@ static int sm750_dma_wait_active(struct sm750_drm_device *sdev)
 		drm_info(&sdev->drm,
 			 "DMA1 IRQ was not delivered; reverting to completion polling\n");
 		sm750_dma_irq_disable(sdev);
+		sdev->dma_active = false;
+		return 0;
+	}
+	/*
+	 * The handler clears the status bit before it completes, so a raced
+	 * acknowledgement can leave the bit clear while the transfer already
+	 * finished. Re-read the completion counter once, then decide.
+	 */
+	if (irq_completion && completion_done(&sdev->dma_completion)) {
 		sdev->dma_active = false;
 		return 0;
 	}
@@ -3040,15 +3087,30 @@ static int sm750_pipe_check(struct drm_simple_display_pipe *pipe,
 			    struct drm_crtc_state *crtc_state)
 {
 	struct sm750_drm_device *sdev = pipe_to_sm750(pipe);
+	const struct drm_display_mode *mode = &crtc_state->adjusted_mode;
 
 	if (plane_state->fb && !sdev->shadow_scanout) {
 		if (plane_state->fb->pitches[0] > SM750_DRM_FB_WIDTH_OFFSET_MASK ||
 		    !IS_ALIGNED(plane_state->fb->pitches[0],
 				SM750_DRM_LINE_ALIGN))
 			return -EINVAL;
+		/*
+		 * The direct path programs the panel window from the mode and
+		 * scans out of the plane's own object, so a framebuffer that
+		 * does not cover the mode makes the engine read past it.
+		 */
+		if (crtc_state->enable &&
+		    (plane_state->fb->width < mode->hdisplay ||
+		     plane_state->fb->height < mode->vdisplay)) {
+			drm_err(&sdev->drm,
+				"plane framebuffer %ux%u does not cover mode %ux%u\n",
+				plane_state->fb->width, plane_state->fb->height,
+				mode->hdisplay, mode->vdisplay);
+			return -EINVAL;
+		}
 	}
 	if (crtc_state->enable &&
-	    sm750_mode_valid(&crtc_state->adjusted_mode, sdev->vram_size) != MODE_OK)
+	    sm750_mode_valid(mode, sdev->vram_size) != MODE_OK)
 		return -EINVAL;
 
 	return 0;
@@ -3067,6 +3129,8 @@ static int sm750_scanout_offset(struct drm_framebuffer *fb, u32 *offset)
 	return 0;
 }
 
+static void sm750_send_vblank_event(struct drm_simple_display_pipe *pipe);
+
 static void sm750_arm_vblank_event(struct drm_simple_display_pipe *pipe)
 {
 	struct drm_crtc_state *state = pipe->crtc.state;
@@ -3075,13 +3139,23 @@ static void sm750_arm_vblank_event(struct drm_simple_display_pipe *pipe)
 
 	if (!state->event)
 		return;
+	/*
+	 * Canonical atomic order: take the vblank reference outside the event
+	 * lock (drm_crtc_vblank_get() takes vblank_lock and may run the
+	 * enable_vblank hook), then hold event_lock only for the arm.
+	 */
+	if (drm_crtc_vblank_get(&pipe->crtc)) {
+		sm750_send_vblank_event(pipe);
+		return;
+	}
 	spin_lock_irqsave(&pipe->crtc.dev->event_lock, flags);
 	event = state->event;
-	state->event = NULL;
-	if (!drm_crtc_vblank_get(&pipe->crtc))
+	if (event) {
+		state->event = NULL;
 		drm_crtc_arm_vblank_event(&pipe->crtc, event);
-	else
-		drm_crtc_send_vblank_event(&pipe->crtc, event);
+	} else {
+		drm_crtc_vblank_put(&pipe->crtc);
+	}
 	spin_unlock_irqrestore(&pipe->crtc.dev->event_lock, flags);
 }
 
@@ -3115,6 +3189,10 @@ static const char *sm750_crc_region_missing(struct sm750_drm_device *sdev)
 {
 	if (!sdev->vram)
 		return "vram";
+	/* A zero mode is not a window: the disable commit zeroes it while a
+	 * stale pitch can still be set, and a 0x0 region is unreadable. */
+	if (!sdev->pipe.crtc.mode.hdisplay || !sdev->pipe.crtc.mode.vdisplay)
+		return "active mode";
 	if (!sdev->scanout_pitch)
 		return "pitch";
 	if (!sdev->scanout_frame_size)
@@ -3983,10 +4061,14 @@ static bool sm750_test_pattern_should_paint(struct sm750_drm_device *sdev,
 {
 	if (READ_ONCE(sdev->crc_enabled))
 		return false;
-	if (!strcmp(test_pattern, "always"))
+	switch (sdev->test_pattern_mode) {
+	case SM750_TEST_PATTERN_ALWAYS:
 		return true;
-	if (strcmp(test_pattern, "auto"))
+	case SM750_TEST_PATTERN_AUTO:
+		break;
+	default:
 		return false;
+	}
 	/*
 	 * An all-black frame from a userspace master is a legitimate picture
 	 * (a desktop, a screensaver, the CRC harness' own black buffer), not
@@ -4011,6 +4093,7 @@ static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 	static bool blank_frame_reported;
 
 	sdev->mode_stage = SM750_MODE_STAGE_NONE;
+	sdev->enable_failed = false;
 	if (sdev->shadow_scanout) {
 		sm750_async_quiesce(sdev);
 		sdev->backbuffer_ready = false;
@@ -4077,6 +4160,14 @@ static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 			ret = -EINVAL;
 			goto fail;
 		}
+		/* 64-bit: pitch * vdisplay is already promoted, offset is not. */
+		if ((u64)offset + frame_size > sdev->vram_size) {
+			drm_err(&sdev->drm,
+				"scanout window %#x+%llu runs past %#x bytes of VRAM\n",
+				offset, frame_size, sdev->vram_size);
+			ret = -EINVAL;
+			goto fail;
+		}
 		sdev->scanout_offset = offset;
 		sdev->scanout_pitch = pitch;
 		sdev->scanout_frame_size = frame_size;
@@ -4124,7 +4215,7 @@ static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 			sdev->test_pattern_active = true;
 			drm_info(&sdev->drm,
 				 "painted a test card: no client has produced a frame (test_pattern=%s)\n",
-				 test_pattern);
+				 sm750_test_pattern_names[sdev->test_pattern_mode]);
 			period = sm750_test_pattern_anim(sdev);
 			if (!period)
 				period = sm750_test_pattern_period(sdev);
@@ -4155,7 +4246,7 @@ fail:
 	sdev->backbuffer_mirror = false;
 	sdev->shadow_upload_offset = 0;
 	drm_err(&sdev->drm,
-		"failed to enable HDMI mode: %d at stage %s (commit finished, event consumed)\n",
+		"failed to enable HDMI mode: %d at stage %s (pipe left down; commit event not armed)\n",
 		ret, sm750_mode_stage_name(sdev->mode_stage));
 	/*
 	 * The register state answers the ranked hypotheses in the A32 RCA:
@@ -4169,22 +4260,15 @@ fail:
 		peek32(PANEL_DISPLAY_CTRL), peek32(PANEL_PLL_CTRL),
 		peek32(SYSTEM_CTRL), peek32(PANEL_CURRENT_LINE));
 	/*
-	 * The commit that reached this label has already swapped its state in,
-	 * so crtc_state->event is the event this commit has to deliver.
-	 * Returning with it still armed trips WARN_ON(new_crtc_state->event) in
-	 * drm_atomic_helper_commit_hw_done(), the commit never completes and
-	 * every later commit stalls for 10 s per atomic object (A27). Finish the
-	 * abandoned commit the same way the success path does: re-enable vblank
-	 * accounting, then consume the event. sm750_arm_vblank_event() arms it
-	 * on the driver's vblank timer, or sends it at once when no vblank can
-	 * be started, so either branch is terminal.
+	 * Leave the pipe marked down instead of faking health. vblank
+	 * accounting and the CRC source stay off, and the event this commit
+	 * carries is not armed: drm_atomic_helper_commit_hw_done() will warn
+	 * and the commit will time out, which is visible, unlike a
+	 * flip-complete for a panel that never came up. enable_failed makes
+	 * the next commit retry the enable rather than trust the core's view
+	 * that this CRTC is running.
 	 */
-	drm_crtc_vblank_on(&pipe->crtc);
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)
-	/* After vblank_on(): the re-arm targets the rebuilt count. */
-	sm750_crc_resume(sdev);
-#endif
-	sm750_arm_vblank_event(pipe);
+	sdev->enable_failed = true;
 }
 
 static void sm750_pipe_update(struct drm_simple_display_pipe *pipe,
@@ -4199,6 +4283,14 @@ static void sm750_pipe_update(struct drm_simple_display_pipe *pipe,
 	u32 offset;
 
 	/*
+	 * The last modeset's hardware enable failed and the core still
+	 * believes the pipe is on. A later commit retries the enable here;
+	 * a modeset commit re-runs it through the core anyway.
+	 */
+	if (sdev->enable_failed && !pipe->crtc.state->mode_changed)
+		sm750_pipe_enable(pipe, pipe->crtc.state, state);
+
+	/*
 	 * A real client frame is arriving: stop the test-card rotation before
 	 * any upload so a tick can never overwrite live pixels. The flag is
 	 * cleared first, so a tick that already lost the race paints nothing.
@@ -4209,6 +4301,14 @@ static void sm750_pipe_update(struct drm_simple_display_pipe *pipe,
 	 */
 	if (sdev->test_pattern_active)
 		sm750_test_pattern_cancel(sdev);
+
+	/*
+	 * A disable clears the scanout geometry and the upload paths below
+	 * multiply by the pitch. Never upload through a cleared window: the
+	 * enabling pipe_enable() reprograms the mode and uploads the frame.
+	 */
+	if (!sdev->scanout_pitch || !sdev->scanout_frame_size)
+		goto event;
 
 	if (sdev->shadow_scanout) {
 		drm_atomic_helper_damage_iter_init(&iter, old_plane_state, state);
@@ -4240,7 +4340,7 @@ static void sm750_pipe_update(struct drm_simple_display_pipe *pipe,
 		       (offset & SM750_DRM_FB_ADDRESS_MASK));
 	}
 event:
-	if (!pipe->crtc.state->mode_changed)
+	if (!sdev->enable_failed && !pipe->crtc.state->mode_changed)
 		sm750_arm_vblank_event(pipe);
 }
 
@@ -4283,6 +4383,18 @@ static void sm750_pipe_disable(struct drm_simple_display_pipe *pipe)
 	sdev->backbuffer_ready = false;
 	sdev->backbuffer_mirror = false;
 	sdev->shadow_upload_offset = 0;
+	/*
+	 * The mode is zeroed by this disable commit; a surviving pitch would
+	 * make the debugfs header print a dead 0x0 window with a live pitch
+	 * and would let an upload multiply by the wrong geometry. Clear both
+	 * members with the rest of the bookkeeping; every upload consumer
+	 * guards a zero pitch (pipe_update refuses the upload until the next
+	 * enable reprograms the mode).
+	 */
+	sdev->scanout_pitch = 0;
+	sdev->scanout_frame_size = 0;
+	/* The panel may never have come up; retry from a clean state next time. */
+	sdev->enable_failed = false;
 }
 
 static enum drm_mode_status
@@ -4465,6 +4577,13 @@ static int sm750_scanout_show(struct seq_file *m, void *unused)
 
 	if (!drm_dev_enter(drm, &idx))
 		return -ENODEV;
+	if (!sdev->pipe.crtc.mode.hdisplay || !sdev->pipe.crtc.mode.vdisplay)
+		seq_printf(m, "# %s scanout readback, no active mode\n",
+			   SM750_DRM_NAME);
+	else
+		seq_printf(m, "# %s scanout readback, %ux%u pitch %u\n",
+			   SM750_DRM_NAME, sdev->pipe.crtc.mode.hdisplay,
+			   sdev->pipe.crtc.mode.vdisplay, sdev->scanout_pitch);
 	if (!sm750_crc_region(sdev, &offset, &length, &missing)) {
 		seq_printf(m, "# no scanout buffer programmed: %s missing\n",
 			   missing ? missing : "reason");
@@ -4472,9 +4591,6 @@ static int sm750_scanout_show(struct seq_file *m, void *unused)
 		return 0;
 	}
 	crc = sm750_scanout_crc32(sdev, offset, length, &nonzero);
-	seq_printf(m, "# %s scanout readback, %ux%u pitch %u\n",
-		   SM750_DRM_NAME, sdev->pipe.crtc.mode.hdisplay,
-		   sdev->pipe.crtc.mode.vdisplay, sdev->scanout_pitch);
 	seq_printf(m, "offset %u\n", offset);
 	seq_printf(m, "length %zu\n", length);
 	seq_printf(m, "nonzero %zu\n", nonzero);
@@ -4580,6 +4696,15 @@ static int sm750_hw_init(struct sm750_drm_device *sdev, bool reset_memory)
 	if (!sdev->vram_size || sdev->vram_size > pci_resource_len(sdev->pdev, 0))
 		return -ENODEV;
 	ddk750_init_hw(&init);
+	/*
+	 * A resume reinitialises the chip, and the reset clears INT_MASK while
+	 * sdev->dma_irq_enabled still says the DMA1 completion IRQ is armed.
+	 * Re-arm the bit the driver believes in, or the first shadow upload
+	 * after resume manufactures a timeout. A sticky shadow_dma_broken is
+	 * left alone: the timeout that set it was real.
+	 */
+	if (sdev->dma_irq_enabled)
+		poke32(INT_MASK, peek32(INT_MASK) | INT_MASK_DMA1);
 
 	value = peek32(MISC_CTRL) | MISC_CTRL_DAC_POWER_OFF;
 	poke32(MISC_CTRL, value);
@@ -5005,6 +5130,21 @@ static int sm750_pci_probe(struct pci_dev *pdev,
 	bool use_bbdither;
 	int ret;
 
+	/*
+	 * The SiI9022A software-I2C pin numbers are ints here but unsigned
+	 * char at the conversion into sm750_sw_i2c_init(), so a value such as
+	 * 256 would truncate to a different legal GPIO. Validate the int.
+	 */
+	if (sii9024_scl < 0 || sii9024_scl > 31 ||
+	    sii9024_sda < 0 || sii9024_sda > 31)
+		return dev_err_probe(&pdev->dev, -EINVAL,
+			"sii9024_scl/sii9024_sda must be in 0..31 (got %d/%d)\n",
+			sii9024_scl, sii9024_sda);
+	if (sii9024_scl == sii9024_sda)
+		return dev_err_probe(&pdev->dev, -EINVAL,
+			"sii9024_scl and sii9024_sda must differ (both %d)\n",
+			sii9024_scl);
+
 	if (!strcmp(scanout_format, "xrgb8888")) {
 		use_rgb565 = false;
 		use_bbdither = false;
@@ -5055,6 +5195,7 @@ static int sm750_pci_probe(struct pci_dev *pdev,
 	sdev->shadow_scanout = use_shadow;
 	sdev->rgb565 = use_rgb565;
 	sdev->bbdither = use_bbdither;
+	sdev->test_pattern_mode = sm750_test_pattern_parse(test_pattern);
 	sdev->hardware_cursor = !disable_hardware_cursor;
 	sdev->vram_base = pci_resource_start(pdev, 0);
 	mutex_init(&sdev->mode_lock);
@@ -5176,6 +5317,11 @@ static int sm750_pci_probe(struct pci_dev *pdev,
 			if (ret)
 				return ret;
 		}
+		if (sdev->vram_size < SM750_DRM_MIN_VRAM)
+			return dev_err_probe(&pdev->dev, -ENOSPC,
+				"VRAM %#x is below the %lu-byte minimum (cursor, DMA test and one mode buffer)\n",
+				sdev->vram_size,
+				(unsigned long)SM750_DRM_MIN_VRAM);
 		if (sdev->hardware_cursor &&
 		    sdev->vram_size < SM750_DRM_CURSOR_SIZE)
 			return -ENOSPC;
@@ -5327,13 +5473,17 @@ static int sm750_pm_suspend(struct device *dev)
 	struct sm750_drm_device *sdev = pci_get_drvdata(pdev);
 	int ret;
 
+	drm_info(&sdev->drm, "pm: suspend entry\n");
 	ret = drm_mode_config_helper_suspend(&sdev->drm);
-	if (ret)
+	if (ret) {
+		drm_err(&sdev->drm, "pm: suspend failed: %d\n", ret);
 		return ret;
+	}
 	sm750_vblank_timer_stop(sdev, true);
 	mutex_lock(&sdev->mode_lock);
 	sm750_sii902x_shutdown();
 	mutex_unlock(&sdev->mode_lock);
+	drm_info(&sdev->drm, "pm: suspend complete\n");
 	return 0;
 }
 
@@ -5343,16 +5493,27 @@ static int sm750_pm_resume(struct device *dev)
 	struct sm750_drm_device *sdev = pci_get_drvdata(pdev);
 	int ret;
 
+	drm_info(&sdev->drm, "pm: resume entry\n");
 	ret = sm750_hw_init(sdev, false);
-	if (ret)
+	if (ret) {
+		drm_err(&sdev->drm, "pm: resume failed: %d\n", ret);
 		return ret;
+	}
 	mutex_lock(&sdev->mode_lock);
 	ret = sm750_sii902x_prepare(&pdev->dev, false,
 				    sii9024_scl, sii9024_sda);
 	mutex_unlock(&sdev->mode_lock);
-	if (ret)
+	if (ret) {
+		drm_err(&sdev->drm, "pm: resume failed: %d\n", ret);
 		return ret;
-	return drm_mode_config_helper_resume(&sdev->drm);
+	}
+	ret = drm_mode_config_helper_resume(&sdev->drm);
+	if (ret) {
+		drm_err(&sdev->drm, "pm: resume failed: %d\n", ret);
+		return ret;
+	}
+	drm_info(&sdev->drm, "pm: resume complete\n");
+	return 0;
 }
 
 static DEFINE_SIMPLE_DEV_PM_OPS(sm750_pm_ops, sm750_pm_suspend,

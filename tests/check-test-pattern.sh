@@ -32,7 +32,8 @@
 # client's first frame instead of the enabling commit's own upload.
 #
 # Usage: tests/check-test-pattern.sh [source file]
-#        tests/check-test-pattern.sh --single [source file]   (no self-test)
+#        tests/check-test-pattern.sh --single [source file]     (no self-test)
+#        tests/check-test-pattern.sh --self-test [source file]  (planted controls)
 
 set -euo pipefail
 export TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}
@@ -42,6 +43,8 @@ project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 mode=full
 if [ "${1:-}" = "--single" ]; then
 	mode=single
+	shift
+elif [ "${1:-}" = "--self-test" ]; then
 	shift
 fi
 source_file=${1:-$project_dir/src/sm750_drm.c}
@@ -357,7 +360,7 @@ check_rotation() {
 # userspace master is a picture, not an unpainted buffer.
 check_crc_ownership() {
 	local file=$1
-	local should crc work update whole
+	local should crc work update whole crc_line always_line
 
 	should=$(fn_body "$file" \
 		'static bool sm750_test_pattern_should_paint(struct sm750_drm_device *sdev,')
@@ -366,8 +369,13 @@ check_crc_ownership() {
 		"the paint decision ignores an armed CRC source"
 	require "$should" 'return !READ_ONCE(sdev->drm.master) && blank;' \
 		"an unowned blank frame is not distinguished from a master's black frame"
-	[ "$(first_line "$should" 'READ_ONCE(sdev->crc_enabled)')" -lt \
-	  "$(first_line "$should" 'strcmp(test_pattern, "always")')" ] ||
+	crc_line=$(first_line "$should" 'READ_ONCE(sdev->crc_enabled)')
+	always_line=$(first_line "$should" 'case SM750_TEST_PATTERN_ALWAYS:')
+	[ -n "$crc_line" ] ||
+		fail "$file: the paint decision no longer reads an armed CRC source"
+	[ -n "$always_line" ] ||
+		fail "$file: the paint decision no longer honours test_pattern=always"
+	[ "$crc_line" -lt "$always_line" ] ||
 		fail "test_pattern=always overrides an armed CRC source"
 
 	crc=$(fn_body "$file" 'static int sm750_crc_enable(')

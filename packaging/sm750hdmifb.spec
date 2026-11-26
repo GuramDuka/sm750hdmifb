@@ -19,11 +19,11 @@
 #   tests/check-rpm-dkms.sh
 
 %global dkms_name     sm750hdmifb
-%global dkms_version  0.6.7
+%global dkms_version  0.6.8
 %global module_name   sm750hdmidrm
 
 Name:           sm750hdmifb
-Version:        0.6.7
+Version:        0.6.8
 Release:        1%{?dist}
 Summary:        DKMS source for the SM750G10 SiI9024A HDMI DRM-KMS driver
 License:        GPL-2.0-only
@@ -357,6 +357,21 @@ exit 0
 %doc README.md LICENSE docs/RELEASE-NOTES.md docs/TESTING.md packaging/copyright
 
 %changelog
+* Thu Nov 26 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.8-1
+- Release 0.6.8: a production-readiness pass over the whole driver. The direct
+  scanout path now rejects a primary plane whose framebuffer does not cover the
+  mode and bounds its window against VRAM, so a client can no longer make the
+  engine read past the buffer it handed over. A failed hardware enable no
+  longer arms vblank, CRC and the commit event - the commit times out visibly
+  instead of reporting success on a dark panel. EDID reads under get_modes are
+  a single bounded attempt, so a monitor with absent DDC no longer stalls
+  unrelated modesets. drm_crtc_vblank_get moved out from under event_lock, the
+  DMA completion is re-read before a timeout is declared, INT_MASK_DMA1 is
+  re-armed after ddk750_init_hw, the SWI2C pin parameters are validated before
+  they narrow to u8, the test_pattern parameter is parsed once at probe rather
+  than per commit, and too-small VRAM is refused at probe. The CRC reader no
+  longer reports a 0x0 window with the previous mode's pitch after the last
+  client exits.
 * Wed Nov 25 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.7-1
 - Release 0.6.7: the device withdraws the framebuffer-modifier capability
   (.fb_modifiers_not_supported on both mode_config function structs), because

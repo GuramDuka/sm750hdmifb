@@ -1,0 +1,256 @@
+# 44 - the 2026-11-26 production-readiness review: verdicts, defects and the gate
+
+Recorded on 2026-11-26 on the target host, kernel 7.3.4-100.fc43.x86_64,
+card0 at PCI 0000:01:00.0, panel PHL 243V7 over HDMI. Both reviews ran against
+tree HEAD 434cb0c.
+
+This file records what the two reviews concluded, the two defects this task
+recorded beside them (`A54`, measured while the review ran, and `A55`, the
+reader defect that state exposed), the nine confirmed defects and findings the
+review raised (`A56` to `A64` in `docs/DEFECTS.md`), and the gate assertion
+that pins each fix. The reports themselves are the record, and are cited by
+section below:
+
+- `docs/evidence/review/01-production-readiness-architecture.txt` (555 lines)
+  - architecture, kernel-facing correctness and upstreamability, critic mode.
+- `docs/evidence/review/02-production-readiness-runtime.txt` (424 lines)
+  - crash, hang, leak and state-corruption review, target-code mode.
+
+Both are source reviews: the architecture report states that no code was
+executed, and the runtime report states that the installed kernel tree carries
+headers and scripts only, so DRM-core claims are marked "cannot verify". Line
+numbers inside both reports are the pre-fix ones; the fix paragraphs below use
+the current lines.
+
+## 1. Subject
+
+Two questions, answered separately by the two reports:
+
+1. Can the driver crash, hang, leak or corrupt state on any path a user can
+   reach (runtime report)?
+2. Is the architecture, the UAPI surface and the kernel-facing code fit to
+   ship and to send upstream (architecture report)?
+
+The defects they produced are the current defect rows `A54`-`A64`; the
+fixes are in `src/sm750_drm.c` and `tests/check-drm-policy.sh`. Nothing in
+this task re-ran either review.
+
+## 2. Commands used
+
+Sizes of the two reports, so a reader can tell an excerpt from the whole:
+
+    $ wc -l docs/evidence/review/01-production-readiness-architecture.txt \
+            docs/evidence/review/02-production-readiness-runtime.txt
+         555 docs/evidence/review/01-production-readiness-architecture.txt
+         424 docs/evidence/review/02-production-readiness-runtime.txt
+
+The gate that carries the assertions for every fix (source-level, no device):
+
+    $ bash tests/check-drm-policy.sh
+    DRM mode policy checks passed (13 runtime-guard assertions, 13 planted controls)
+
+    $ bash tests/check-headless-helper.sh
+    Headless helper checks passed (14 assertions, 20 planted controls)
+
+The counts used in `docs/DEFECTS.md` and `docs/DELIVERABLES.md`:
+
+    $ grep -c '^| A' docs/DEFECTS.md
+    63
+    $ git ls-files 'tests/check-*.sh' | wc -l
+    31
+    $ git ls-files docs/evidence/runtime/ | wc -l
+    50
+    $ ls docs/evidence/runtime/ | wc -l
+    52
+    $ git ls-files -- . ':(exclude)docs/plan' ':(exclude)docs/evidence' \
+        ':(exclude)docs/images' ':(exclude)docs/notes' | wc -l
+    147
+
+The 50 in the third command counts tracked transcripts only; it was 50 before
+this file was written, and the review task does not track it. The 52 in the
+fourth command is the directory as it stands: the 50 tracked files plus this
+file and `45-suspend-route-assessment.txt`, which belongs to the suspend-route
+work and not to this task. The payload count is unchanged by this task because
+`docs/evidence/` is excluded from the payload, and `docs/evidence/review/` is
+untracked.
+
+## 3. The runtime verdict
+
+Header of `docs/evidence/review/02-production-readiness-runtime.txt`:
+
+    Tree     : HEAD 434cb0c
+    Reviewer : independent reviewer subagent
+    Mode     : high, target code, scope full
+    Date     : 2026-11-26 (UTC)
+
+Method counts, as printed by the report:
+
+    20 msleep/udelay/usleep_range call sites, 1 BUG_ON/WARN_ON hit (a
+    comment), 0 copy_from_user, 0 ioctl, 0 writable sysfs/debugfs attributes.
+
+The report carries eleven numbered lead verdicts, each closed with a verdict:
+the BUG_ON hit is a comment, the bounded loops are not a defect, the lock
+order is `shadow_lock` before `mode_lock`, user input has no writable
+attribute outside root, and so on. Six rows survive as defects or risks
+(D1-D4, R1, R2). The verdict section reads:
+
+    Overall verdict
+    ---------------
+    production ready with conditions
+
+    No crash, hang, UAF or leak was confirmed on a path reachable by an
+    unprivileged user. The kernel-side bounds, cancellation and lock ordering
+    are sound, and the two failure modes that would normally bite a driver
+    like this - a dead raster and a dead DDC bus - are bounded and degrade
+    instead of hanging. The one unprivileged-reachable defect is D1, an
+    undefined hardware scanout read when a client commits a framebuffer
+    smaller than the mode; it does not fault the kernel but it is the kind of
+    state the driver must not hand to the engine.
+
+    Top three things to fix, in order:
+    1. D1: guard the direct scanout path against fb < mode and
+       offset + pitch*vdisplay > vram_size (src/sm750_drm.c:3038-3055,
+       src/sm750_drm.c:4070-4081). This is the only condition for shipping.
+    2. D4 and D3: add the VRAM lower bound before the DMA test carve and the
+       0..31 validation for the SiI9022A i2c pins. Both are cheap, both remove
+       silent misconfiguration.
+    3. D2 and R1: stop reading the charp test_pattern from the commit path
+       (cache it at probe), and bound or move the panel power sequence so one
+       commit cannot hold mode_lock for about 2.3 s.
+
+## 4. A54 - the panel stays dark when the last client exits
+
+Status `diagnosed`; not raised by either report as a defect, measured while
+the review ran. Reproduced on an X session and on three clean `modetest`
+self-exits. The state measured after the last client exits:
+
+    PANEL_DISPLAY_CTRL   0x0f010105 -> 0x0f012001
+    PANEL_CURRENT_LINE   frozen
+    card0-HDMI-A-1/enabled   disabled
+    active_crtc          -1
+
+Mechanism, three parts:
+
+1. The DRM core disables the CRTC when the last client removes its
+   framebuffer, by design (`atomic_remove_fb`, upstream
+   `drivers/gpu/drm/drm_framebuffer.c:1000-1093`). The disable is not the
+   defect.
+2. The fbdev last-close restore that should re-enable the pipe then never
+   issued a commit on about a dozen client exits, although the same function
+   works when fbcon calls it (`fb_set_par`, upstream
+   `drivers/gpu/drm/drm_fbdev_helper.c:1199-1228`). A manual
+   `sudo -n /usr/local/sbin/sm750-console text 2` restored the pipe within
+   2 s, so the hardware path is intact.
+3. Independently, the VT stayed in `KD_GRAPHICS`. In that mode
+   `drivers/tty/vt/vt.c` `do_con_write` drops console output before fbcon
+   sees it, so the console does not repaint even with a live pipe.
+
+The stray-fd hypothesis for the missing last-close commit is UNPROVEN: a later
+`sm750-headless diagnose` showed module refcount 1 with no holder on card0 or
+renderD128.
+
+Workaround in force since 2026-11-26: `tools/sm750-headless.sh` records the VT
+before starting a compositor (`vt_record()` at `tools/sm750-headless.sh:359-362`)
+and restores a text VT on teardown (`vt_restore()` at `:366-420`), so the
+panel repaints automatically. Open question: why the last-close restore never
+commits.
+
+## 5. A55 - the CRC reader reported a dead window as a valid one
+
+Status `fixed`. After the last client exits the mode becomes `0x0`, but
+`sm750_crc_region_missing()` did not treat a zero mode as missing and
+`sdev->scanout_pitch` survived `sm750_pipe_disable()`, so `sm750-crc dump`
+printed
+
+    scanout readback, 0x0 pitch 3840
+
+a 0x0 window with a stale pitch. Fixes:
+
+- `sm750_crc_region_missing()` rejects a zero mode before the pitch check
+  (`src/sm750_drm.c:3188-3193`).
+- `sm750_pipe_disable()` clears `scanout_pitch` and `scanout_frame_size`
+  (`src/sm750_drm.c:4394-4395`).
+- The shadow upload path refuses a zero-geometry upload rather than
+  multiplying a cleared pitch (`src/sm750_drm.c:4305-4311`).
+- The debugfs header prints `sm750hdmidrm scanout readback, no active mode`
+  for a zero mode (`src/sm750_drm.c:4578-4589`).
+
+Guards: `tests/check-drm-policy.sh` assertions R3, R4 and R5, each with one
+property-removing planted control - `plant_crc_zero_mode` (`:524`),
+`plant_disable_geometry` (`:533`), `plant_header_zero_mode` (`:542`).
+
+## 6. The nine fixes and their gate assertions
+
+`A56`-`A64` in `docs/DEFECTS.md`. Every assertion label below is printed by
+`tests/check-drm-policy.sh` when it fails.
+
+| Defect | Review id | Fix site | Assertion | Planted control |
+| --- | --- | --- | --- | --- |
+| A56 | A1, X4, T1 | a failed hardware enable no longer arms vblank, CRC or the commit event; `sm750_pipe_update` retries unless a mode change is pending (`src/sm750_drm.c:468`, `:4096`, `:4267-4271`, `:4286-4291`, `:4343-4344`, `:4397`) | A1 | `enable_fail_reports_live_pipe` |
+| A57 | E1, X1 | the 2-attempt EDID loop and its `msleep(3000)` are gone; one bounded DDC read per `get_modes` (`src/sm750_drm.c:1129-1149`) | E1 | `edid_sleep` |
+| A58 | C1 | `drm_crtc_vblank_get` moved outside `event_lock` (`src/sm750_drm.c:3134-3161`, get at `:3147`, lock at `:3150`) | C1 | `event_get_under_lock` |
+| A59 | P2, X6 | `INT_MASK_DMA1` is re-armed after `ddk750_init_hw` (`src/sm750_drm.c:4680-4716`, poke at `:4708-4709`) | P2 | `int_mask_rearm` |
+| A60 | D1 | `sm750_pipe_check` rejects an undersized primary plane for the direct path (`:3093-3119`); the enable bounds `offset + frame_size` against VRAM (`:4156-4175`) | D1, twice | `plane_covers_mode`, `direct_vram_bound` |
+| A61 | D2 | `test_pattern` is parsed once at probe into an enum (`:256`, `:304`, `:351-370`, `:477`) | D2 | `test_pattern_string` |
+| A62 | D3 | the SWI2C pin ints are validated 0..31 and equal pins rejected before the u8 conversion (`:193-198`, `:5138-5146`) | D3 | `pin_range` |
+| A63 | D4 | `SM750_DRM_MIN_VRAM` (`:125-134`) and the probe rejection of too-small VRAM (`:5278-5282`) | D4 | `vram_floor` |
+| A64 | R2 | the DMA completion is re-read before a timeout is declared (`:1668-1675`) | R2 | `completion_recheck` |
+
+`R1` (commit-tail latency) is recorded as a risk and was not changed by this
+task.
+
+## 7. The architecture verdict
+
+Header of `docs/evidence/review/01-production-readiness-architecture.txt`:
+
+    Reviewer : independent critic-mode review (subagent)
+    Date     : 2026-11-26
+    Target   : <repo>, src/ (22 files, 11274 lines)
+    Method   : source read against the installed 7.3.4-100.fc43.x86_64
+               headers and System.map; no code was executed, no kernel or
+               device state altered.
+
+Its verdict block:
+
+    VERDICT: production ready with conditions.
+    No blocker was found. A plausible blocker was investigated and refuted
+    (see "Claims checked and refuted"). Three conditions must be met before
+    calling it production ready: make the EDID read non-blocking, decide
+    explicitly whether suspend/resume is supported (test it or remove the
+    path), and stop reporting a successful commit when the hardware mode set
+    failed.
+
+The refuted candidate blocker, quoted from "Claims checked and refuted":
+
+    "Enabling the CRTC with the primary plane disabled causes a NULL
+    dereference in sm750_pipe_enable." Not reachable. ... But the simple-pipe
+    helper's CRTC atomic_check (drm_simple_kms_crtc_check, System.map:112518)
+    rejects an enabled CRTC without an enabled primary plane, and that
+    callback lives in drm_crtc_helper_funcs (crtc->helper_private), which the
+    driver never overrides [K/S].
+
+The same section refutes the related claim that installing `sm750_crtc_funcs`
+(`src/sm750_drm.c:4324-4340`, installed at `:4633`) drops the helper's
+`atomic_check`: `atomic_check` is not a `drm_crtc_funcs` member, and the
+driver does not assign `helper_private`.
+
+Two of the report's three conditions are closed by this task's fixes: the EDID
+read is A57 and the failed-enable report is A56. The third, suspend/resume,
+remains open and is recorded as `P1` in the report, not as a ledger row: the
+driver's suspend/resume path (`src/sm750_drm.c:5324-5356` in the report's
+numbering) has never been exercised.
+
+Note on the wording of the review: the report is a critic-mode review, and its
+verdict line is `production ready with conditions`. It does not use the words
+"warning" or "revise" anywhere in its 555 lines, so those are not quotes from
+it.
+
+## 8. Where the record continues
+
+- Defect rows and the two new detail sections: `docs/DEFECTS.md` `A54`-`A64`.
+- Gate assertions: `tests/check-drm-policy.sh` (13 assertions, 13 planted
+  controls) and `tests/check-headless-helper.sh` (14 assertions, 20 planted
+  controls).
+- Full reports: `docs/evidence/review/01-production-readiness-architecture.txt`
+  and `docs/evidence/review/02-production-readiness-runtime.txt`.
+- Helper-side record of the last-client exit: `docs/evidence/runtime/43-plasma-x11.txt`.

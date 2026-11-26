@@ -16,8 +16,9 @@
 #     fixed iteration cap, with the same masked compare and re-poke,
 #   - sm750_pipe_disable() keeps the display-off result and warns with the
 #     PANEL_DISPLAY_CTRL readback,
-#   - the sm750_pipe_enable() fail path still consumes the event after
-#     drm_crtc_vblank_on() and prints the four diagnostic registers.
+#   - the sm750_pipe_enable() fail path marks the pipe down instead of
+#     re-enabling vblank, resuming CRC or arming the commit event, and prints
+#     the four diagnostic registers.
 #
 # The gate is source level and does not assert formatting: it looks for a mask
 # expression, a write inside the poll loop, an ordering and a set of register
@@ -141,12 +142,17 @@ fail_block=$(awk '
 [[ -n $fail_block ]] || fail "sm750_pipe_enable() has no fail: label"
 grep -Fq 'failed to enable HDMI mode: %d at stage %s' <<<"$fail_block" ||
 	fail "the fail path no longer names the mode stage"
-on_line=$(first_line "$fail_block" 'drm_crtc_vblank_on(&pipe->crtc);')
-arm_line=$(first_line "$fail_block" 'sm750_arm_vblank_event(pipe);')
-[[ -n $on_line && -n $arm_line ]] ||
-	fail "the fail path no longer re-enables vblank and consumes its event"
-test "$on_line" -lt "$arm_line" ||
-	fail "the fail path arms the event before vblank accounting is restored"
+grep -Fq 'sdev->enable_failed = true;' <<<"$fail_block" ||
+	fail "the fail path does not mark the pipe as down for the next commit"
+for forbidden in \
+	'drm_crtc_vblank_on(' \
+	'sm750_crc_resume(' \
+	'sm750_arm_vblank_event(' \
+	'commit finished, event consumed'; do
+	if grep -Fq "$forbidden" <<<"$fail_block"; then
+		fail "the fail path still fakes a live pipe: $forbidden"
+	fi
+done
 for reg in PANEL_DISPLAY_CTRL PANEL_PLL_CTRL SYSTEM_CTRL PANEL_CURRENT_LINE; do
 	grep -Fq "$reg=" <<<"$fail_block" ||
 		fail "the fail path does not print $reg"
@@ -166,16 +172,12 @@ plant_exact_compare() {
 	sed -i 's/(last & mask) == (value & mask)/(last \& ~mask) == (value \& ~mask)/' \
 		"$1/ddk750_display.c"
 }
-# A27 order: the event must not be armed while vblank accounting is off.
-plant_early_arm() {
+# A1: a failed enable must not re-enable vblank on the way out.
+plant_enable_fail_up() {
 	awk '
-		/^fail:/ { in_fail = 1 }
-		in_fail && /^\tdrm_crtc_vblank_on\(&pipe->crtc\);/ { held = 1; next }
-		in_fail && /^\tsm750_arm_vblank_event\(pipe\);/ {
+		/^fail:/ {
 			print
-			if (held)
-				print "\tdrm_crtc_vblank_on(&pipe->crtc);"
-			print_count++
+			print "\tdrm_crtc_vblank_on(&pipe->crtc);"
 			next
 		}
 		{ print }' "$1/sm750_drm.c" >"$1/sm750_drm.c.new"
@@ -218,7 +220,7 @@ control() {
 }
 
 control exact_register_compare plant_exact_compare
-control event_armed_before_vblank_on plant_early_arm
+control enable_fail_fakes_live_pipe plant_enable_fail_up
 control display_off_result_discarded plant_discard_result
 control no_fail_state_registers plant_no_state_line
 

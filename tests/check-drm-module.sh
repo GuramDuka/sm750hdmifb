@@ -9,9 +9,20 @@
 #
 # --self-test takes the module as an optional second argument (default
 # src/sm750hdmidrm.ko), copies this script, plants one defect per control and
-# requires every mutated copy to fail while the unmutated copy passes. It needs
-# the built check-vblank helper and a read-write DRM node, and exits 77 with one
-# SKIP line when either is missing.
+# requires every mutated copy to fail while the unmutated copy passes. The
+# mutated copies run against fixture card trees (lit and idle) and a stand-in
+# probe, so a self-test does not need a lit panel; the unmutated copy also runs
+# once against the real device. It needs the built check-vblank helper (the
+# stand-in replaces it only for the controls) and a read-write DRM node, and
+# exits 77 with one SKIP line when either is missing.
+#
+# The live probe needs an enabled CRTC: DRM answers DRM_IOCTL_WAIT_VBLANK with
+# EINVAL when every pipe is off, which measures the device state and not the
+# driver. When the driver's active_crtc attribute (or, for an older module
+# without it, the bound connectors' enabled attribute) proves that no pipe is
+# on, the gate prints one SKIP line naming the measurement instead of letting
+# that EINVAL fail the run. Like the other two preconditions, that SKIP leaves
+# the gate at exit 0 and is not a pass.
 #
 # The live probe's expectation is the driver's own active-mode refresh
 # (active_mode_refresh_hz), not an assumed 60 Hz: a hardcoded 60 failed a panel
@@ -30,8 +41,11 @@ device=${SM750_DRM_DEVICE:-/dev/dri/card0}
 # Expected refresh for the live probe. Preference order: the documented
 # override, the mode's own attribute through the card node, then the same
 # attribute through the PCI device. Anything that is not a number in 20..250
-# falls back to 60 with a note on stderr, so the probe always runs.
-sysfs_refresh=/sys/class/drm/$(basename -- "$device")/device/active_mode_refresh_hz
+# falls back to 60 with a note on stderr, so a bogus attribute never invents an
+# expectation. sysfs_crtc is the same card node's own "no pipe" marker.
+sysfs_card=/sys/class/drm/$(basename -- "$device")
+sysfs_refresh=$sysfs_card/device/active_mode_refresh_hz
+sysfs_crtc=$sysfs_card/device/active_crtc
 pci_refresh=/sys/bus/pci/devices/0000:01:00.0/active_mode_refresh_hz
 expected_refresh=
 expected_refresh_source=
@@ -74,6 +88,43 @@ resolve_expected_refresh() {
 	return 0
 }
 
+# Evidence that no CRTC is enabled on $device, empty when a pipe is on or the
+# state cannot be measured. DRM returns EINVAL from DRM_IOCTL_WAIT_VBLANK when
+# every pipe is off: that measures the device state, not the driver (A44). The
+# driver's active_crtc is authoritative when it reads; a module older than that
+# attribute is judged by the bound connectors' enabled attribute.
+no_enabled_crtc() {
+	local index= connectors= path name value
+	if [ -r "$sysfs_crtc" ]; then
+		index=$(tr -d ' \t\r\n' <"$sysfs_crtc" || true)
+	fi
+	case $index in
+	-*) ;;
+	'') ;;
+	*[!0-9]*) ;;
+	*) return 1 ;;
+	esac
+	for path in "$sysfs_card"-*/enabled; do
+		[ -r "$path" ] || continue
+		name=$(basename -- "${path%/enabled}")
+		value=$(tr -d ' \t\r\n' <"$path" || true)
+		[ -n "$value" ] || continue
+		connectors="${connectors:+$connectors, }connector $name enabled=$value"
+	done
+	case $index in
+	-*)
+		printf 'active_crtc=%s%s\n' "$index" "${connectors:+, $connectors}"
+		return 0
+		;;
+	esac
+	[ -n "$connectors" ] || return 1
+	case $connectors in
+	*'enabled=enabled'*) return 1 ;;
+	esac
+	printf '%s\n' "$connectors"
+	return 0
+}
+
 self_test_scratch=
 
 mutate() {
@@ -105,6 +156,7 @@ control() {
 self_test() {
 	local module=${2:-$project_dir/src/sm750hdmidrm.ko}
 	local copy out derived wrong_hz controls=0 fail=0
+	local link card lit idle live idle_skip old_idle old_lit
 
 	if [ ! -s "$module" ]; then
 		echo "check-drm-module --self-test: no built module at $module; run make check or pass MODULE.ko. This is not a pass." >&2
@@ -134,13 +186,65 @@ self_test() {
 	mkdir -p -- "$self_test_scratch/tests"
 	ln -s "$project_dir/src" "$self_test_scratch/src"
 	ln -s "$project_dir/build-package.sh" "$self_test_scratch/build-package.sh"
-	ln -s "$project_dir/tests/check-vblank" "$self_test_scratch/tests/check-vblank"
+	link=$self_test_scratch/tests/check-vblank
 	copy=$self_test_scratch/tests/check-drm-module.sh
 	# A path that cannot exist, so both attribute sources are unreadable.
 	unreadable=/nonexistent/active_mode_refresh_hz
 
+	# A vblank probe cannot run without an enabled pipe (DRM answers EINVAL,
+	# A44), so the controls must not depend on a lit panel: they run against a
+	# fixture card tree and a stand-in for tests/check-vblank. The stand-in
+	# keeps the helper's contract (two arguments, the 20..250 Hz range, a
+	# measured rate of $derived, the 5% tolerance) on a lit card, and answers
+	# EINVAL on an idle one. The unmutated copy runs against the fixture tree
+	# and, separately, against the real device.
+	card=$(basename -- "$device")
+	lit=$self_test_scratch/sysfs/lit/$card
+	idle=$self_test_scratch/sysfs/idle/$card
+	mkdir -p -- "$lit/device" "$lit-HDMI-A-1" "$idle/device" "$idle-HDMI-A-1"
+	printf '0\n' >"$lit/device/active_crtc"
+	printf '%s\n' "$derived" >"$lit/device/active_mode_refresh_hz"
+	printf 'enabled\n' >"$lit-HDMI-A-1/enabled"
+	printf '%s\n' -1 >"$idle/device/active_crtc"
+	printf 'disabled\n' >"$idle-HDMI-A-1/enabled"
+	stub_lit=$self_test_scratch/stub-lit
+	stub_idle=$self_test_scratch/stub-idle
+	cat >"$stub_lit" <<EOF
+#!/bin/sh
+# tests/check-vblank stand-in for a card lit at $derived Hz.
+case \$2 in
+'' | *[!0-9.]*) echo "invalid expected refresh: \$2" >&2; exit 2 ;;
+esac
+awk -v hz="\$2" 'BEGIN { exit !(hz >= 20 && hz <= 250) }' || {
+	echo "invalid expected refresh: \$2" >&2
+	exit 2
+}
+echo "Measured $derived DRM vblanks/s over 120 events (expected \$2)"
+awk -v hz="\$2" 'BEGIN { exit !(hz >= $derived * 0.95 && hz <= $derived * 1.05) }' || {
+	echo "vblank rate is outside the 5% tolerance" >&2
+	exit 1
+}
+EOF
+	cat >"$stub_idle" <<'EOF'
+#!/bin/sh
+# tests/check-vblank stand-in for a card whose every CRTC is off: DRM answers
+# DRM_IOCTL_WAIT_VBLANK with EINVAL (A44).
+echo "DRM_IOCTL_WAIT_VBLANK: Invalid argument" >&2
+exit 1
+EOF
+
+	# point_at COPY CARD_NODE: the copy resolves its card node in the fixture
+	# tree instead of /sys/class/drm.
+	point_at() {
+		mutate "$1" \
+			$'\nsysfs_card=/sys/class/drm/$(basename -- "$device")\n' \
+			$'\nsysfs_card='"$2"$'\n'
+	}
+	install -m 755 "$stub_lit" "$link"
+
 	# (a) the derived refresh replaced by a hardcoded value.
 	cp "$project_dir/tests/check-drm-module.sh" "$copy"
+	point_at "$copy" "$lit" || return 1
 	mutate "$copy" $'\n\t\t\texpected_refresh=$hz\n' \
 		$'\n\t\t\texpected_refresh='"$wrong_hz"$'\n' || return 1
 	control hardcoded-refresh "$copy" "$module" \
@@ -149,6 +253,7 @@ self_test() {
 
 	# (b) the 20..250 range check removed, so a bogus 999 reaches the probe.
 	cp "$project_dir/tests/check-drm-module.sh" "$copy"
+	point_at "$copy" "$lit" || return 1
 	mutate "$copy" $'\n\t\t\texpected_refresh=$hz\n' \
 		$'\n\t\t\texpected_refresh=999\n' || return 1
 	mutate "$copy" $'\n\t\tif ! plausible_refresh "$expected_refresh"; then\n' \
@@ -159,7 +264,8 @@ self_test() {
 
 	# (c) the PCI sysfs fallback removed and the no-attribute path yielding 0.
 	cp "$project_dir/tests/check-drm-module.sh" "$copy"
-	mutate "$copy" $'\nsysfs_refresh=/sys/class/drm/$(basename -- "$device")/device/active_mode_refresh_hz\n' \
+	point_at "$copy" "$lit" || return 1
+	mutate "$copy" $'\nsysfs_refresh=$sysfs_card/device/active_mode_refresh_hz\n' \
 		$'\nsysfs_refresh='$unreadable$'\n' || return 1
 	mutate "$copy" $'\n\t\tfor attr in "$sysfs_refresh" "$pci_refresh"; do\n' \
 		$'\n\t\tfor attr in "$sysfs_refresh"; do\n' || return 1
@@ -173,7 +279,8 @@ self_test() {
 	# (d) no attribute readable at all: the substitution must be announced, so
 	# a silent 60 Hz can never stand in for a derived refresh.
 	cp "$project_dir/tests/check-drm-module.sh" "$copy"
-	mutate "$copy" $'\nsysfs_refresh=/sys/class/drm/$(basename -- "$device")/device/active_mode_refresh_hz\n' \
+	point_at "$copy" "$lit" || return 1
+	mutate "$copy" $'\nsysfs_refresh=$sysfs_card/device/active_mode_refresh_hz\n' \
 		$'\nsysfs_refresh='$unreadable$'\n' || return 1
 	mutate "$copy" $'\n\t\tfor attr in "$sysfs_refresh" "$pci_refresh"; do\n' \
 		$'\n\t\tfor attr in "$sysfs_refresh"; do\n' || return 1
@@ -185,12 +292,73 @@ self_test() {
 		fail=1
 	fi
 
-	# The unmutated copy must pass, and must name the refresh it used.
+	# (e) the no-pipe precondition removed: an idle card reaches the probe, and
+	# the EINVAL DRM answers must not silently decide the run.
+	install -m 755 "$stub_idle" "$link"
 	cp "$project_dir/tests/check-drm-module.sh" "$copy"
+	point_at "$copy" "$idle" || return 1
+	mutate "$copy" $'\nelif evidence=$(no_enabled_crtc); then\n' \
+		$'\nelif false; then\n' || return 1
+	control no-pipe-precondition "$copy" "$module" \
+		'DRM_IOCTL_WAIT_VBLANK: Invalid argument' || fail=1
+	controls=$((controls + 1))
+
+	# The intact copy on the same idle fixture must skip with the measurement
+	# and never reach the probe: that is the precondition (e) removes.
+	cp "$project_dir/tests/check-drm-module.sh" "$copy"
+	point_at "$copy" "$idle" || return 1
+	idle_skip="SKIP: the SM750 has no enabled CRTC (active_crtc=-1, connector $card-HDMI-A-1 enabled=disabled)"
 	if out=$(bash "$copy" "$module" 2>&1); then
-		if grep -qF -- "at $derived Hz (expected refresh from" <<<"$out"
-		then
-			echo "negative control pristine: accepted"
+		if grep -qF -- "$idle_skip" <<<"$out"; then
+			echo "no-pipe precondition: skipped with the measured evidence"
+		else
+			echo "check-drm-module --self-test: idle copy did not name the measured evidence: $(head -n 1 <<<"$out")" >&2
+			fail=1
+		fi
+	else
+		echo "check-drm-module --self-test: idle copy failed: $(head -n 1 <<<"$out")" >&2
+		fail=1
+	fi
+
+	# An older module has no active_crtc, so the bound connector decides: a
+	# missing attribute must not read as "pipe on" (a false skip would hide a
+	# real probe) and an enabled connector must not read as "pipe off".
+	old_idle=$self_test_scratch/sysfs/old-idle/$card
+	old_lit=$self_test_scratch/sysfs/old-lit/$card
+	mkdir -p -- "$old_idle/device" "$old_idle-HDMI-A-1" \
+		"$old_lit/device" "$old_lit-HDMI-A-1"
+	printf 'disabled\n' >"$old_idle-HDMI-A-1/enabled"
+	printf 'enabled\n' >"$old_lit-HDMI-A-1/enabled"
+	printf '%s\n' "$derived" >"$old_lit/device/active_mode_refresh_hz"
+	install -m 755 "$stub_idle" "$link"
+	cp "$project_dir/tests/check-drm-module.sh" "$copy"
+	point_at "$copy" "$old_idle" || return 1
+	if out=$(bash "$copy" "$module" 2>&1) &&
+		grep -qF -- "SKIP: the SM750 has no enabled CRTC (connector $card-HDMI-A-1 enabled=disabled)" <<<"$out"; then
+		echo "no-pipe precondition: an absent active_crtc falls back to the connector"
+	else
+		echo "check-drm-module --self-test: connector-only idle card did not skip with the connector evidence: $(head -n 1 <<<"$out")" >&2
+		fail=1
+	fi
+	install -m 755 "$stub_lit" "$link"
+	cp "$project_dir/tests/check-drm-module.sh" "$copy"
+	point_at "$copy" "$old_lit" || return 1
+	if out=$(bash "$copy" "$module" 2>&1) &&
+		grep -qF -- "at $derived Hz (expected refresh from" <<<"$out"; then
+		echo "no-pipe precondition: an enabled connector still reaches the probe"
+	else
+		echo "check-drm-module --self-test: connector-enabled card did not reach the probe: $(head -n 1 <<<"$out")" >&2
+		fail=1
+	fi
+
+	# The unmutated copy must pass on a lit card and name the refresh it used.
+	install -m 755 "$stub_lit" "$link"
+	cp "$project_dir/tests/check-drm-module.sh" "$copy"
+	point_at "$copy" "$lit" || return 1
+	if out=$(bash "$copy" "$module" 2>&1); then
+		if grep -qF -- "at $derived Hz (expected refresh from" <<<"$out"; then
+			echo "negative control pristine: accepted at $derived Hz (fixture card)"
+			live="probe at $derived Hz"
 		else
 			echo "check-drm-module --self-test: pristine copy did not name $derived Hz" >&2
 			fail=1
@@ -200,8 +368,27 @@ self_test() {
 		fail=1
 	fi
 
+	# And once against the real device: the probe when a pipe is on, the skip
+	# when it is off. Anything else means the two paths disagree.
+	rm -f -- "$link"
+	ln -s "$project_dir/tests/check-vblank" "$link"
+	cp "$project_dir/tests/check-drm-module.sh" "$copy"
+	if out=$(bash "$copy" "$module" 2>&1); then
+		if grep -qF -- "at $derived Hz (expected refresh from" <<<"$out"; then
+			live="probe at $derived Hz"
+		elif grep -qF -- 'SKIP: the SM750 has no enabled CRTC (active_crtc=' <<<"$out"; then
+			live='skipped, no enabled CRTC'
+		else
+			echo "check-drm-module --self-test: live copy neither probed nor skipped: $(head -n 1 <<<"$out")" >&2
+			fail=1
+		fi
+	else
+		echo "check-drm-module --self-test: live copy failed: $(head -n 1 <<<"$out")" >&2
+		fail=1
+	fi
+
 	[ "$fail" -eq 0 ] || return 1
-	echo "DRM module self-test passed ($controls planted controls rejected, pristine copy accepted at $derived Hz)"
+	echo "DRM module self-test passed ($controls planted controls rejected, pristine copy accepted at $derived Hz; live device: ${live:-unknown})"
 	return 0
 }
 
@@ -288,12 +475,14 @@ if grep -E 'writel|poke32|iowrite' <<<"$show_body" >/dev/null; then
 	exit 1
 fi
 # Live device probe. The vblank ioctl path is the only test that touches the
-# DRM device; report a skip with the exact reason when the node is denied
-# instead of claiming the path was exercised.
+# DRM device; report a skip with the exact reason when the node is denied or no
+# pipe is enabled instead of claiming the path was exercised.
 if [[ ! -x $project_dir/tests/check-vblank ]]; then
 	echo "SKIP: tests/check-vblank is not built; run make check first. This is not a pass."
 elif [[ ! -r $device || ! -w $device ]]; then
 	echo "SKIP: cannot open $device read-write as uid $(id -u); grant the video group or run tests/check-vblank $device ${SM750_DRM_EXPECTED_HZ:-<active mode refresh>} as root. This is not a pass."
+elif evidence=$(no_enabled_crtc); then
+	echo "SKIP: the SM750 has no enabled CRTC ($evidence); a vblank ioctl probe needs an enabled pipe. This is not a pass."
 else
 	resolve_expected_refresh
 	"$project_dir/tests/check-vblank" "$device" "$expected_refresh"

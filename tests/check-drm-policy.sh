@@ -138,33 +138,13 @@ for requirement in \
 		exit 1
 	}
 done
-# A27: drm_atomic_helper_commit_hw_done() trips WARN_ON(new_crtc_state->event)
-# and wedges the commit when the driver abandons a modeset without consuming
-# the event the commit carries. The shared fail label of the pipe enable hook
-# therefore has to finish the commit the way the success path does, and must
-# not return before it has done so.
-fail_block=$(awk '
-	/^static void sm750_pipe_enable\(/ { in_function = 1 }
-	in_function && /^fail:/ { in_fail = 1 }
-	in_function && in_fail { print }
-	in_function && in_fail && /^}/ { exit }
-' "$source_file")
-if [[ -z $fail_block ]]; then
-	echo "sm750_pipe_enable has no fail label to inspect." >&2
-	exit 1
-fi
-for requirement in \
-	'drm_crtc_vblank_on(&pipe->crtc);' \
-	'sm750_arm_vblank_event(pipe);'; do
-	grep -F "$requirement" <<<"$fail_block" >/dev/null || {
-		echo "A27: abandoned modeset path lacks: $requirement" >&2
-		exit 1
-	}
-done
-if grep -E '^[[:space:]]*return;' <<<"$fail_block" >/dev/null; then
-	echo "A27: abandoned modeset path returns with the commit event unconsumed." >&2
-	exit 1
-fi
+# A1 supersedes A27: a failed hardware enable must not be dressed up as a live
+# pipe. A27 required the fail label to re-enable vblank and consume the commit
+# event so the commit would not wedge; that only made userspace see a
+# successful commit for a panel that never came up. The fail path now leaves
+# the event for the core to time out, keeps vblank and CRC off, and sets
+# enable_failed so the next commit retries. The property and its planted control
+# live in runtime_guard_properties() (A1) so one checker owns both.
 if ! grep -F '#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 0, 0)' \
 	"$source_file" >/dev/null ||
 	! grep -F '#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 0, 0)' \
@@ -285,4 +265,377 @@ test "$stage_count" -ge 6 || {
 # while preserving the status. Source-level only; it never writes sysfs, calls
 # modprobe or needs root.
 ./tests/check-vt-helper.sh
-echo "DRM mode policy checks passed"
+# Runtime guard properties found by the 2026-11-26 production-readiness
+# review (docs/evidence/review/02-production-readiness-runtime.txt): D1 (the
+# direct scanout path must not read past the plane object or VRAM), D2 (the
+# commit path must not read the writable test_pattern string), D3 (the SiI9022A
+# pin parameters are validated as ints before the u8 conversion), D4 (a minimum
+# VRAM floor precedes the DMA test carve) and R2 (the DMA timeout re-reads the
+# completion counter). Each property is pinned by a planted control that removes
+# it, so the gate cannot pass by accident.
+guard_fn() {
+	local file=$1
+	local head=$2
+
+	awk -v head="$head" '
+		index($0, head) == 1 { in_fn = 1 }
+		in_fn { print }
+		in_fn && /^}/ { exit }' "$file"
+}
+
+runtime_guard_properties() {
+	local file=$1
+	local checked=0
+	local failed=0
+	local pipe_check pipe_enable should_paint probe dma_wait
+	local check_line conv_line min_line carve_line done_line err_line
+	local enable_body disable_body update_body fail_block read_edid arm_event
+	local hw_init get_line lock_line arm_line unlock_line init_line mask_line
+	local region_body scanout_body mode_line pitch_line
+	local pm_suspend pm_resume pm_fail_count
+
+	pipe_check=$(guard_fn "$file" 'static int sm750_pipe_check(')
+	checked=$((checked + 1))
+	if [[ -z $pipe_check ]] ||
+	   ! grep -qF 'plane_state->fb->width < mode->hdisplay' <<<"$pipe_check" ||
+	   ! grep -qF 'plane_state->fb->height < mode->vdisplay' <<<"$pipe_check"; then
+		echo "D1: sm750_pipe_check does not reject a plane framebuffer smaller than the adjusted mode." >&2
+		failed=1
+	fi
+
+	pipe_enable=$(guard_fn "$file" 'static void sm750_pipe_enable(')
+	checked=$((checked + 1))
+	if [[ -z $pipe_enable ]] ||
+	   ! grep -qF '(u64)offset + frame_size > sdev->vram_size' <<<"$pipe_enable"; then
+		echo "D1: the direct scanout branch does not reject offset + frame_size beyond VRAM with 64-bit arithmetic." >&2
+		failed=1
+	fi
+
+	should_paint=$(guard_fn "$file" 'static bool sm750_test_pattern_should_paint(')
+	checked=$((checked + 1))
+	if [[ -z $should_paint ]] ||
+	   ! grep -qF 'sdev->test_pattern_mode' <<<"$should_paint" ||
+	   grep -qF 'strcmp(test_pattern' <<<"$should_paint" ||
+	   grep -qF 'strcmp(test_pattern' <<<"$pipe_enable"; then
+		echo "D2: the commit path still reads the test_pattern string instead of the probe-time enum." >&2
+		failed=1
+	fi
+
+	probe=$(guard_fn "$file" 'static int sm750_pci_probe(')
+	checked=$((checked + 1))
+	check_line=$(grep -nF 'sii9024_scl < 0 || sii9024_scl > 31' <<<"$probe" |
+		head -n 1 | cut -d: -f1)
+	conv_line=$(grep -nF 'sm750_sii902x_prepare(' <<<"$probe" |
+		head -n 1 | cut -d: -f1)
+	if [[ -z $probe ]] ||
+	   ! grep -qF 'sii9024_sda < 0 || sii9024_sda > 31' <<<"$probe" ||
+	   ! grep -qF 'sii9024_scl == sii9024_sda' <<<"$probe" ||
+	   [[ -z $check_line || -z $conv_line || $check_line -ge $conv_line ]]; then
+		echo "D3: sii9024_scl/sii9024_sda are not validated as 0..31 ints before the u8 conversion, or may be equal." >&2
+		failed=1
+	fi
+
+	checked=$((checked + 1))
+	probe=$(guard_fn "$file" 'static int sm750_pci_probe(')
+	min_line=$(grep -nF 'sdev->vram_size < SM750_DRM_MIN_VRAM' <<<"$probe" |
+		head -n 1 | cut -d: -f1)
+	dma_line=$(grep -nF 'sm750_dma_init(sdev)' <<<"$probe" |
+		head -n 1 | cut -d: -f1)
+	min_vram=$(grep -A4 -F '#define SM750_DRM_MIN_VRAM' "$file")
+	if [[ -z $probe || -z $min_line || -z $dma_line ||
+	      $min_line -ge $dma_line ]] ||
+	   ! grep -qF 'SM750_DRM_DMA_TEST_SIZE' <<<"$min_vram" ||
+	   ! grep -qF 'SM750_DRM_DMA_GUARD_WORDS' <<<"$min_vram"; then
+		echo "D4: the minimum-VRAM check does not precede the DMA test carve." >&2
+		failed=1
+	fi
+
+	dma_wait=$(guard_fn "$file" 'static int sm750_dma_wait_active(')
+	checked=$((checked + 1))
+	done_line=$(grep -nF 'completion_done(&sdev->dma_completion)' <<<"$dma_wait" |
+		head -n 1 | cut -d: -f1)
+	err_line=$(grep -nF '"DMA1 shadow upload timed out' <<<"$dma_wait" |
+		head -n 1 | cut -d: -f1)
+	if [[ -z $dma_wait || -z $done_line || -z $err_line ||
+	      $done_line -ge $err_line ]]; then
+		echo "R2: the DMA timeout path declares a timeout without re-reading the completion counter." >&2
+		failed=1
+	fi
+
+	enable_body=$(guard_fn "$file" 'static void sm750_pipe_enable(')
+	disable_body=$(guard_fn "$file" 'static void sm750_pipe_disable(')
+	update_body=$(guard_fn "$file" 'static void sm750_pipe_update(')
+	fail_block=$(awk '
+		/^static void sm750_pipe_enable\(/ { in_function = 1 }
+		in_function && /^fail:/ { in_fail = 1 }
+		in_function && in_fail { print }
+		in_function && in_fail && /^}/ { exit }
+	' "$file")
+	checked=$((checked + 1))
+	if [[ -z $enable_body || -z $disable_body || -z $update_body ||
+	      -z $fail_block ]] ||
+	   ! grep -qF 'sdev->enable_failed = true;' <<<"$fail_block" ||
+	   ! grep -qF 'sdev->enable_failed = false;' <<<"$enable_body" ||
+	   ! grep -qF 'sdev->enable_failed = false;' <<<"$disable_body" ||
+	   ! grep -qF 'sdev->enable_failed && !pipe->crtc.state->mode_changed' \
+		<<<"$update_body" ||
+	   ! grep -qF '!sdev->enable_failed && !pipe->crtc.state->mode_changed' \
+		<<<"$update_body" ||
+	   grep -qF 'drm_crtc_vblank_on' <<<"$fail_block" ||
+	   grep -qF 'sm750_crc_resume' <<<"$fail_block" ||
+	   grep -qF 'sm750_arm_vblank_event' <<<"$fail_block" ||
+	   grep -qF 'commit finished, event consumed' <<<"$fail_block"; then
+		echo "A1: the enable fail path still fakes a live pipe or does not mark it down for the next commit." >&2
+		failed=1
+	fi
+
+	read_edid=$(guard_fn "$file" 'static struct edid *sm750_connector_read_edid(')
+	checked=$((checked + 1))
+	if [[ -z $read_edid ]] ||
+	   ! grep -qF 'sm750_sii902x_read_edid(&sdev->pdev->dev, (u8 *)edid, 256)' <<<"$read_edid" ||
+	   grep -qF 'msleep(' <<<"$read_edid" ||
+	   grep -qF 'usleep_range(' <<<"$read_edid"; then
+		echo "E1: the EDID read taken by get_modes still sleeps or retries under connection_mutex." >&2
+		failed=1
+	fi
+
+	arm_event=$(guard_fn "$file" 'static void sm750_arm_vblank_event(')
+	checked=$((checked + 1))
+	get_line=$(grep -nF 'drm_crtc_vblank_get(&pipe->crtc)' <<<"$arm_event" |
+		head -n 1 | cut -d: -f1)
+	lock_line=$(grep -nF 'spin_lock_irqsave(&pipe->crtc.dev->event_lock' \
+		<<<"$arm_event" | head -n 1 | cut -d: -f1)
+	arm_line=$(grep -nF 'drm_crtc_arm_vblank_event(&pipe->crtc, event)' \
+		<<<"$arm_event" | head -n 1 | cut -d: -f1)
+	unlock_line=$(grep -nF 'spin_unlock_irqrestore(&pipe->crtc.dev->event_lock' \
+		<<<"$arm_event" | head -n 1 | cut -d: -f1)
+	if [[ -z $arm_event || -z $get_line || -z $lock_line ||
+	      -z $arm_line || -z $unlock_line ]] ||
+	   (( get_line >= lock_line )) ||
+	   (( arm_line <= lock_line )) ||
+	   (( arm_line >= unlock_line )); then
+		echo "C1: drm_crtc_vblank_get() is not taken outside event_lock with only the arm inside it." >&2
+		failed=1
+	fi
+
+	hw_init=$(guard_fn "$file" 'static int sm750_hw_init(')
+	checked=$((checked + 1))
+	init_line=$(grep -nF 'ddk750_init_hw(&init);' <<<"$hw_init" |
+		head -n 1 | cut -d: -f1)
+	mask_line=$(grep -nF 'poke32(INT_MASK, peek32(INT_MASK) | INT_MASK_DMA1);' \
+		<<<"$hw_init" | head -n 1 | cut -d: -f1)
+	if [[ -z $hw_init || -z $init_line || -z $mask_line ]] ||
+	   ! grep -qF 'sdev->dma_irq_enabled' <<<"$hw_init" ||
+	   (( mask_line <= init_line )); then
+		echo "P2: sm750_hw_init() does not re-arm the DMA1 INT_MASK bit after the chip reset." >&2
+		failed=1
+	fi
+
+	region_body=$(guard_fn "$file" 'static const char *sm750_crc_region_missing(')
+	checked=$((checked + 1))
+	mode_line=$(grep -nF 'if (!sdev->pipe.crtc.mode.hdisplay || !sdev->pipe.crtc.mode.vdisplay)' \
+		<<<"$region_body" | head -n 1 | cut -d: -f1)
+	pitch_line=$(grep -nF 'if (!sdev->scanout_pitch)' <<<"$region_body" |
+		head -n 1 | cut -d: -f1)
+	if [[ -z $region_body || -z $mode_line || -z $pitch_line ]] ||
+	   ! grep -qF 'return "active mode";' <<<"$region_body" ||
+	   (( mode_line >= pitch_line )); then
+		echo "R3: sm750_crc_region_missing() does not reject a zero mode as a missing region." >&2
+		failed=1
+	fi
+
+	checked=$((checked + 1))
+	if [[ -z $disable_body || -z $update_body ]] ||
+	   ! grep -qF 'sdev->scanout_pitch = 0;' <<<"$disable_body" ||
+	   ! grep -qF 'sdev->scanout_frame_size = 0;' <<<"$disable_body" ||
+	   ! grep -qF 'if (!sdev->scanout_pitch || !sdev->scanout_frame_size)' \
+		<<<"$update_body"; then
+		echo "R4: sm750_pipe_disable() leaves the previous scanout geometry behind or an upload ignores a cleared pitch." >&2
+		failed=1
+	fi
+
+	scanout_body=$(guard_fn "$file" 'static int sm750_scanout_show(')
+	checked=$((checked + 1))
+	if [[ -z $scanout_body ]] ||
+	   ! grep -qF 'if (!sdev->pipe.crtc.mode.hdisplay || !sdev->pipe.crtc.mode.vdisplay)' \
+		<<<"$scanout_body" ||
+	   ! grep -qF 'scanout readback, no active mode' <<<"$scanout_body"; then
+		echo "R5: the scanout debugfs header does not name a zero mode honestly." >&2
+		failed=1
+	fi
+
+	pm_suspend=$(guard_fn "$file" 'static int sm750_pm_suspend(')
+	checked=$((checked + 1))
+	if [[ -z $pm_suspend ]] ||
+	   ! grep -qF 'pm: suspend entry' <<<"$pm_suspend" ||
+	   ! grep -qF 'pm: suspend complete' <<<"$pm_suspend"; then
+		echo "S1: sm750_pm_suspend() does not log both edges of a suspend cycle." >&2
+		failed=1
+	fi
+
+	pm_resume=$(guard_fn "$file" 'static int sm750_pm_resume(')
+	checked=$((checked + 1))
+	if [[ -z $pm_resume ]] ||
+	   ! grep -qF 'pm: resume entry' <<<"$pm_resume" ||
+	   ! grep -qF 'pm: resume complete' <<<"$pm_resume"; then
+		echo "S2: sm750_pm_resume() does not log both edges of a resume cycle." >&2
+		failed=1
+	fi
+
+	checked=$((checked + 1))
+	pm_fail_count=$(grep -cE '"pm: (suspend|resume) failed: %d\\n"' "$file" || true)
+	if [[ $pm_fail_count -ne 4 ]]; then
+		echo "S3: a PM callback returns an error code without logging it on every early-return path." >&2
+		failed=1
+	fi
+
+	echo "$checked"
+	return "$failed"
+}
+
+# Planted controls: each removes the property, not the sentence that explains
+# it, and each must be rejected by runtime_guard_properties().
+plant_plane_covers_mode() {
+	sed -i '/plane_state->fb->width < mode->hdisplay/d;
+		/plane_state->fb->height < mode->vdisplay/d' "$1"
+}
+plant_direct_vram_bound() {
+	sed -i 's/(u64)offset + frame_size > sdev->vram_size/(u64)offset + frame_size > U32_MAX/' "$1"
+}
+plant_test_pattern_string() {
+	awk '
+		index($0, "static bool sm750_test_pattern_should_paint(") == 1 { in_fn = 1 }
+		in_fn && !done && index($0, "READ_ONCE(sdev->crc_enabled)") {
+			print "\tif (!strcmp(test_pattern, \"always\"))";
+			print "\t\treturn true;";
+			done = 1
+		}
+		{ print }' "$1" >"$1.tmp"
+	mv "$1.tmp" "$1"
+}
+plant_pin_range() {
+	sed -i '/sii9024_scl < 0 || sii9024_scl > 31/d;
+		/sii9024_sda < 0 || sii9024_sda > 31/d' "$1"
+}
+plant_vram_floor() {
+	sed -i '/sdev->vram_size < SM750_DRM_MIN_VRAM/,+4d' "$1"
+}
+plant_completion_recheck() {
+	sed -i '/if (irq_completion && completion_done(&sdev->dma_completion))/,+3d' "$1"
+}
+plant_enable_fail_reports_live_pipe() {
+	sed -i '/^[[:space:]]*sdev->enable_failed = true;$/d' "$1"
+}
+plant_edid_sleep() {
+	awk '
+		index($0, "ret = sm750_sii902x_read_edid(&sdev->pdev->dev, (u8 *)edid, 256);") {
+			print;
+			print "\tmsleep(3000);";
+			next
+		}
+		{ print }' "$1" >"$1.tmp"
+	mv "$1.tmp" "$1"
+}
+plant_event_get_under_lock() {
+	awk '
+		index($0, "if (drm_crtc_vblank_get(&pipe->crtc)) {") {
+			print "\tspin_lock_irqsave(&pipe->crtc.dev->event_lock, flags);";
+		}
+		{ print }' "$1" >"$1.tmp"
+	mv "$1.tmp" "$1"
+}
+plant_int_mask_rearm() {
+	sed -i '/poke32(INT_MASK, peek32(INT_MASK) | INT_MASK_DMA1);/d' "$1"
+}
+plant_crc_zero_mode() {
+	awk '
+		/^static const char \*sm750_crc_region_missing\(/ { in_fn = 1 }
+		in_fn && index($0, "sdev->pipe.crtc.mode.hdisplay") { next }
+		in_fn && index($0, "return \"active mode\";") { next }
+		in_fn && /^}/ { in_fn = 0 }
+		{ print }' "$1" >"$1.tmp"
+	mv "$1.tmp" "$1"
+}
+plant_disable_geometry() {
+	awk '
+		/^static void sm750_pipe_disable\(/ { in_fn = 1 }
+		in_fn && index($0, "sdev->scanout_pitch = 0;") { next }
+		in_fn && index($0, "sdev->scanout_frame_size = 0;") { next }
+		in_fn && /^}/ { in_fn = 0 }
+		{ print }' "$1" >"$1.tmp"
+	mv "$1.tmp" "$1"
+}
+plant_header_zero_mode() {
+	awk '
+		/^static int sm750_scanout_show\(/ { in_fn = 1 }
+		in_fn && index($0, "sdev->pipe.crtc.mode.hdisplay || !sdev->pipe.crtc.mode.vdisplay)") { next }
+		in_fn && /^}/ { in_fn = 0 }
+		{ print }' "$1" >"$1.tmp"
+	mv "$1.tmp" "$1"
+}
+
+plant_pm_no_suspend_entry() {
+	awk '
+		/^static int sm750_pm_suspend\(/ { in_fn = 1 }
+		in_fn && index($0, "pm: suspend entry") { next }
+		in_fn && /^}/ { in_fn = 0 }
+		{ print }' "$1" >"$1.tmp"
+	mv "$1.tmp" "$1"
+}
+plant_pm_no_resume_complete() {
+	awk '
+		/^static int sm750_pm_resume\(/ { in_fn = 1 }
+		in_fn && index($0, "pm: resume complete") { next }
+		in_fn && /^}/ { in_fn = 0 }
+		{ print }' "$1" >"$1.tmp"
+	mv "$1.tmp" "$1"
+}
+plant_pm_silent_failure() {
+	awk '
+		/^static int sm750_pm_resume\(/ { in_fn = 1 }
+		in_fn && !done && index($0, "pm: resume failed") { done = 1; next }
+		in_fn && /^}/ { in_fn = 0 }
+		{ print }' "$1" >"$1.tmp"
+	mv "$1.tmp" "$1"
+}
+
+control_scratch=${TMPDIR:-/mega/tmp/sm750/tmp}/drm-policy-control.$$
+mkdir -p "$control_scratch"
+trap 'rm -rf "$control_scratch"' EXIT
+
+control_count=0
+control() {
+	local name=$1
+	local planted=$control_scratch/sm750_drm.c
+	local err=$control_scratch/stderr
+
+	control_count=$((control_count + 1))
+	cp "$source_file" "$planted"
+	shift
+	"$@" "$planted"
+	if runtime_guard_properties "$planted" >/dev/null 2>"$err"; then
+		echo "Runtime guard: negative control $name was not rejected." >&2
+		exit 1
+	fi
+	echo "negative control $name: rejected (exit 1): $(head -n 1 "$err")"
+}
+
+guard_count=$(runtime_guard_properties "$source_file")
+control plane_covers_mode plant_plane_covers_mode
+control direct_vram_bound plant_direct_vram_bound
+control test_pattern_string plant_test_pattern_string
+control pin_range plant_pin_range
+control vram_floor plant_vram_floor
+control completion_recheck plant_completion_recheck
+control enable_fail_reports_live_pipe plant_enable_fail_reports_live_pipe
+control edid_sleep plant_edid_sleep
+control event_get_under_lock plant_event_get_under_lock
+control int_mask_rearm plant_int_mask_rearm
+control crc_zero_mode plant_crc_zero_mode
+control disable_geometry plant_disable_geometry
+control header_zero_mode plant_header_zero_mode
+control pm_no_suspend_entry plant_pm_no_suspend_entry
+control pm_no_resume_complete plant_pm_no_resume_complete
+control pm_silent_failure plant_pm_silent_failure
+
+echo "DRM mode policy checks passed ($guard_count runtime-guard assertions, $control_count planted controls)"

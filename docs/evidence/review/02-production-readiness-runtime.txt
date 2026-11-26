@@ -1,0 +1,424 @@
+Production-readiness review - runtime safety and resource management
+=====================================================================
+Repository : /home/coder/sm750hdmifb
+Tree       : HEAD 434cb0c (module sm750hdmidrm 0.6.7)
+Reviewer   : independent reviewer subagent
+Mode       : high, target code, scope full
+Date       : 2026-11-26 (UTC)
+Subject    : can the driver crash, hang, leak, or corrupt state under real
+             conditions. Upstream style, packaging and docs are out of scope.
+
+Method and limits
+-----------------
+- Source read in full for the paths in scope: src/sm750_drm.c (5380 lines),
+  src/sii902x.c (1274), src/ddk750_display.c, src/ddk750_mode.c,
+  src/ddk750_swi2c.c, src/ddk750_hwi2c.c, src/sm750_dither.c.
+- Counts measured with grep on src/*.c: 20 msleep/udelay/usleep_range call
+  sites, 1 BUG_ON/WARN_ON hit (a comment), 0 copy_from_user, 0 ioctl, 0
+  writable sysfs/debugfs attributes.
+- The installed kernel tree /usr/src/kernels/7.3.4-100.fc43.x86_64 carries
+  headers and scripts only (no drivers/gpu/drm/*.c, no kernel/params.c), so
+  DRM-core and params-core implementation claims are marked cannot verify and
+  are supported only by the inline documentation in the installed headers,
+  with the exact header path cited.
+- Severity scale: blocker = crash/hang/corruption reachable by an
+  unprivileged user; major = undefined hardware access or state corruption
+  from a legitimate operation; minor = defect reachable only with root or
+  module-parameter control; info = observation, no action required.
+
+Lead verdicts
+-------------
+
+1. The single BUG_ON/WARN_ON hit at src/sm750_drm.c:4174
+   Verdict: not a defect. Severity: info.
+   Evidence: grep -rn "BUG_ON\|WARN_ON" src/ returns exactly one line,
+   src/sm750_drm.c:4174, and it sits inside the comment block that starts at
+   src/sm750_drm.c:4167: "Returning with it still armed trips
+   WARN_ON(new_crtc_state->event) in drm_atomic_helper_commit_hw_done()".
+   There is no BUG_ON/WARN_ON call anywhere in src/. The comment describes the
+   A27 failure mode (an armed crtc event left unconsumed when the enable path
+   fails); the fail path already handles it: src/sm750_drm.c:4143-4187 clears
+   the shadow state, logs with drm_err, then calls drm_crtc_vblank_on
+   (src/sm750_drm.c:4184) and sm750_arm_vblank_event (src/sm750_drm.c:4187)
+   so the event is consumed even on failure. Nothing here can fire from
+   unprivileged userspace; the primitive question is moot because no such
+   primitive is used.
+   Fix: none. Optionally reword the comment so a WARN_ON grep does not
+   surface it as code.
+
+2. The 20 sleep call sites and the worst case inside one atomic commit
+   Verdict: not a defect for atomic-context safety. Confirmed latency
+   defect. Severity: minor.
+   Sites measured (20): src/ddk750_display.c:39,103,113;
+   src/ddk750_hwi2c.c:65; src/ddk750_mode.c:309; src/ddk750_swi2c.c:85;
+   src/sii902x.c:323,594,663,777,805,848,1084,1150,1174,1198,1200,1209;
+   src/sm750_drm.c:1106,1535.
+   Contexts:
+   - commit tail (DRM commit workqueue, sleepable): src/sm750_drm.c:4084-4088
+     takes mode_lock and calls sm750_program_mode (src/sm750_drm.c:1376-1469),
+     which reaches sm750_sii902x_begin_mode (msleep 150 at src/sii902x.c:848),
+     ddk750_set_display_control (src/ddk750_display.c:47-86), the panel power
+     sequence (src/ddk750_display.c:131-158 via src/ddk750_display.c:196-200)
+     and sm750_sii902x_enable (receiver wait src/sii902x.c:643-682).
+   - connector detect and get_modes: src/sm750_drm.c:1092-1106 with
+     msleep(3000) between the two reads, outside the lock.
+   - sysfs monitor reads: src/sm750_drm.c:4782,4812,4835 take mode_lock and
+     then run i2c, which udelays.
+   - PM: src/sm750_drm.c:5324-5356.
+   - No sleep in the IRQ handler (src/sm750_drm.c:1488-1504), none in the
+     vblank hrtimer callback (src/sm750_drm.c:488-509), and vblank_lock is
+     only ever held around register/hrtimer arithmetic
+     (src/sm750_drm.c:494-505,516-520,3431-3441). No sleeping-while-atomic.
+   Worst case for one mode set, all under mode_lock:
+     sii begin msleep                                   150 ms (src/sii902x.c:848)
+     display off: plane + timing wait 2 x 100 ms        200 ms (src/ddk750_display.c:11,28-46)
+     timing/PLL latch, max(20 ms, 2 frames)              40 ms (src/ddk750_mode.c:300-320)
+     display on: timing + plane wait 2 x 100 ms         200 ms (src/ddk750_display.c:47-70)
+     panel power sequence 3 x 4 x (50+50) ms           1200 ms (src/ddk750_display.c:90-119,131-158)
+     receiver ready                                    500 ms (src/sii902x.c:643-682)
+     usleeps/udelays                                    ~10 ms
+     ---------------------------------------------------------
+     total worst                                       ~2.3 s
+   Typical live-raster cost is 0.4-0.8 s because each vsync wait is a frame,
+   not the timeout. This is a legal but user-visible stall: an atomic ioctl
+   can block for seconds, and mode_lock is held throughout, so a concurrent
+   sysfs read or another commit waits too.
+   Fix: move the panel power sequence and the receiver-ready wait off the
+   commit thread, or cap them to one frame on a live raster; document the
+   bound. Not a safety fix.
+
+3. Busy-wait polling loops
+   Verdict: not a defect. All loops are bounded and return on timeout.
+   Evidence and upper bounds:
+   - wait_display_bits: src/ddk750_display.c:28-46, 100000 us
+     (src/ddk750_display.c:11), returns -ETIMEDOUT and pr_err_ratelimited.
+   - vsync halves: src/ddk750_display.c:90-119, 50000 us each
+     (src/ddk750_display.c:12), bounded by the `delay` argument.
+   - panel/PLL latch: src/ddk750_mode.c:300-320, max(20000 us, 2 frames).
+   - hardware i2c idle: src/ddk750_hwi2c.c:61-68, 10000 x udelay(1) = 10 ms
+     (src/ddk750_hwi2c.c:13).
+   - software i2c: clock raise 100 x 5 us (src/ddk750_swi2c.c:209-216),
+     ack wait 0xff x 5 us = 1.28 ms (src/ddk750_swi2c.c:309-319), bus
+     recovery 9 clocks (src/ddk750_swi2c.c:584-598).
+   - DMA completion: src/sm750_drm.c:1582-1632, 5000 us
+     (src/sm750_drm.c:120), with abort and permanent CPU-copy fallback.
+   - staged-frame flip: src/sm750_drm.c:2459, 50000 us
+     (src/sm750_drm.c:121).
+   No loop can spin forever on dead hardware. Several run with mode_lock
+   held while a userspace thread waits; the longest such hold is the DDC
+   grant loop (2 attempts x 10 x 200 ms = 4 s, src/sii902x.c:1150), reached
+   through connector detect, not through an ioctl. Bounded, so not a defect.
+
+4. Allocation and error handling
+   Verdict: not a defect. Severity: info.
+   Every allocation is probe- or get_modes-time, sleepable, GFP_KERNEL:
+   - src/sm750_drm.c:1088 kmalloc(256, GFP_KERNEL) for EDID, freed on both
+     paths (src/sm750_drm.c:1110,1185).
+   - src/sm750_drm.c:5096,5103,5109,5111,5127,5130,5135,5138,5191,5198
+     devm_kmalloc_array/devm_kzalloc; src/sm750_drm.c:5115,5119,5124
+     kvcalloc; src/sm750_drm.c:5170 alloc_ordered_workqueue.
+   - src/sm750_drm.c:1788,1797 dmam_alloc_coherent for the DMA staging
+     buffers.
+   No allocation exists on a commit, IRQ or work path: the test card uses
+   preallocated line buffers (src/sm750_drm.c:5103-5109) and the async
+   worker copies into async_source allocated at probe
+   (src/sm750_drm.c:5124). All returns are checked; devm unwinds in LIFO
+   order and the workqueue destroy action (src/sm750_drm.c:4714-4718) runs
+   before the shadow buffers are freed and before the VRAM unmap added at
+   src/sm750_drm.c:5091. Nothing is in atomic context, so no GFP_KERNEL /
+   GFP_ATOMIC mismatch exists.
+   Cost note, not a defect: worst-case vmalloc is about 29 MB
+   (double_shadow 11.8 MB + rgb565 5.9 MB + async 11.8 MB) on a 16 MB VRAM
+   device.
+   Fix: none.
+
+5. Locking
+   Verdict: not a defect (no confirmed deadlock). Two invariants must be
+   documented. Severity: info.
+   Graph observed:
+   - shadow_lock -> mode_lock: src/sm750_drm.c:4223-4234 enters
+     sm750_shadow_rect which reaches sm750_present_staged_frame and takes
+     mode_lock at src/sm750_drm.c:2456; the async worker does the same
+     (src/sm750_drm.c:2652 then src/sm750_drm.c:2659).
+   - shadow_lock -> async_lock: src/sm750_drm.c:2264,2345.
+   - crc_mutex -> mode_lock (indirect): sm750_crc_enable holds crc_mutex and
+     calls sm750_test_pattern_cancel at src/sm750_drm.c:3304, whose
+     cancel_delayed_work_sync waits for sm750_test_pattern_work, which takes
+     mode_lock at src/sm750_drm.c:3925.
+   - No reverse edge exists: no path takes mode_lock and then shadow_lock or
+     crc_mutex. That holds only because sm750_crc_resume runs after the
+     mode_lock unlock (src/sm750_drm.c:4136 after src/sm750_drm.c:4088) and
+     sm750_crc_suspend runs before the lock is taken
+     (src/sm750_drm.c:4253 before src/sm750_drm.c:4262). Adding a crc_* or
+     shadow call inside a mode_lock region would deadlock.
+   - cursor_lock is leaf (MMIO only, src/sm750_drm.c:2911-2990).
+   - vblank_lock is leaf and never wraps drm_crtc_handle_vblank; the timer
+     callback drops it first (src/sm750_drm.c:496-505).
+   - dev->event_lock is taken only in sm750_arm_vblank_event /
+     sm750_send_vblank_event (src/sm750_drm.c:3070-3099), matching the DRM
+     helper contract.
+   - mode_lock is held across i2c sleeps in sysfs shows
+     (src/sm750_drm.c:4782,4812,4835) and in EDID read
+     (src/sm750_drm.c:1092). Legal for a mutex; it extends the stall
+     described in lead 2 and lead 10 rather than creating a deadlock.
+   - No lock is held across a copy_to_user (the driver has none).
+   Fix: add a comment above struct sm750_drm_device recording
+   "shadow_lock before mode_lock; never call sm750_crc_* or shadow paths
+   while holding mode_lock".
+
+6. User-supplied input on ioctl / sysfs / debugfs
+   Verdict: no length/index/offset defect. Two input-validation defects
+   (minor). Severity: minor.
+   Evidence: 0 copy_from_user, 0 ioctl, 0 .store callbacks in src/*.c. All 12
+   monitoring attributes are read-only (DEVICE_ATTR_RO list,
+   src/sm750_drm.c:4939-4955) and both debugfs files are 0444
+   (src/sm750_drm.c:4500,4502). The only writable surface is the 0644 module
+   parameters declared between src/sm750_drm.c:258 and :294.
+   Bounds present: dma_batch_rows is clamped to 1..SM750_DRM_DMA_BATCH_ROWS
+   (src/sm750_drm.c:2418-2424); crc_window_bytes has a 4096 floor and is
+   clamped to the visible frame (src/sm750_drm.c:3133-3147);
+   test_pattern_period_ms is clamped to 500..600000 and 0 disables
+   (src/sm750_drm.c:3869-3884); test_pattern_anim_ms to 10..1000 and 0 means
+   palette-only (src/sm750_drm.c:3890-3905), so no zero-delay requeue loop.
+   Defect 6a (minor): test_pattern is a charp (src/sm750_drm.c:292) read
+   with plain strcmp from the commit path (src/sm750_drm.c:3986-3988) and in
+   a drm_info (src/sm750_drm.c:4127). A root write goes through
+   param_set_charp, which replaces and frees the string (kernel/params.c is
+   not in the installed tree: cannot verify the exact free semantics, but the
+   pointer is replaced without any synchronization the reader takes). That is
+   a potential use-after-free race, root-triggered only.
+   Fix: cache the pattern once at probe into an enum, or use a
+   module_param_cb setter that stores into an enum under WRITE_ONCE.
+   Defect 6b (minor): sii9024_scl/sii9024_sda are int module parameters
+   (src/sm750_drm.c:181-184) but sm750_sw_i2c_init takes unsigned char
+   (src/ddk750_swi2c.c:420-427), so 256..511 truncates to 0..255 and can
+   pass the `> 31` check as a different pin (256 becomes GPIO 0). No memory
+   unsafety: BIT(pin) is only applied to a u8 after the check.
+   Fix: validate 0..31 on the int before the u8 conversion, and reject
+   clk_gpio == data_gpio.
+
+7. Framebuffer / VRAM bounds
+   Verdict: one confirmed defect (major), one defensive gap (minor).
+   Defect 7a (major): the direct (non-shadow) scanout path never checks that
+   the framebuffer covers the mode, nor that the scanned window fits in
+   VRAM. sm750_pipe_check (src/sm750_drm.c:3038-3055) validates only the
+   pitch and the mode against total VRAM; sm750_pipe_enable then computes
+   frame_size = pitch * adjusted_mode.vdisplay from the mode, not from
+   plane_state->fb (src/sm750_drm.c:4075), takes the offset from the GEM
+   object (src/sm750_drm.c:4070 -> sm750_scanout_offset,
+   src/sm750_drm.c:3057-3068, which only checks 0 <= offset <= U32_MAX), and
+   programs PANEL_FB_ADDRESS/PANEL_WINDOW_WIDTH/HEIGHT from the mode
+   (src/sm750_drm.c:1434-1450). Trigger: any DRM master issues an atomic
+   commit whose primary plane is smaller than the CRTC mode (legal: the core
+   requires src to fit the fb and dst to fit the CRTC, not dst == CRTC), or
+   scans a full-size fb allocated at the top of VRAM. The engine then reads
+   pitch * vdisplay bytes from an object that may be a few KiB, past the end
+   of the GEM object and possibly past the 16 MiB aperture. Consequence is
+   undefined hardware read (garbage, engine fetch error, unknown wrap
+   behaviour); no kernel Oops because all CPU paths into VRAM are bounded.
+   The shadow path is guarded (backbuffer_available,
+   src/sm750_drm.c:4057-4060), as are the test card
+   (src/sm750_drm.c:3721), CRC (src/sm750_drm.c:3122-3148), the debugfs dump
+   (src/sm750_drm.c:4478-4493) and the cursor (exact 1024-byte carve,
+   src/sm750_drm.c:2966). Dither runs in CPU LUTs only and never touches
+   VRAM (src/sm750_dither.c:16-60).
+   Fix: in sm750_pipe_check require the plane to cover the adjusted mode
+   (fb->width >= mode->hdisplay, fb->height >= mode->vdisplay, or require
+   dst == CRTC size) and, in the direct branch of sm750_pipe_enable, reject
+   offset + frame_size > vram_size by jumping to the existing fail path.
+   Defect 7b (minor): src/sm750_drm.c:1796 computes
+   test_destination = cursor_offset - SM750_DRM_DMA_TEST_SIZE -
+   SM750_DRM_DMA_GUARD_WORDS * sizeof(u32) and then writes guards and reads
+   back around it (src/sm750_drm.c:1798-1840). The only lower bound on VRAM
+   is `hardware_cursor && vram_size < SM750_DRM_CURSOR_SIZE => -ENOSPC`
+   (src/sm750_drm.c:5177-5184) plus `vram_size != 0`
+   (src/sm750_drm.c:4579-4580). A strap reporting 1024..1295 bytes would
+   underflow the u32 and writel outside the iomap. Unreachable on a real
+   SM750 (8/16 MiB), reachable only with a spoofed or mis-decoded strap.
+   Fix: require vram_size to exceed cursor reserve + DMA test size + guard +
+   one minimum mode buffer before use.
+
+8. IO barriers and MMIO discipline
+   Verdict: not a defect on the target platform. Severity: info.
+   - Explicit barriers: dma_wmb() before the DMA kick
+     (src/sm750_drm.c:1575); wmb() after the CPU staging writes
+     (src/sm750_drm.c:1756); wmb() between the cursor image and the HWC
+     address enable (src/sm750_drm.c:2985). No mmiowb; the host is x86 PCI,
+     where UC writes are strongly ordered, and the driver is PCI-id bound,
+     so this is acceptable, hardware-specific rather than a portability bug.
+   - Read-modify-write on DISPLAY_CTRL (src/sm750_drm.c:1452-1456) and on
+     PANEL_DISPLAY_CTRL (src/ddk750_display.c:54-90,196-260) is inside
+     mode_lock. Cursor registers are written only under cursor_lock
+     (src/sm750_drm.c:2911-2990). INT_MASK RMW (src/sm750_drm.c:1474-1482)
+     runs in the devres disable path, after the shadow work is quiesced, and
+     before devm_free_irq (LIFO).
+   - One bounded race: the IRQ handler W1C-clears DMA_ABORT_INTERRUPT
+     (src/sm750_drm.c:1488-1504) while the worker also writes that register
+     (src/sm750_drm.c:1608-1630). If the handler acknowledges between the
+     completion timeout and the re-read, the driver logs "DMA1 shadow upload
+     timed out" and disables DMA for the device lifetime
+     (src/sm750_drm.c:1617-1631) even though the transfer completed. Narrow
+     window, performance-only, self-correcting across reload. Improvement:
+     re-check the completion counter before declaring a timeout.
+   - Writing into the live front buffer (src/sm750_drm.c:3685-3694,
+     src/sm750_drm.c:1726) can tear by design; the double-buffered path
+     exists (src/sm750_drm.c:4055-4060) and is used for full frames.
+   Fix: none required.
+
+9. Interrupt and work lifetimes
+   Verdict: not a defect. Severity: info.
+   Arming and cancel sites:
+   - vblank hrtimer: armed src/sm750_drm.c:3431-3441 (enable_vblank);
+     stopped by sm750_vblank_timer_stop src/sm750_drm.c:511-524, called from
+     disable_vblank (src/sm750_drm.c:3447), remove
+     (src/sm750_drm.c:5311), shutdown (src/sm750_drm.c:5321), suspend
+     (src/sm750_drm.c:5335). The wait variant uses hrtimer_cancel only after
+     locks are dropped.
+   - test-pattern delayed work: armed src/sm750_drm.c:4128-4134; cancelled by
+     sm750_test_pattern_cancel src/sm750_drm.c:3909-3913 from pipe_update
+     (src/sm750_drm.c:4210), pipe_disable (src/sm750_drm.c:4252), the enable
+     fail path (src/sm750_drm.c:4148) and remove (src/sm750_drm.c:5310).
+   - async shadow work: armed src/sm750_drm.c:2671-2712; quiesced by
+     sm750_async_quiesce src/sm750_drm.c:2714-2724 from
+     src/sm750_drm.c:4013,4147,4251 and from the workqueue destroy action
+     src/sm750_drm.c:4714-4718; queueing is gated by async_stopping.
+   - crc vblank work: armed src/sm750_drm.c:3313-3320; cancelled by
+     src/sm750_drm.c:3201-3210,3235-3241 and pipe_disable
+     (src/sm750_drm.c:4253).
+   - DMA IRQ: devm_request_irq at src/sm750_drm.c:1503-1507, masked by the
+     devres action registered in the same helper (src/sm750_drm.c:1470-1484),
+     which runs before devm_free_irq.
+   Nothing armed can outlive the device: devres releases only after remove
+   returns, and sdev is freed in that phase. sm750_pci_remove
+   (src/sm750_drm.c:5300-5312) has no explicit async_quiesce or
+   test_pattern_cancel, but drm_atomic_helper_shutdown reaches
+   sm750_pipe_disable which does both. Improvement (defence in depth): call
+   both idempotent helpers directly in remove.
+
+10. SiI9022A specifics
+    Verdict: not a defect. Severity: info.
+    - Write retry: sii902x_write_block_retrying (src/sii902x.c:307-332) does
+      3 attempts, retries only -ETIMEDOUT, and runs
+      sm750_sw_i2c_recover_bus between attempts (src/sii902x.c:322).
+      sii902x_write_recovering (src/sii902x.c:340-355) converts a final
+      timeout into success with a dev_warn, so a marginal bus cannot fail a
+      mode set, at the cost of silently enabling on an unverified write.
+    - Bus recovery is bounded (src/sii902x.c:322,610,803,883,1164,1186;
+      implementation src/ddk750_swi2c.c:584-598).
+    - DDC grant: 2 attempts x 10 polls x 200 ms = 4 s worst
+      (src/sii902x.c:1140-1170), one dev_err per failed attempt
+      (src/sii902x.c:1154) and one dev_warn on retry, then bus clear. The
+      release loop is 50 x 30 us plus msleep(1) on failure, about 50 ms
+      (src/sii902x.c:1197-1210). All dev_err sites in the read path are
+      per-call, not per-iteration, so a flapping monitor cannot flood the
+      log; the bounded loops are what prevents it.
+    - Receiver ready waits up to 500 ms and then warns and continues
+      (src/sii902x.c:643-682), so a dead sink cannot wedge a mode set; the
+      enable path leaves the transmitter muted only if a register write
+      fails.
+    - A hung bus cannot wedge a mode set: the mode set does not read EDID,
+      and every i2c transaction is bounded. It can delay a mode set that is
+      waiting for mode_lock by up to about 4 s behind an EDID read.
+    - src/sm750_hw_i2c_transfer caps transfers at 16 bytes
+      (src/ddk750_hwi2c.c:44-46) and sm750_sii902x_read_edid rejects
+      hardware i2c (src/sii902x.c:1102-1112); every in-tree caller passes
+      use_hardware_i2c = false (src/sm750_drm.c:1422,1465,5248,5350), so
+      that branch is dead in this tree. Cannot verify whether an out-of-tree
+      caller enables it; if one did, EDID would be unavailable by design.
+    Fix: none required.
+
+11. A52 - module refcount 1 surviving a full PCI unbind
+    Verdict: cannot verify from this tree; not a driver defect as far as the
+    source shows. Severity: info.
+    Evidence: src/ contains no try_module_get/get/put of its own; the only
+    registration is module_pci_driver at src/sm750_drm.c:5375, and the only
+    DRM object owner is devm_drm_dev_alloc (probe uses it in
+    sm750_pci_probe, and remove src/sm750_drm.c:5300-5312 calls
+    drm_dev_unplug src/sm750_drm.c:5305, not drm_dev_unregister). The
+    devm ownership rule is stated in the installed header,
+    include/drm/drm_drv.h:456-462 ("automatically put on driver detach using
+    drm_dev_put()"), which is why an explicit put was already rejected in
+    docs/plan/20261117-sm750-driver-prod/plan.yaml:159.
+    The fbdev client created by drm_client_setup at src/sm750_drm.c:5266 is
+    not torn down by the driver; the helper is void (include/drm/
+    clients/drm_client_setup.h:12) and the client contract says the core
+    calls unregister when the DRM device is unregistered and the client then
+    calls drm_client_release (include/drm/drm_client.h:39-48,166). Client
+    teardown is therefore owned by DRM core at final put, i.e. in the devres
+    phase of the same unbind. That is a synchronous phase, so it cannot by
+    itself explain a reference that survives the unbind and clears minutes
+    later; but the core .c files are absent from the installed tree, so the
+    exact ordering is cannot verify.
+    So: the driver is not holding a reference it should release, and adding
+    one would double-free (drm_drv.h:456-462). The fbdev client is expected
+    to be released by DRM core, not by sm750_pci_remove.
+    Measurement that settles it: enable the module tracepoint with a stack
+    trace while unbinding, e.g.
+      cd /sys/kernel/tracing
+      echo 1 > events/module/module_get/enable
+      echo stacktrace > events/module/module_get/trigger
+      echo 1 > tracing_on
+      echo 0000:01:00.0 > /sys/bus/pci/drivers/sm750hdmidrm/unbind
+      cat trace
+    and the matching module_put event; if the tracepoint is not built, a
+    kprobe on try_module_get/__module_get with a stack trace filtered on
+    sm750hdmidrm. Repeat cat /sys/module/sm750hdmidrm/refcnt after each
+    step and once 60 s later. The caller in the stack names the holder
+    (fbdev client, fbcon, or DRM core) definitively; no code change should be
+    made before that measurement.
+
+Confirmed defects
+-----------------
+ID  Sev    Location                              Trigger                                   Likelihood                                Fix
+D1  major  src/sm750_drm.c:3038-3055, 3057-3068,   atomic commit with primary fb smaller     low-medium: any DRM master can do it,     require fb to cover the adjusted mode
+           4070-4081, 1434-1450                  than the CRTC mode, or full-size fb at    but normal clients size the fb to the     and offset + pitch*vdisplay <= vram_size
+                                                 the top of VRAM                           mode                                      (jump to the existing fail path)
+D2  minor  src/sm750_drm.c:292, 3986-3988, 4127   root writes test_pattern while a commit   low: root-only, needs a concurrent        cache an enum at probe or use a
+                                                 reads it (charp replacement/free)         commit                                    module_param_cb with WRITE_ONCE
+D3  minor  src/sm750_drm.c:181-184,               sii9024_scl/sda outside 0..31 at module   low: root/module-load only, no            validate 0..31 as int before the u8
+           src/ddk750_swi2c.c:420-427             load; 256..511 truncates through u8       memory unsafety                           conversion; reject scl == sda
+D4  minor  src/sm750_drm.c:1796-1840,              strap reports 1024..1295 bytes of VRAM    very low: no real SM750 part does this;   require a minimum VRAM (cursor + test
+           5177-5184, 4579-4580                   (u32 underflow in test_destination)       requires a spoofed/mis-decoded strap      buffer + guard + one mode buffer)
+R1  minor  src/sm750_drm.c:4084-4088 through      any cold mode set; worst on a dead or     medium: every modeset pays 0.4-0.8 s;    move the panel power sequence and
+           src/sm750_drm.c:1376-1469,             slow raster (about 2.3 s under            2.3 s only on failing hardware            receiver wait off the commit thread
+           src/ddk750_display.c:90-200,           mode_lock)                                                                          or cap them to one frame
+           src/sii902x.c:643-682,848
+R2  info   src/sm750_drm.c:1617-1631,             IRQ ack racing the 5 ms DMA completion    very low                                  re-check the completion count before
+           1488-1504                              timeout: false "timed out", DMA disabled                                            declaring a timeout
+                                                 until reload
+
+R1/R2 are recorded as risks, not as correctness defects; only D1 is graded
+major and none is a kernel-crash defect.
+
+Probability notes: D1 needs only a DRM master (any session user) and one
+atomic commit, so it is the only defect reachable without root and without
+module-load control. D2-D4 need root, a module parameter or a spoofed
+device. R1 is paid on every cold modeset but only becomes seconds on
+hardware that is already failing.
+
+Overall verdict
+---------------
+production ready with conditions
+
+No crash, hang, UAF or leak was confirmed on a path reachable by an
+unprivileged user. The kernel-side bounds, cancellation and lock ordering
+are sound, and the two failure modes that would normally bite a driver like
+this - a dead raster and a dead DDC bus - are bounded and degrade instead of
+hanging. The one unprivileged-reachable defect is D1, an undefined hardware
+scanout read when a client commits a framebuffer smaller than the mode; it
+does not fault the kernel but it is the kind of state the driver must not
+hand to the engine.
+
+Top three things to fix, in order:
+1. D1: guard the direct scanout path against fb < mode and
+   offset + pitch*vdisplay > vram_size (src/sm750_drm.c:3038-3055,
+   src/sm750_drm.c:4070-4081). This is the only condition for shipping.
+2. D4 and D3: add the VRAM lower bound before the DMA test carve and the
+   0..31 validation for the SiI9022A i2c pins. Both are cheap, both remove
+   silent misconfiguration.
+3. D2 and R1: stop reading the charp test_pattern from the commit path
+   (cache it at probe), and bound or move the panel power sequence so one
+   commit cannot hold mode_lock for about 2.3 s.
+
+Follow-up: A52 stays open with no code change; run the module_get/module_put
+stack-trace measurement in lead 11 before touching the remove path.

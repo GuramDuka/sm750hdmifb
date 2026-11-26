@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Defect dispositions
 
-One row per defect inventoried in [AUDIT.md](AUDIT.md), plus the twenty-nine
+One row per defect inventoried in [AUDIT.md](AUDIT.md), plus the forty
 found later that are enumerated here (`A31` is not a defect and is recorded in
 the detail sections below instead of in this table):
 `A25`, in the kernel log of the running 0.5.9 build, `A26`, in the IGT
@@ -47,13 +47,22 @@ release the module reference and that a device unbind is required in between
 (`docs/evidence/runtime/41-vt-hot-reload.txt`), and `A52`, by that helper's
 second live run, which measured that even a full device unbind leaves the
 reference in place
-(`docs/evidence/runtime/41-vt-hot-reload.txt`).
+(`docs/evidence/runtime/41-vt-hot-reload.txt`), and `A54`-`A64`, by the
+2026-11-26 production-readiness review: `A54` is the panel left dark when the
+last client exits, measured while the review ran, `A55` is the CRC window that
+measurement left behind, and `A56`-`A64` are the review's nine confirmed
+defects and findings, each fixed with a `tests/check-drm-policy.sh` assertion
+(`docs/evidence/review/01-production-readiness-architecture.txt`,
+`docs/evidence/review/02-production-readiness-runtime.txt`; transcript
+`docs/evidence/runtime/44-production-readiness-review.txt`).
 They are
 recorded here because this
 table is the current defect state, not a copy of the audit. [AUDIT.md](AUDIT.md)
 still describes the pre-fix tree and is not rewritten. Statuses:
 
 - **fixed** - changed in this task and verified on this host.
+- **diagnosed** - mechanism and measurements recorded, but no code change yet;
+  the row names the open question and the workaround in force.
 - **deferred** - not fixed here; the reason names the blocker.
 - **accepted** - deliberate behaviour; the residual risk is documented.
 
@@ -108,7 +117,7 @@ after (working tree) form of every fixed item. All logs were produced unprivileg
 | A42 | S3 | The SiI9024A enable gated readiness on the wrong 0x3d bit and treated a transient I2C timeout as fatal. `sii902x_wait_receiver_ready()` required the live `RX_SENSE_STATUS` (bit 3) to be stable for 100 ms inside a 2000 ms budget. SiI-PR-1064-A says bit 2 is the plugged state and bit 3 the powered receiver, and that a plugged, unpowered sink - `0x3d` = `0x04` - is a documented normal state whose EDID is readable and whose documented action is to read EDID, not to wait. The consequence was measured: one monitor power cycle produced 20 `SiI9024A receiver not ready after 2000 ms: ... status=04; enabling for compatibility` lines in 2.5 minutes, all spending the full 2 s, with the `a0` (sink electrically absent), `06` (latched receiver event) and `0e` (powered receiver) samples interleaved and no pass condition for either documented state. `0x0e` sets bit 3 while bit 2 is also set, so the old code did not report it as ready whenever the bit did not stay set across the window, and the log could not tell a powered sink from a plugged one. Separately, a TPI block write that timed out on the default software bit-bang path (`-ETIMEDOUT` when SCL never rises, unrelated to a missing ACK, which is `-ENXIO`) propagated out of `sm750_sii902x_enable()` and the whole enable failed at stage `sii902x_enable` | fixed | `sii902x_wait_receiver_ready()` accumulates `PLUGGED_STATUS` and `RX_SENSE_STATUS` separately, breaks on either after 100 ms, and polls a 500 ms budget (`src/sii902x.c:62-64`), matching TPLUG_DLY; the ready line reports both bits and the not-ready line keeps its shape and compatibility fallback. A retrying TPI write (`sii902x_write_block_retrying()`, `sii902x_write_recovering()`, `src/sii902x.c:299-347`) clears the bus with `sm750_sw_i2c_recover_bus()` only on the software path, waits 10-15 ms, retries to three attempts, and retries only `-ETIMEDOUT`; a final timeout warns `... (transient I2C timeout, retried N times); enabling for compatibility` with the stage name and returns 0, so the enable continues. It covers the option-ROM step, the initialization register, the video block, the AVI InfoFrame and the HPD workaround, never reads. `sm750_sii902x_read_edid()` skips the DDC request and returns `-ENODATA` while `SII902X_SYS_CTRL_PWR_DWN` is set. Guards: `tests/check-sii902x-recovery.sh` via `tests/check-drm-policy.sh`, with nine planted controls | `docs/evidence/runtime/30-sii9024a-readiness-and-timeout.txt` |
 | A43 | S4 | The headless helper mis-modelled a compositor run five ways before it produced a single honest verdict: `LIBSEAT_BACKEND=builtin` does not exist in libseat 0.9.3 (only `logind`, `seatd`, `noop`), so weston died with `No backend matched name builtin`; the verdict passed a compositor that had already exited because a frame count alone says nothing about who owns the card; `WLR_DRM_DEVICES` was exported as the by-path symlink and wlroots splits that variable on `:`, so cage found zero GPUs; kmscube was given `-n 300` where `-n` is a connector id, not a count; and cage was given `-s`, which permits VT switching on seat0. A sixth was found on the first real sudo run: kmscube is launched with `-c 300` (fixed frame count), so its clean early exit was reported as FAIL | fixed; all five modes exercised through the installed root helper 2026-11-25 | `tools/sm750-headless.sh:168-178` (`LIBSEAT_BACKEND=noop`, `WLR_DRM_DEVICES=$CARD_NODE`, `WLR_LIBINPUT_NO_DEVICES=1`), `:179` `CARD_NODE` resolution guard, `:43` the usage line listing `diagnose`, `:202` kmscube `-A -D "$CARD" -c 300`, `:209` cage without `-s`, `:246-247` the two-line honesty comment, `:248-265` the per-mode verdict chain (zero-vblank guard first, then the kmscube exit model, then the weston/cage survivor model); gates `tests/check-headless-helper.sh` (10 assertions, 10 planted controls) with its registration in `tests/check-drm-policy.sh:263-269` and the scratch census; measured sudo runs: probe PASS, diagnose (no fd holders, refcount 0, fbcon bind 1) PASS, weston 30 PASS vblank 21248 to 21581, cage 20 PASS 21966 to 22307, kmscube 15 clean rc=0 with 22692 to 23135 | `docs/evidence/runtime/35-kmscube-exit-semantics.txt` |
 | A44 | S4 | The live vblank gate asserted a hardcoded 60 Hz expectation, so `make check` failed on a panel the driver had programmed to 75 Hz: `vblank rate is outside the 5% tolerance / Measured 75.21 DRM vblanks/s over 120 events (expected 60.00)`. The same investigation cleared the driver: a frozen `vblank_count` on an idle pipe is DRM core's `vblankoffdelay` (default 5000 ms) disabling the source, measured freezing 5.51 s after the last `WAIT_VBLANK` returned and resuming immediately for a new waiter, so it is not a driver defect and no `src/` file was touched | fixed; `make check` exits 0 | `tests/check-drm-module.sh:30-31` attribute paths, `:39-41` `plausible_refresh()` awk range 20..250, `:43-47` `fallback_refresh()` with a stderr note, `:49-75` `resolve_expected_refresh()` with the preference `SM750_DRM_EXPECTED_HZ` > `/sys/class/drm/<card>/device/active_mode_refresh_hz` > `/sys/bus/pci/devices/0000:01:00.0/active_mode_refresh_hz` > fallback 60, `:208-216` `--self-test` with three planted controls; `tests/check-vblank.c` untouched | `docs/evidence/runtime/34-vblank-idle-freeze.txt` |
-| A45 | S4 | The driver advertised no render node, so a userspace compositor that refuses a card-only device skipped the SM750 entirely. The string `Skipping device %s without a render node` is present in the installed `/usr/lib64/libkwin.so.6.7.5`, and the strace of a kwin 6.7.5 run shows it never opens card0 - it only `newfstatat`s `/dev/dri/card0` and `readlink`s the DRM class entry - so the skip is a library-level verdict formed before any open, not a permission failure. The device was therefore unusable to that compositor no matter what the node permissions were | fixed; node delivered and observed live, not sufficient on its own for kwin_wayland | `DRIVER_RENDER` added to both `drm_driver` instances, on the same line as `DRIVER_MODESET`: `src/sm750_drm.c:4527` (TTM/VRAM) and `:4542` (shmem shadow); the rationale block above them states that the node carries dumb-buffer and PRIME primitives only and is not a claim of GL. A render-only device would lose card0 and every mode, so the gate rejects any line that sets `DRIVER_RENDER` without `DRIVER_MODESET`. Guards: `tests/check-render-node.sh` (five assertions - both `driver_features` lines carry `DRIVER_RENDER`, no line carries it without `DRIVER_MODESET`, `SM750_DRM_VERSION` agrees with `build-package.sh`, and the live render node resolved from `/sys/class/drm/renderD*` by its `device/driver` basename exists and is writable - plus three planted controls `render_dropped`, `render_only`, `version_drift` under `--self-test`); registered at `tests/check-drm-policy.sh:270-276` and counted in the `tests/check-scratch-policy.sh:46` census (19 -> 20 scripts); it adds no `make check` recipe command, so the count stays 18. Measured on the installed 0.6.5: the node was `/dev/dri/renderD131`, `crw-rw-rw- root:render 226:131`, present in sysfs as `/sys/class/drm/card0/device/drm/renderD131`, and `DRM_IOCTL_VERSION` on it reported `sm750hdmidrm` 0.6.5 - after the 2026-11-25 19:29 reboot the same device is `/dev/dri/renderD128`, so a minor number is never a stable handle; use `/dev/dri/by-path/pci-0000:01:00.0-render` with the shadow driver's description, proving the shmem driver struct is the one instantiated. Two independent barriers remain and neither is fixed here: Mesa ships no SM750 driver (`ls /usr/lib64/dri/` has no sm750/smi entry, and `eglQueryDevicesEXT` returns zero devices), so the node has no acceleration; and the service account has no logind seat (`loginctl list-seats` lists only seat0), which kwin checks separately. `KWIN_WAYLAND_NO_PERMISSION_CHECKS=1` with `KWIN_DRM_DEVICES` and `LIBSEAT_BACKEND=noop` changed nothing, and kwin 6.7.5 has no `--drm-device` option. The X11 front is a separate route: `kwin_x11` manages windows on this card, but that is demonstrated only under a scratch X server (Xvfb), and a root X server on card0 has never been run, so panel output through X11 is NOT OBSERVED and compositing on the card is unmeasured; an X11 session on the card additionally needs the server as root and a per-session environment fix (A53, [docs/PLASMA-X11.md](PLASMA-X11.md)) | `docs/evidence/runtime/36-render-node.txt` |
+| A45 | S4 | The driver advertised no render node, so a userspace compositor that refuses a card-only device skipped the SM750 entirely. The string `Skipping device %s without a render node` is present in the installed `/usr/lib64/libkwin.so.6.7.5`, and the strace of a kwin 6.7.5 run shows it never opens card0 - it only `newfstatat`s `/dev/dri/card0` and `readlink`s the DRM class entry - so the skip is a library-level verdict formed before any open, not a permission failure. The device was therefore unusable to that compositor no matter what the node permissions were | fixed; node delivered and observed live, not sufficient on its own for kwin_wayland | `DRIVER_RENDER` added to both `drm_driver` instances, on the same line as `DRIVER_MODESET`: `src/sm750_drm.c:4527` (TTM/VRAM) and `:4542` (shmem shadow); the rationale block above them states that the node carries dumb-buffer and PRIME primitives only and is not a claim of GL. A render-only device would lose card0 and every mode, so the gate rejects any line that sets `DRIVER_RENDER` without `DRIVER_MODESET`. Guards: `tests/check-render-node.sh` (five assertions - both `driver_features` lines carry `DRIVER_RENDER`, no line carries it without `DRIVER_MODESET`, `SM750_DRM_VERSION` agrees with `build-package.sh`, and the live render node resolved from `/sys/class/drm/renderD*` by its `device/driver` basename exists and is writable - plus three planted controls `render_dropped`, `render_only`, `version_drift` under `--self-test`); registered at `tests/check-drm-policy.sh:270-276` and counted in the `tests/check-scratch-policy.sh:46` census (19 -> 20 scripts); it adds no `make check` recipe command, so the count stays 18. Measured on the installed 0.6.5: the node was `/dev/dri/renderD131`, `crw-rw-rw- root:render 226:131`, present in sysfs as `/sys/class/drm/card0/device/drm/renderD131`, and `DRM_IOCTL_VERSION` on it reported `sm750hdmidrm` 0.6.5 - after the 2026-11-25 19:29 reboot the same device is `/dev/dri/renderD128`, so a minor number is never a stable handle; use `/dev/dri/by-path/pci-0000:01:00.0-render` with the shadow driver's description, proving the shmem driver struct is the one instantiated. Two independent barriers remain and neither is fixed here: Mesa ships no SM750 driver (`ls /usr/lib64/dri/` has no sm750/smi entry, and `eglQueryDevicesEXT` returns zero devices), so the node has no acceleration; and the service account has no logind seat (`loginctl list-seats` lists only seat0), which kwin checks separately. `KWIN_WAYLAND_NO_PERMISSION_CHECKS=1` with `KWIN_DRM_DEVICES` and `LIBSEAT_BACKEND=noop` changed nothing, and kwin 6.7.5 has no `--drm-device` option. The X11 front is a separate route: `kwin_x11` manages windows on this card, but that is demonstrated only under a scratch X server (Xvfb), and a root X server on card0 has never been run, so panel output through X11 is NOT OBSERVED and compositing on the card is unmeasured; since 2026-11-26 an X11 session on card0 has been observed, see A53; an X11 session on the card additionally needs the server as root and a per-session environment fix (A53, [docs/PLASMA-X11.md](PLASMA-X11.md)) | `docs/evidence/runtime/36-render-node.txt` |
 | A46 | S4 | The scanout readback window could not be widened at runtime: `crc_window_bytes` was exposed with mode `0444` (`src/sm750_drm.c:265` before this change), so the 262144-byte default was the hard ceiling. At 1920x1080 with XRGB8888 pitch 7680 the visible frame is 8294400 bytes, so the `sm750_scanout` dump and the CRC source could only reach 262144 bytes, 68 of 1080 scanlines, and reading back a whole frame required a module reload with a command-line parameter. The clamp arithmetic was already correct and needed no change; only the file mode and the documented description were wrong. | fixed in 0.6.6 | `module_param(crc_window_bytes, uint, 0644)` with one comment line stating that the reader's `min()` bounds any oversized write (`src/sm750_drm.c:265-267`); `MODULE_PARM_DESC` now reads `Bytes of the visible scanout region read per CRC (default 262144, minimum 4096, clamped to the visible frame; writable at runtime)` (`src/sm750_drm.c:290-291`); the default stays 262144 and the reader is untouched apart from one comment (`src/sm750_drm.c:3127-3129`, clamp still `window = round_down(min(window, visible), 4)` at `:3144`). The CRC source and the debugfs dump share the window through `sm750_crc_region()`, so a write changes both. Guards: `tests/check-crc-uapi.sh` gained `check_window()` (parameter mode 0644, default 262144, `READ_ONCE` at use time, the `min(window, visible)` clamp and the `min_t` frame-size bound) and `check_release()` (version 0.6.6 agreeing across `build-package.sh`, `dkms.conf`, `SM750_DRM_VERSION`, `DRIVER_MAJOR/MINOR/PATCHLEVEL`, both spec files and the CI artifact names), with three planted controls `window_readonly`, `clamp_dropped`, `version_drift`; the gate adds no `make check` recipe command. Honest limit: a full-frame dump is 8294400 bytes printed as hex, so it is a diagnostic action, not something to poll | `docs/evidence/runtime/37-plasma-wayland.txt` |
 | A47 | S2 | KWin 6.7.5 on `/dev/dri/card0` could not create a framebuffer: `kwin_wayland_drm: Failed to create framebuffer` (EINVAL) appeared **359** times in one session, after which the scanout died - `PANEL_CURRENT_LINE` froze at `0x00000000` and the panel showed nothing. The driver is not buggy here: `drm_simple_display_pipe_init()` is called with a NULL `format_modifiers` argument (`src/sm750_drm.c:4625-4626`), which per `include/drm/drm_plane.h:885` and `:929` makes the plane advertise exactly `DRM_FORMAT_MOD_LINEAR`. A direct probe confirmed the plane is correct: `CAP_ADDFB2_MODIFIERS=1`, plane 36 formats `0x34325258` with an IN_FORMATS blob of `[0x34325258 LINEAR]`, AddFB2 succeeding both with no flag and with `DRM_FORMAT_MOD_LINEAR`, and failing `errno 22` only for `MOD_INVALID` and bogus modifiers, which is correct core behaviour (the NVIDIA card on this host behaves identically). KWin therefore submits a modifier the plane does not advertise, most likely `DRM_FORMAT_MOD_INVALID` on its CPU-import path, so the advertisement and the client disagree rather than the driver mis-executing an operation | fixed in 0.6.7; observed on the panel with a live KWin 6.7.5 session and proven at the ioctl level | the device withdraws the modifier capability: `drm->mode_config.fb_modifiers_not_supported = 1;` set unconditionally in `sm750_modeset_init()` directly after the `drm->mode_config.funcs` selection (`src/sm750_drm.c:4606`), with the reason in the comment above the two `drm_mode_config_funcs` structs (`:4344-4350`). The flag is a `struct drm_mode_config` field, not a `drm_mode_config_funcs` member (`include/drm/drm_mode_config.h:943-951`), so a single assignment covers both the VRAM/TTM and the shmem shadow device; the NULL `format_modifiers` argument is deliberately kept, since the plane still advertises LINEAR and nothing invents a modifier list. Core then reports `DRM_CAP_ADDFB2_MODIFIERS=0` and every client, not just kwin with an environment variable, takes the modifiers-free AddFB2. Guards: `tests/check-render-node.sh` gained `check_fb_modifiers()` (both funcs structs defined and installed, the flag present, and the flag on the line immediately after the two-line funcs selection so a guard cannot withdraw it for one device only) with two planted controls `fb_modifiers_dropped` and `fb_modifiers_branched` | `docs/evidence/runtime/38-modifier-rejection.txt` (the session that produced the 359 lines is `docs/evidence/runtime/37-plasma-wayland.txt`) |
 | A48 | S3 | The monitoring tool misread the driver's own "no output enabled" marker. `active_crtc_show()` (`src/sm750_drm.c:4933-4949`) emits `drm_crtc_index()` only while `crtc->enabled`, and `-1` otherwise, but `get_crtc_index()` (`tools/sm750-smi.c:1106-1140`) passed the raw string to `parse_u64()`, which rejects a leading `-` by design for every other attribute. An idle pipe therefore rendered `crtc.index  n/a (malformed active_crtc attribute)` instead of an honest "nothing is enabled", which sends an operator hunting a driver bug that does not exist. Measured on the target host before the fix: `cat /sys/class/drm/card0/device/active_crtc` = `-1`, `sm750-smi | grep crtc` = `n/a (malformed active_crtc attribute)` | fixed in 0.6.7 | `get_crtc_index()` recognises exactly the literal `-1` before the numeric parse and reports the new `reason_no_active_crtc` constant (`tools/sm750-smi.c:107`), which renders `n/a (no active CRTC)`; the libdrm fallback reaches the same reason when `drm_crtc_index()` returns `< 0`, so sysfs and DRM agree and the old `no active CRTC exposed by sysfs or DRM` string survives only for the "neither source readable" case. The check is not weakened: any other non-numeric or signed value still fails `parse_u64()` and stays `malformed active_crtc attribute`. Guards: `tests/check-sm750-smi.sh` fixtures F8b (`-1` must be `n/a (no active CRTC)` and must not contain `malformed`) and F8c (`bogus` must be `malformed active_crtc attribute` and must not contain `no active CRTC`), plus planted control 5 `minus-one-is-malformed`, which rewrites the `strcmp(buf, "-1")` guard to `if (0)` and must be rejected; the gate adds no `make check` recipe command | `docs/evidence/runtime/39-smi-inactive-crtc.txt` |
@@ -118,6 +127,17 @@ after (working tree) form of every fixed item. All logs were produced unprivileg
 
 | A52 | S2 | The hot-reload helper proves the module reference is not the framebuffer and cannot be released by any operation the driver exposes. The second live run detached fbcon (`bind=0`), unbound `0000:01:00.0` from `sm750hdmidrm` and verified the driver link disappeared, and `/sys/module/sm750hdmidrm/refcnt` still read `1`, so `modprobe -r` could not run. Measured either side of the detach: `refcnt` = 1, `holders/` empty, no process holding the card or render node by inode across a whole-host fd scan, and no `try_module_get` call and no other subsystem registration in the module, so `module_pci_driver(sm750_pci_driver)` at `src/sm750_drm.c:5375` is its only registration. `refcnt` semantics on this host are normal (34 modules read 0, 36 read 1), so the 1 is a real reference, not an artefact. The detach is real: `dmesg` shows the full re-probe on rebind (`Initialized sm750hdmidrm 0.6.5 for 0000:01:00.0 on minor 4`, `fb0: sm750hdmidrmdrm frame buffer device`) and the DRM minor advanced 0 -> 4 across cycles | open, narrowed 2026-11-26T10:20Z: the reference clears by itself, so a reload is possible but not schedulable; no code change made | The helper's `off` prints the refcount before touching anything, prints it again after the unbind, and refuses with the number instead of reporting a modprobe error, so a failed reload restores the module, the device and the console and leaves the host exactly as it found it. `drm_dev_unregister()` in `sm750_pci_remove` at `src/sm750_drm.c:5300-5313` was considered and rejected as speculative: `include/drm/drm_drv.h:460-461` gives `devm_drm_dev_alloc` ownership of the put, `drm_dev_unregister` has no documented reference semantics, and the change could not be measured on this host. Guards: `tests/check-vt-helper.sh` section k asserts the unbind, the rebind, both refcount prints, the non-zero-refcount refusal and the restore order; section l pins the holder scan to the card identity; the `--self-test` planted controls `refcount-not-reported`, `pci-unbind-dropped`, `pci-rebind-dropped` and `trap-restores-fbcon-only` must be rejected (13 assertions, 10 planted controls) | `docs/evidence/runtime/41-vt-hot-reload.txt` |
 | A53 | S2 | `/etc/environment` selects the NVIDIA card for every login session and for GLX, so a Plasma X11 session on the SM750 crash-loops before it draws. The file is `root:root`, mode 644, 821 bytes, mtime 2026-11-23 13:20:32, and its uncommented lines set `KWIN_DRM_DEVICES=/dev/dri/pci-0000-02-00-0-card` (a symlink to `card1`, the NVIDIA card at `0000:02:00.0`), `KWIN_DISABLE_VULKAN=1`, `__GLX_VENDOR_LIBRARY_NAME=nvidia`, `GBM_BACKEND=nvidia-drm`, `VK_DRIVER_FILES` and `VK_ICD_FILENAMES`. Every login inherits those, `startplasma-x11` passes its environment to `kwin_x11`, and the measured session log carries four `KCrash: Application 'kwin_x11' crashing... crashRecursionCounter = 2` lines with kwin settling on a `--crashes 4` argument; the session's screenshots are 16339 to 27556 bytes, and every GLX-less server in that family also printed `Xlib: extension "NV-GLX" missing` because the vendor library was forced to nvidia. This is a host configuration conflict, not a driver defect: the same card has no such failure once the six variables are cleared | open; environment conflict, not a driver defect, worked around per session since 2026-11-26 (card0 X11 session observed) | Cure, measured on scratch X servers (`Xvfb` at 1920x1080x24, private `XDG_RUNTIME_DIR`, `QT_QPA_PLATFORM=xcb`, no root and no seat): with `KWIN_DRM_DEVICES`, `KWIN_RENDER_NODES`, `__GLX_VENDOR_LIBRARY_NAME`, `KWIN_DISABLE_VULKAN` and `KWIN_COMPOSE` unset, `kwin_x11` held pid 1513813 for 40 s with zero `crashing` lines and a 1692991-byte screenshot; with the same variables cleared and no `kwinrc` at all, pid 1537736, zero crashes, 1582653 bytes, and kwin wrote no `[Compositing]` section, so no configuration key is needed either (the backdrop and theme stanzas are left for the user's own choices). `KWIN_COMPOSE` must stay unset: `X` or `Q` makes a foreground kwin exit at once (rc 0 under `timeout`), empty or `O2` survives the window (rc 124), so an earlier note that `KWIN_COMPOSE=X` "works" was a misreading of rc 0. The helper's new `x11` mode writes `run-plasma-x11.sh`, which clears the eight desktop-wide variables, exports `DISPLAY=:1`, `XDG_SESSION_TYPE=x11`, `XDG_CURRENT_DESKTOP=KDE` and `KDE_FULL_SESSION=true`, and execs `startplasma-x11` (`tools/sm750-headless.sh:374-389`; the unsets are `:381-382`). The workaround is now observed end to end: the root run of 2026-11-26 with the installed copy of that launcher (sha256 `bef39ba73cacdbcce93bc7319203689f98947a7556484d8cd51d06faf0591df7`, identical to `tools/sm750-headless.sh`) brought up a server on `/dev/dri/card0`, held `kwin_x11` at pid 1979033 with zero `crashing` lines, and left `card0-HDMI-A-1` `connected` and `enabled` with a content scanout window - so the conflict is contained, not removed: `/etc/environment` still selects the NVIDIA card for every login, and a session must still clear it | `docs/evidence/runtime/43-plasma-x11.txt`, [docs/PLASMA-X11.md](PLASMA-X11.md) |
+| A54 | S2 | The panel stays dark after the last client exits, and nothing repaints it. When the last client removes its framebuffer the DRM core disables the CRTC by design (`atomic_remove_fb`, upstream `drivers/gpu/drm/drm_framebuffer.c:1000-1093`): measured `PANEL_DISPLAY_CTRL` `0x0f010105` -> `0x0f012001`, `PANEL_CURRENT_LINE` frozen, `card0-HDMI-A-1/enabled` = `disabled`, `active_crtc` = `-1`, reproduced on X and on three clean `modetest` self-exits. The fbdev last-close restore then never issued a commit on about a dozen client exits, although the same function works when fbcon calls it (`fb_set_par`, upstream `drivers/gpu/drm/drm_fbdev_helper.c:1199-1228`); a manual `sudo -n /usr/local/sbin/sm750-console text 2` restored the pipe within 2 s. Independently the VT stayed in `KD_GRAPHICS`, so `drivers/tty/vt/vt.c` `do_con_write` drops console output before fbcon and the console does not repaint even with a live pipe. The stray-fd hypothesis for the missing last-close commit is UNPROVEN: a later `sm750-headless diagnose` showed module refcount 1 with no holder on card0 or renderD128. Open question: why the last-close restore never commits | diagnosed | no driver change; the symptom is worked around: `tools/sm750-headless.sh:359-362` (`vt_record()`) records the foreground VT and its mode before a client starts, `:366-420` (`vt_restore()`) switches to a text VT on teardown (measured 2026-11-26: `PANEL_DISPLAY_CTRL` back to `0x0f010105`, raster back within 2 s; mechanism comment `:336-346`), and the switch is refused when the run no longer owns the foreground VT | `docs/evidence/runtime/44-production-readiness-review.txt` (section 4) |
+| A55 | S3 | The CRC reader reported a dead window as a valid one. After the last client exits the mode becomes 0x0, `sm750_crc_region_missing()` did not treat a zero mode as missing, and `sdev->scanout_pitch` survived `sm750_pipe_disable()`, so `sm750-crc dump` printed `scanout readback, 0x0 pitch 3840` - a 0x0 window with a stale pitch | fixed | `sm750_crc_region_missing()` rejects a zero mode before the pitch check (`src/sm750_drm.c:3188-3193`); `sm750_pipe_disable()` clears `scanout_pitch` and `scanout_frame_size` (`:4394-4395`); the shadow upload path refuses a zero-geometry upload instead of multiplying a cleared pitch (`:4305-4311`); the debugfs header prints `sm750hdmidrm scanout readback, no active mode` for a zero mode (`:4578-4589`). Guards: `tests/check-drm-policy.sh` assertions R3 (`:442`), R4 (`:452`) and R5 (`:462`), one property-removing planted control each (`plant_crc_zero_mode` `:524`, `plant_disable_geometry` `:533`, `plant_header_zero_mode` `:542`); gate count 13 assertions / 13 planted controls | `docs/evidence/runtime/44-production-readiness-review.txt` (section 5) |
+| A56 | S2 | A failed hardware enable was reported as a success, so the core armed vblank and the commit event for a panel that never came up. `sm750_pipe_enable()` ran to its end after a failed panel or SiI9024A step, `sm750_pipe_update()` armed the flip event and the pipe stayed `crtc->enabled`, which turns a dead raster into a silent commit timeout; the failure was also invisible to the next commit, which trusted the core's view that the pipe was running. The failure paths are the ones the hardware measurements already name: the SiI9024A enable (A42) and the panel power sequence | fixed; gate-verified | `struct sm750_drm_device` carries `enable_failed` (`src/sm750_drm.c:468`), cleared at the start of every enable (`:4096`) and set where the hardware steps fail (`:4267-4271`), with the four-register `enable-fail state` line first (`:4259-4262`) so the failure is visible in dmesg. `sm750_pipe_update()` retries the enable while the flag is set and no mode change is pending (`:4286-4291`), the vblank and commit-event arm is skipped while it is set (`:4343-4344`), and the flag clears on the next successful enable (`:4397`). Guard: `tests/check-drm-policy.sh` assertion A1 (`:387`) with planted control `enable_fail_reports_live_pipe` (`:579`) | `docs/evidence/review/01-production-readiness-architecture.txt` (findings register, A1) |
+| A57 | S2 | Every `sm750_connector_get_modes()` could spend 3 s asleep: `sm750_connector_read_edid()` retried the DDC read twice with `msleep(3000)` between attempts, under `mode_config.mutex` and `connection_mutex`, reached from the 10 s polled detect, so one slow or unplugged sink could stall every modeset in the system. The architecture review graded it major and made the removal its single most important change | fixed; gate-verified | one bounded DDC attempt per `get_modes`: `edid = kmalloc(256, GFP_KERNEL)`, one `sm750_sii902x_read_edid()` call under `sdev->mode_lock`, no retry loop and no `msleep(3000)` (`src/sm750_drm.c:1129-1149`); a sink still waking up gets its modes on a later poll, and the 256-byte limit and checksum repair are unchanged (`:1152-1167`). Guard: `tests/check-drm-policy.sh` assertion E1 (`:397`) with planted control `edid_sleep` (`:580`) | `docs/evidence/review/01-production-readiness-architecture.txt` (findings register, E1) |
+| A58 | S3 | `drm_crtc_vblank_get()` was called with `event_lock` held, so the arm path took the vblank reference in the wrong order against the core's own atomic ordering | fixed; gate-verified | `sm750_arm_vblank_event()` takes `drm_crtc_vblank_get()` before `spin_lock_irqsave(&pipe->crtc.dev->event_lock, flags)` (`src/sm750_drm.c:3147` and `:3150`) and holds the lock only for the arm, putting the reference on failure inside the lock (`:3134-3161`). Guard: `tests/check-drm-policy.sh` assertion C1 (`:416`) with planted control `event_get_under_lock` (`:581`) | `docs/evidence/review/01-production-readiness-architecture.txt` (findings register, C1) |
+| A59 | S3 | `INT_MASK_DMA1` was not re-armed after the chip reset, so a resume or a reset with `dma_irq_enabled` still set left the shadow upload waiting for an interrupt that could not arrive | fixed; gate-verified | `sm750_hw_init()` re-arms the DMA1 bit with a read-modify-write of `INT_MASK` after `ddk750_init_hw()` (`src/sm750_drm.c:4680-4716`, the `poke32` at `:4708-4709`), and leaves a sticky `shadow_dma_broken` alone. Guard: `tests/check-drm-policy.sh` assertion P2 (`:429`) with planted control `int_mask_rearm` (`:582`) | `docs/evidence/review/01-production-readiness-architecture.txt` (findings register, P2) |
+| A60 | S2 | The direct scanout path was unbounded in both directions: it neither required the primary framebuffer to cover the adjusted mode nor checked that the window it programmed stayed inside VRAM, so an atomic commit with a smaller framebuffer or a full-size framebuffer at the top of VRAM made the hardware read past the buffer. Any DRM master could trigger it; it does not fault the kernel but hands undefined reads to the engine | fixed; gate-verified | `sm750_pipe_check()` rejects, when the CRTC is enabled, a plane framebuffer smaller than the adjusted mode in either dimension (`src/sm750_drm.c:3093-3119`); the direct branch of `sm750_pipe_enable()` computes `frame_size = (u64)pitch * adjusted_mode.vdisplay`, rejects an empty or over-32-bit size, and rejects `(u64)offset + frame_size > sdev->vram_size` (`:4156-4175`). Guards: `tests/check-drm-policy.sh` assertions D1 twice (`:301` plane coverage, `:309` the 64-bit bound) with planted controls `plane_covers_mode` (`:573`) and `direct_vram_bound` (`:574`) | `docs/evidence/review/02-production-readiness-runtime.txt` (confirmed defects, D1) |
+| A61 | S3 | `test_pattern` was a writable `charp` read on the commit path, so a concurrent root write to the module parameter could replace or free the string a commit was reading | fixed; gate-verified | the string is parsed once at probe into `enum sm750_test_pattern_mode` (`src/sm750_drm.c:351-370`), stored as `test_pattern_mode` (`:477`), and the commit path reads only the enum; the parameter itself stays `charp` for module-load compatibility (`:256`, `:304`). Guard: `tests/check-drm-policy.sh` assertion D2 (`:319`) with planted control `test_pattern_string` (`:575`) | `docs/evidence/review/02-production-readiness-runtime.txt` (confirmed defects, D2) |
+| A62 | S3 | `sii9024_scl` and `sii9024_sda` were `int` module parameters converted to `u8` without validation, so 256..511 became GPIO 0 and an equal pair was accepted, both silently misconfiguring the DDC bus | fixed; gate-verified | probe rejects a pin outside 0..31 before the conversion and rejects equal pins, naming both values (`src/sm750_drm.c:5138-5146`; parameters declared `int` at `:193-198`). Guard: `tests/check-drm-policy.sh` assertion D3 (`:333`) with planted control `pin_range` (`:576`) | `docs/evidence/review/02-production-readiness-runtime.txt` (confirmed defects, D3) |
+| A63 | S3 | A VRAM strap reporting 1024..1295 bytes underflowed the DMA test carve (`u32` subtraction) and let the driver treat a buffer smaller than the test as free space | fixed; gate-verified | `SM750_DRM_MIN_VRAM` (`src/sm750_drm.c:125-134`) is the cursor buffer, the DMA test, its guard words and one 640x480 XRGB8888 buffer, and probe refuses a device below it (`:5278-5282`). Guard: `tests/check-drm-policy.sh` assertion D4 (`:348`) with planted control `vram_floor` (`:577`) | `docs/evidence/review/02-production-readiness-runtime.txt` (confirmed defects, D4) |
+| A64 | S3 | A DMA acknowledgement that raced the 5 ms completion timeout made the driver declare `DMA1 shadow upload timed out`, disable DMA and require a reload, although the transfer had completed | fixed; gate-verified | after the IRR ack branch the completion is re-read before the timeout error: `if (irq_completion && completion_done(&sdev->dma_completion))` clears `dma_active` and returns 0 (`src/sm750_drm.c:1668-1675`). Guard: `tests/check-drm-policy.sh` assertion R2 (`:360`) with planted control `completion_recheck` (`:578`) | `docs/evidence/review/02-production-readiness-runtime.txt` (confirmed defects, R2) |
 
 ## Deferred and accepted items in detail
 
@@ -1461,3 +1481,174 @@ variables are out of the session environment. The two files to name are
 `tools/sm750-headless.sh`'s `run-plasma-x11.sh` (the launcher that clears it).
 The transcript is `docs/evidence/runtime/43-plasma-x11.txt` section 12; the
 walkthrough is `docs/PLASMA-X11.md`.
+
+### A54 - the panel stays dark when the last client exits (diagnosed)
+
+Symptom, 2026-11-26: after the last client on card0 exits, the panel goes
+dark and stays dark. The disable itself is core behaviour; the defect is that
+nothing re-enables the pipe afterwards. It was reproduced on an X session and
+on three clean `modetest` self-exits. Measured in that state:
+
+```
+PANEL_DISPLAY_CTRL 0x0f010105 -> 0x0f012001
+PANEL_CURRENT_LINE frozen
+/sys/class/drm/card0-HDMI-A-1/enabled = disabled
+/sys/class/drm/card0/device/active_crtc = -1
+```
+
+The first half is core behaviour, not a driver defect: when the last client
+removes its framebuffer, `atomic_remove_fb()` disables the CRTC by design
+(upstream `drivers/gpu/drm/drm_framebuffer.c:1000-1093`). The gap is that the
+fbdev last-close restore then never issued a commit. On about a dozen client
+exits no commit reached the pipe, although the same function does restore the
+mode when fbcon calls it (`fb_set_par`, upstream
+`drivers/gpu/drm/drm_fbdev_helper.c:1199-1228`), and a manual
+`sudo -n /usr/local/sbin/sm750-console text 2` restored the pipe within 2 s.
+Why the last-close path stops before its commit is not established. The
+stray-fd hypothesis - that a process still holds a node, so
+`drm_lastclose()` never runs - is UNPROVEN: a later `sm750-headless diagnose`
+showed module refcount 1 with no holder on card0 or renderD128.
+
+There is a second, independent half. The VT stayed in `KD_GRAPHICS` after the
+client exited, so the kernel console drops output before fbcon
+(`drivers/tty/vt/vt.c` `do_con_write`), and the console cannot repaint even
+when the pipe is live. This is why a text-VT switch is enough to bring the
+panel back.
+
+The helper works around the symptom rather than the cause:
+`vt_record()` (`tools/sm750-headless.sh:359-362`) records the foreground VT
+and its mode before a client starts, and `vt_restore()`
+(`tools/sm750-headless.sh:366-420`) switches to a text VT on teardown,
+preferring the recorded VT and refusing any VT the run no longer owns. The
+mechanism is in the comment at `:336-346`; the measured effect on 2026-11-26
+was `PANEL_DISPLAY_CTRL` back to `0x0f010105` and the raster advancing within
+2 s.
+
+Disposition: diagnosed, not fixed. The open question is why the last-close
+restore never commits; the workaround in the helper keeps the symptom away for
+every client the helper starts, and a bare `modetest` still leaves the panel
+dark until something switches to a text VT.
+
+Evidence: `docs/evidence/runtime/44-production-readiness-review.txt` section
+4, which records the measurements above and the helper lines.
+
+### A55 - the CRC reader reported a dead window as a valid one (fixed)
+
+After a client exits and the disable commit lands, the CRTC mode is 0x0. Two
+checks then disagreed with reality: `sm750_crc_region_missing()` tested the
+pitch and not the mode, and `sdev->scanout_pitch` outlived
+`sm750_pipe_disable()`. A dump in that state printed
+
+```
+scanout readback, 0x0 pitch 3840
+```
+
+- a 0x0 window described as readable, with a pitch from the mode that had
+already been torn down. An operator reading that line has no reason to look
+for a disabled pipe.
+
+The fix keeps the geometry and the reader in agreement. `region_missing()`
+rejects a zero mode before the pitch check (`src/sm750_drm.c:3188-3193`), the
+disable clears `scanout_pitch` and `scanout_frame_size`
+(`:4394-4395`), the shadow upload path refuses a zero-geometry upload instead
+of multiplying a cleared pitch (`:4305-4311`), and the debugfs header prints
+`sm750hdmidrm scanout readback, no active mode` for a zero mode
+(`:4578-4589`).
+
+Guards: `tests/check-drm-policy.sh` assertions R3, R4 and R5
+(`:442`, `:452`, `:462`), each with a planted control that removes exactly the
+property it checks - `plant_crc_zero_mode` (`:524`), `plant_disable_geometry`
+(`:533`) and `plant_header_zero_mode` (`:542`). Gate count 13 assertions /
+13 planted controls.
+
+Disposition: fixed; the gate removes each guard in turn and the gate fails on
+every removal.
+
+Evidence: `docs/evidence/runtime/44-production-readiness-review.txt` section 5.
+
+### A56 - a failed hardware enable was reported as a success (fixed; gate-verified)
+
+`sm750_pipe_enable()` sets `crtc->enabled` through the core before it talks to
+the hardware and, before this change, ran to its end after a failed panel or
+SiI9024A step. The commit tail then armed vblank and the commit event for a
+pipe that was never programmed, so the client's commit completed while the
+panel stayed dark, and the next commit trusted the core's view and did not
+retry. A silent dark panel is the worst of the three possible outcomes,
+because every later layer reports success.
+
+The four register reads that make the failure observable are printed before
+the pipe is marked down (`src/sm750_drm.c:4259-4262`):
+`PANEL_DISPLAY_CTRL`, `PANEL_PLL_CTRL`, `SYSTEM_CTRL` and
+`PANEL_CURRENT_LINE`. `enable_failed` then carries the state across commits:
+set where the hardware steps fail (`:4267-4271`), cleared at the start of an
+enable (`:4096`) and after a success (`:4397`). `sm750_pipe_update()` re-runs
+the enable when the flag is set and no mode change is pending
+(`:4286-4291`), and the vblank and event arm is skipped while it is set
+(`:4343-4344`), so a failed enable surfaces as a commit timeout instead of a
+false flip-complete.
+
+Disposition: fixed. The change is source-level verified by assertion A1
+(`tests/check-drm-policy.sh:387`) with planted control
+`enable_fail_reports_live_pipe` (`:579`); a live failed enable on the panel
+was not re-observed after the change.
+
+Evidence: `docs/evidence/review/01-production-readiness-architecture.txt`,
+findings register A1; the gate is listed in
+`docs/evidence/runtime/44-production-readiness-review.txt` section 6.
+
+### A57 - the EDID read slept 3 s under connection_mutex (fixed; gate-verified)
+
+`sm750_connector_read_edid()` used to retry the DDC read twice with
+`msleep(3000)` between attempts. `->get_modes` runs under `mode_config.mutex`
+and `connection_mutex`, and the connector is polled every 10 s, so a sink
+that did not answer could hold both locks for 6 s at a time and stall every
+modeset in the system. The architecture review graded it major and named the
+removal its single most important change.
+
+The read is now one bounded attempt: `edid = kmalloc(256, GFP_KERNEL)`, one
+`sm750_sii902x_read_edid()` call under `sdev->mode_lock`, no retry and no
+sleep (`src/sm750_drm.c:1129-1149`, reason in the comment at `:1137-1146`).
+A sink still waking up gets its modes on a later poll. The 256-byte limit and
+the checksum repair for a second extension block are unchanged
+(`:1152-1167`), so this removes the latency without changing what a present
+monitor reports.
+
+Disposition: fixed. Assertion E1 (`tests/check-drm-policy.sh:397`) with
+planted control `edid_sleep` (`:580`); the sink-waking-up case is covered by
+the poll, not by a retry.
+
+Evidence: `docs/evidence/review/01-production-readiness-architecture.txt`,
+findings register E1; gate in
+`docs/evidence/runtime/44-production-readiness-review.txt` section 6.
+
+### A60 - the direct scanout window was unbounded by the mode and by VRAM (fixed; gate-verified)
+
+The direct scanout branch programmed `PANEL_FB_ADDRESS` with a GEM offset and
+a frame size derived from the mode, and checked neither that the framebuffer
+covered the mode nor that the window ended inside VRAM. Two commits reach it:
+a primary framebuffer smaller than the CRTC mode, which makes the engine scan
+lines that were never allocated, and a full-size framebuffer placed at the top
+of VRAM, where `offset + pitch * vdisplay` runs past the end of the buffer.
+Any DRM master can issue either. It does not fault the kernel, which is why
+the runtime review graded it major rather than blocker, but an undefined read
+handed to the scanout engine is not state the driver may accept.
+
+The fix bounds the window on both sides. `sm750_pipe_check()` rejects an
+enabled CRTC whose primary plane framebuffer is smaller than the adjusted mode
+in width or height (`src/sm750_drm.c:3093-3119`), so the commit fails where a
+client can see the error. The direct branch of `sm750_pipe_enable()` computes
+the size in 64-bit (`frame_size = (u64)pitch * adjusted_mode.vdisplay`),
+rejects an empty size or one that does not fit 32 bits, and rejects
+`(u64)offset + frame_size > sdev->vram_size` (`:4156-4175`).
+
+Disposition: fixed. Assertions D1 twice
+(`tests/check-drm-policy.sh:301` plane coverage, `:309` the 64-bit bound)
+with planted controls `plane_covers_mode` and `direct_vram_bound`
+(`:573`, `:574`). This is the condition the runtime review put on shipping;
+the unprivileged trigger it names (a smaller framebuffer, an offset at the top
+of VRAM) is covered by the checks, and no hardware read past the buffer was
+re-observed after the change.
+
+Evidence: `docs/evidence/review/02-production-readiness-runtime.txt`, confirmed
+defects D1; gate in
+`docs/evidence/runtime/44-production-readiness-review.txt` section 6.

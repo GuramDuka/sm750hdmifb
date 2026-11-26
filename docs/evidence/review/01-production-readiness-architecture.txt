@@ -1,0 +1,555 @@
+SM750 DRM/KMS driver (sm750hdmidrm 0.6.7)
+Architecture, kernel-facing correctness and upstreamability review
+
+Reviewer : independent critic-mode review (subagent)
+Date     : 2026-11-26
+Target   : /home/coder/sm750hdmifb, src/ (22 files, 11274 lines), tree at HEAD
+           (only docs/tests/tools are dirty; src/ matches HEAD)
+Scope    : architecture, DRM/KMS UAPI correctness, kernel API currency, power
+           management, probe/remove, concurrency design, upstreamability,
+           structure, observability, ungated production risk.
+Out of scope (other reviewer / gates): packaging, docs, process, CI, the
+           line-by-line lock audit, runtime safety of the live host.
+Method   : source read against the installed 7.3.4-100.fc43.x86_64 headers and
+           System.map; no code was executed, no kernel or device state altered.
+
+Evidence tags used below:
+  [S] verified in this tree, file:line cited
+  [K] verified against installed kernel headers / System.map for 7.3.4
+  [U] not verifiable from this tree; the text names what would verify it
+
+Scores (1-10, 10 best)
+
+  1 Kernel API currency ................ 7
+  2 Atomic/KMS UAPI correctness ........ 6
+  3 Modes, EDID, DDC ................... 5
+  4 Power management ................... 3
+  5 Hotplug, removal, probe unwinding .. 8
+  6 Concurrency architecture ........... 6
+  7 Upstreamability .................... 3
+  8 Structure and maintainability ...... 5
+  9 Testability and observability ...... 6
+ 10 Ungated production risk ............ 4
+
+VERDICT: production ready with conditions.
+No blocker was found. A plausible blocker was investigated and refuted (see
+"Claims checked and refuted"). Three conditions must be met before calling it
+production ready: make the EDID read non-blocking, decide explicitly whether
+suspend/resume is supported (test it or remove the path), and stop reporting a
+successful commit when the hardware mode set failed.
+
+Single most important change to make first: remove the 3 s sleep from the EDID
+read path (src/sm750_drm.c:1106, reached from sm750_connector_get_modes at
+:1148 under mode_config.mutex/connection_mutex through the 10 s polled detect at
+:4620). It is the only defect that can stall every KMS client on the machine,
+and it is a small, contained change.
+
+===============================================================
+1. KERNEL API CURRENCY (kernel floor 6.17, host 7.3.4)
+Score 7/10 - the modern constructs are all present (drmm_mode_config_init,
+devm_drm_dev_alloc, drm_client_setup, drm_gem_fb_create, damage clips, CRC via
+drm_vblank_work); the version-compatibility story is wrong in detail and the
+funcs-table override trades a helper guarantee for CRC.
+===============================================================
+
+Verified good:
+- drm_client_setup(&sdev->drm, drm_format_info(DRM_FORMAT_XRGB8888)) at
+  src/sm750_drm.c:5266 is the current fbdev-client API; no fb_ops, no
+  drm_fbdev_* shim. CONFIG_DRM_CLIENT_SETUP=y on the host [K].
+- drmm_mode_config_init at :4601 and drm_mode_config_reset at :4680, inside
+  sm750_modeset_init (:4593-4695), are the right lifecycle for a drmm-owned
+  config [S].
+- devm_drm_dev_alloc at :5050 plus devm actions for regions, both iomaps and
+  the shadow workqueue (:4712-4720) [S].
+- DRM_GEM_SHMEM path uses DRM_FBDEV_SHMEM_DRIVER_OPS and
+  DRM_GEM_SIMPLE_DISPLAY_PIPE_SHADOW_PLANE_FUNCS (:4320); this is the modern
+  tiny-driver shape [S].
+- DRM_VRAM_HELPER (DRM_FBDEV_TTM_DRIVER_OPS, drmm_vram_helper_init at :5238) is
+  legacy-adjacent but still maintained and still used by mgag200-class drivers;
+  it is not deprecated, just not the direction of travel [K/U].
+
+Findings:
+- K1 [minor] The >= 7.0 split rests on a premise the headers contradict.
+  src/sm750_drm.c:4301 and :4316 guard the simple-pipe enable_vblank /
+  disable_vblank hooks with LINUX_VERSION_CODE < KERNEL_VERSION(7,0,0), yet
+  /usr/src/kernels/7.3.4-100.fc43.x86_64/include/drm/drm_simple_kms_helper.h:41-42
+  still declares both hooks and the built kernel still contains
+  drm_simple_kms_crtc_enable_vblank (System.map:112515) [K]. The guard is
+  therefore unnecessary on every kernel in the supported range, and it is the
+  reason the driver installs its own CRTC funcs table [S].
+- K2 [minor] sm750_crtc_funcs (src/sm750_drm.c:4324-4340, installed at :4633) is
+  a full replacement of the helper's CRTC funcs. Its only added capability is
+  CRC (get_crc_sources/verify_crc_source/set_crc_source at :4337-4339); it
+  re-declares everything else. It does NOT lose the helper's CRTC atomic_check
+  (that callback lives in drm_crtc_helper_funcs, i.e. crtc->helper_private,
+  which the driver never assigns - verified by grep for helper_private in src/
+  and drm_modeset_helper_vtables.h:274 [K]). The cost is maintenance risk, not
+  behaviour.
+- K3 [minor] 14 LINUX_VERSION_CODE uses, all in src/sm750_drm.c. Acceptable out
+  of tree; a hard reject upstream.
+- K4 [info] .driver.pm = pm_sleep_ptr(&sm750_pm_ops) at :5373 and
+  DEFINE_SIMPLE_DEV_PM_OPS at :5358 are the current idiom [S].
+- K5 [info] drm_dev_unregister is not called; drm_dev_unplug at :5303 performs
+  the unregister and devm_drm_dev_alloc owns the final put. This is the correct
+  modern remove sequence, not an omission. A52 has no cause in this path.
+
+===============================================================
+2. ATOMIC/KMS CORRECTNESS AGAINST THE DRM UAPI
+Score 6/10 - wiring and helper usage are conventional and correct, but a failed
+hardware enable is reported to userspace as success, which is a UAPI-level lie.
+===============================================================
+
+- Plane/CRTC/encoder/connector: one primary plane plus a cursor plane
+  (ARGB8888, DRM_PLANE_TYPE_CURSOR, PREMULTI blend, :4636-4664), one CRTC, one
+  encoder, one HDMIA connector (:4614). Only DRM_FORMAT_XRGB8888 on the primary
+  (:4595). This is coherent for the hardware [S].
+- Mode config funcs: fb_create=drm_gem_fb_create, atomic_check=
+  drm_atomic_helper_check, atomic_commit=drm_atomic_helper_commit
+  (:4350-4361); the shadow variant uses drm_gem_fb_create_with_dirty [S].
+- Property exposure: damage clips are enabled only for the shadow personality
+  (:4631); fb_modifiers_not_supported = 1 (:4606); preferred_depth 24 and
+  prefer_shadow 1 (:4611-4612). No connector EDID property attach call, yet the
+  EDID blob is published (drm_connector_update_edid_property at :1129) and
+  userspace reads it; the property evidently comes from the core, so this is
+  not a finding [S/U].
+- vblank: synthetic hrtimer, no hardware vblank IRQ. enable/disable are wired
+  through sm750_crtc_enable_vblank/sm750_crtc_disable_vblank (:4335-4336) on
+  >=7.0 and through the simple-pipe hooks on <7.0. drm_crtc_vblank_on/off are
+  called from pipe_enable/pipe_disable [S].
+- Page flip: drm_atomic_helper_page_flip (:4331) plus the driver's own event
+  arming in pipe_update/pipe_enable (sm750_arm_vblank_event at :3070). The
+  driver NULLs crtc_state->event itself, which is the common pattern for
+  simple-pipe drivers that need a specific arm point [S].
+- Error atomicity - finding A1 [major]: sm750_pipe_enable is void (simple-pipe
+  API) and on failure logs "failed to enable HDMI mode: %d at stage %s (commit
+  finished, event consumed)" (:4158), dumps four registers and then calls
+  drm_crtc_vblank_on, sm750_crc_resume and sm750_arm_vblank_event and returns
+  (:4159-4190). The commit therefore completes successfully and the flip event
+  fires while the panel is dark. This is a deliberate A27 workaround (avoid a
+  stalled commit), and GAP-B8 shows it has occurred in the field (once in 446
+  mode sets). A production driver should at least surface the state to
+  userspace (sysfs/debugfs flag, and a connector "link" or "self_refresh"
+  style property) so a compositor can retry; upstream would ask for the failure
+  to be prevented at atomic_check time instead.
+- [minor] pipe_update runs before pipe_enable on a modeset commit because there
+  is no custom commit_tail. The driver documents and handles this (:4198-4206),
+  and shadow uploads are staged before the CRTC turns on; correct but fragile.
+- [info] fb_modifiers_not_supported = 1 (:4606) is a justified driver-side
+  workaround for KWin submitting a modifier it never advertised; the comment
+  block at :4342-4350 records the reason.
+
+===============================================================
+3. MODE SETTING, EDID AND DDC
+Score 5/10 - mode validation is real, but EDID handling is hand-rolled,
+truncated and, in the polled path, able to sleep for seconds.
+===============================================================
+
+- Modes come from two places: the sink's EDID (drm_add_edid_modes at :1160)
+  when the read succeeds, and four hardcoded catalogs (sm750_standard_modes,
+  sm750_custom_modes, sm750_wide_modes, sm750_safe_1920_modes) when it does not
+  or when edid_only=0 (:1173-1183) [S]. edid_only defaults to 1 through
+  -DSM750_DRM_DEFAULT_EDID_ONLY in src/Makefile:12.
+- Mode validation is real: sm750_mode_valid rejects interlace and doublescan,
+  enforces hs/vs ordering, htotal/vtotal sanity, clock and width/height limits,
+  requires sm750_calc_pll_value to succeed, and checks VRAM fit
+  (src/sm750_drm.c:1281-1325; the VRAM estimate at :1319 uses hdisplay*4) [S].
+  This is the strongest part of the mode story.
+- Detection is polled, not interrupt driven: connector->polled =
+  DRM_CONNECTOR_POLL_CONNECT | DRM_CONNECTOR_POLL_DISCONNECT (:4620-4621), so
+  a 10 s helper poll with no HPD IRQ. Acceptable for this board today (the
+  SiI902x HPD line is not wired to the SM750's interrupt path in this driver);
+  upstream would use the bridge's HPD interrupt instead [S].
+- detect() returns connected when either the link is up or the receiver sense
+  is high (:1222-1245); a sink that is powered but whose DDC is dead is
+  therefore "connected" and takes the get_modes path.
+
+Findings:
+- E1 [major] 3 s sleep inside the polled probe path. sm750_connector_read_edid
+  does two attempts with msleep(3000) between them (src/sm750_drm.c:1106), and
+  it is called from sm750_connector_get_modes (:1148), which
+  drm_helper_probe_single_connector_modes calls with mode_config.mutex and
+  connection_mutex held. With a 10 s poll, an unreadable EDID costs 3 s (or 6 s
+  if the outer retry also runs) of a system-wide KMS stall every poll period.
+  GAP-B8 records real I2C timeouts on this board, so the trigger exists. Fix:
+  one bounded DDC attempt with no sleep, or schedule the retry from a work item
+  and return -EAGAIN/unknown to the probe.
+- E2 [minor, major upstream] The EDID is doctored. The read buffer is fixed at
+  256 bytes (SM750_DRM_EDID_SIZE at :104, kmalloc(256) at :1088), and when the
+  sink advertises more than one extension block the driver forces
+  edid->extensions = 1 and recomputes the checksum (:1113-1121) before
+  publishing the blob at :1129. Userspace - including edid-decode via the
+  connector sysfs blob and the compositor's capability parsing - therefore
+  receives an EDID the sink never sent, with second and later extension blocks
+  silently dropped (CEA is usually block 1, so most HDMI capability survives;
+  DisplayID/HDMI-Forum blocks in later blocks do not). The same 256-byte cap
+  drives the changed-monitor heuristic, which memcmp()s only 256 bytes
+  (connected_edid[256] at :411, :1004) [S]. Fix: use drm_edid_read_ddc() and
+  publish the unmodified blob.
+- E3 [minor] sm750_connector_get_modes rewrites connector->probed_modes after
+  the fact (sm750_remove_probed_modes, hotplug-preferred overrides at
+  :1187-1199). It works because it happens inside the probe call, but it is
+  unusual and upstream would not accept driver-side mode list surgery.
+- E4 [info] A hardcoded mode catalog used for a serial-link sink is a fallback
+  for a broken DDC path, not a mode policy. It is harmless when EDID works and
+  the default (edid_only=1) keeps it out of the way, but it should not be
+  presented as a feature.
+
+===============================================================
+4. POWER MANAGEMENT
+Score 3/10 - a suspend/resume handler exists, is structurally plausible, and
+has never been exercised in any captured evidence.
+===============================================================
+
+- sm750_pm_suspend (:5324-5338) calls drm_mode_config_helper_suspend, stops the
+  synthetic vblank timer with wait=true, and shuts the SiI902x down under
+  mode_lock. sm750_pm_resume (:5340-5356) calls sm750_hw_init(sdev,false),
+  sii902x_prepare and drm_mode_config_helper_resume [S]. The shape is right for
+  a modeset-preserving suspend.
+- No runtime PM: no pm_runtime_get/put, no autosuspend, no pci_set_power_state,
+  no pci_enable_wake (grep over src/). For a soldered industrial part this is a
+  defensible omission, but it is a deliberate absence, not an oversight [S].
+- No pci_save_state/pci_restore_state: the PCI core restores config space for
+  system sleep, and the driver reprograms all its own registers from
+  sm750_hw_init, so this is not itself a bug [S/K].
+- P1 [major] No evidence that suspend/resume has ever been run.
+  docs/evidence/runtime/22-restore-fix-hardware-proof.txt:31 and :203 state
+  explicitly "No suspend/resume cycle in this session" and "nothing is claimed
+  about the restore". The path is therefore unverified code in the production
+  binary. Either test it (rtcwake S3 cycle with a monitor attached, then check
+  PANEL_CURRENT_LINE, a fresh modeset and one shadow upload) or delete the PM
+  ops so the kernel cannot enter a state the driver has never seen.
+- P2 [minor, unverified] DMA interrupt bookkeeping across resume.
+  ddk750_init_hw (src/ddk750_chip.c:213-300) resets clocks and aborts DMA1
+  (DMA_ABORT_INTERRUPT_ABORT_1) but never writes INT_MASK (no INT_MASK
+  reference exists anywhere in ddk750_*.c). sdev->dma_irq_enabled is not
+  cleared by sm750_pm_resume, so after a resume the driver believes the DMA
+  interrupt is unmasked. If the chip's INT_MASK does not survive D3, the first
+  post-resume upload times out and sm750_dma_wait_active sets the sticky
+  shadow_dma_broken flag (:1623-1630) -> CPU copies for the rest of the boot.
+  Impact is performance only. Verification: read INT_MASK after a resume, or
+  run one S3 cycle with the debug counter for DMA fallbacks enabled.
+- P3 [info] sm750_pci_shutdown (:5315) does atomic_helper_shutdown plus vblank
+  stop but no sii902x_shutdown; a kexec or reboot leaves the transmitter
+  powered with the link up. Cosmetic, but upstream would ask for symmetry with
+  remove.
+
+===============================================================
+5. HOTPLUG, REMOVAL AND PROBE UNWINDING
+Score 8/10 - the best-engineered part of the driver: devres covers every
+resource, remove is ordered and idempotent, and the A52 observation is
+explained without a driver leak.
+===============================================================
+
+- Probe (:4998-5290) takes regions, enables the device with pcim_enable_device
+  (:5031), sets the DMA mask (dma_set_mask_and_coherent(DMA_BIT_MASK(31)) at
+  :1769), maps BAR1 registers and BAR0 WC VRAM with devm unmap actions, adds a
+  devm workqueue action, adds a devm sysfs group, registers, then starts
+  polling. Error paths use standard goto labels; every allocation has a devm or
+  drmm owner [S].
+- Remove (:5300-5313): poll_fini, drm_dev_unplug, test-pattern cancel,
+  drm_atomic_helper_shutdown, vblank timer stop with wait=true, mode_lock +
+  sii902x_shutdown. drm_dev_unplug unregisters and marks the device unplugged,
+  which makes all subsequent ioctls fail with ENODEV; the final drm_dev_put is
+  owned by devm_drm_dev_alloc. There is no manual drm_dev_unregister and no
+  get/put asymmetry [S].
+- R1 [info] A52 (module refcount 1 after a full PCI unbind) is consistent with
+  a userspace reference, not a driver leak: DEFINE_DRM_GEM_FOPS sets
+  .owner = THIS_MODULE (drm_gem.h:489-493 [K]), so any open card or render fd
+  pins the module while the compositor keeps it open. This matches "transient
+  and not schedulable" and needs no code change; closing the last fd drops it.
+- R2 [minor] The sysfs attribute group is added with devm_device_add_group
+  (:5259). devm removes the group at detach, before the register mapping is
+  unmapped (LIFO order), so the window is narrow, but a thread that already
+  holds a kernfs reference can still enter a show callback after unmap. Upstream
+  prefers explicit device_remove_groups() in remove. Verification: a race test
+  that reads the sysfs attrs in a loop while unbinding.
+- R3 [minor] sm750_pipe_disable (:4247) and the fail path of pipe_enable both
+  run sii902x_shutdown/disable_link under mode_lock, while remove calls
+  sii902x_shutdown again under the same lock. Idempotent in practice, but the
+  removal path is the only place that knows the ordering against
+  drm_atomic_helper_shutdown; a comment would make it reviewable.
+
+===============================================================
+6. CONCURRENCY ARCHITECTURE (design level, not the line audit)
+Score 6/10 - there is a single documented ownership model for hardware access
+(mode_lock) and separate locks for the data paths, but four private mutexes, an
+hrtimer, a vblank work and an ordered workqueue is more machinery than a
+single-pipe driver should need, and the lock/IRQ boundary is only explained in
+comments scattered across the file.
+===============================================================
+
+- Ownership: mode_lock serialises all register-level modeset work (enable,
+  disable, detect, PM, SiI902x bring-up); shadow_lock serialises scanout
+  uploads and the damage queue; cursor_lock guards the cursor plane; async_lock
+  guards the async-update queue. vblank_lock (spinlock) guards the hrtimer;
+  crc_work is a drm_vblank_work. Hardware access from the atomic commit path,
+  the workqueue and the timer is therefore split by subsystem rather than by
+  one rule [S].
+- C1 [minor] The vblank event path takes dev->event_lock and then calls
+  drm_crtc_vblank_get() and drm_crtc_arm_vblank_event()
+  (src/sm750_drm.c:3070-3087). Whether holding event_lock across those two
+  calls is permitted depends on core contracts that cannot be read from this
+  trimmed kernel tree (kernel-devel ships headers only, and drm_vblank.h:294-303
+  gives prototypes without kerneldoc). The live session proves it does not
+  self-deadlock today; the open question is lock ordering against
+  drm_crtc_handle_vblank, which runs from the hrtimer softirq. Verification:
+  read drivers/gpu/drm/drm_vblank.c at the matching tag, or run a vblank-event
+  stress (modetest -v in a loop plus commits) under CONFIG_PROVE_LOCKING.
+  Flagged for the line-level reviewer, not asserted as a defect.
+- C2 [minor] The synthetic vblank timer runs in hardirq/softirq context and
+  takes vblank_lock; sm750_vblank_timer_stop uses try_to_cancel under that lock
+  with an optional wait (:513-527), which is a pattern that needs the wait=true
+  call sites to be outside atomic context (they are: remove and PM suspend)
+  [S].
+- C3 [info] The model is documented but not centralised: the rules live in
+  comments at :432-436, :2394-2415, :4198-4206 and :4780-4790 rather than in a
+  header block. For a 5380-line file that is the difference between "hard" and
+  "impossible" to review.
+
+===============================================================
+7. UPSTREAMABILITY
+Score 3/10 - the display part is close to a drivers/gpu/drm/tiny/ driver, but
+the vendor port, the private bridge driver and 33 module parameters would be
+rejected before anyone read the mode logic.
+===============================================================
+
+Rejected out of hand by drm-misc or staging:
+- U1 [major] The ddk750_* vendor port (10 files, ~2100 lines) with vendor
+  naming, vendor register macros and a global register base (mmio750 in
+  src/ddk750_chip.h:27-34) is not acceptable as-is. drm-misc would ask for a
+  ~1500-line driver written against drm, not a port of the SMI SDK.
+- U2 [major] The private SiI902x TPI implementation (src/sii902x.c, 1274 lines)
+  duplicates drivers/gpu/drm/bridge/sii902x.c (external knowledge; verify
+  against a full upstream tree). It registers no i2c adapter and no
+  drm_bridge; the CRTC calls into it directly. The acceptable shape is: expose
+  the SM750's bit-banged/hardware I2C as an i2c_adapter, instantiate the
+  mainline bridge, and attach it with drm_simple_display_pipe_attach_bridge.
+  This is also the hardest single piece of work in the list.
+- U3 [major] 33 module parameters (24 in src/sm750_drm.c, 9 in src/sii902x.c),
+  almost all 0444 hardware knobs; four are 0644 writable at runtime
+  (dma_batch_rows, staging_timing, crc_window_bytes, test_pattern*). Upstream
+  policy: no module parameters for normal operation; debug knobs go to debugfs.
+- U4 [minor] CFLAGS_sm750_dither.o += -O3 (src/Makefile:6) and environment
+  variable selected -D defaults (src/Makefile:7-18). Non-standard kbuild and
+  untestable in CI.
+- U5 [minor] src/Makefile is a module-only kbuild file (obj-m). An in-tree
+  submission needs drivers/gpu/drm/tiny/Kconfig + Makefile entries and a
+  MAINTAINERS record; neither exists in this tree.
+- U6 [minor] 14 LINUX_VERSION_CODE uses and 13 lines over 100 columns (no //
+  comments exist in src/, so that part of the coding style is clean). Fixable
+  in an afternoon.
+- U7 [clean] Licensing and metadata: SPDX GPL-2.0 in every file, MODULE_LICENSE
+  ("GPL v2"), MODULE_AUTHOR, MODULE_DESCRIPTION, MODULE_VERSION and
+  MODULE_DEVICE_TABLE(pci, ...) present (:5361-5377) [S]. The ddk750 headers
+  carry "Copyright (c) 2007 by Silicon Motion, Inc. (SMI)" plus the GPL-2.0
+  SPDX tag; no conflicting proprietary notice was found. This is not what
+  blocks a submission.
+- U8 [info] The brief's premise that ddk750_reg.h contains IOCTL_* vendor
+  headers is false: ddk750_reg.h is 1456 lines of plain #defines with an
+  SPDX tag and zero IOCTL_ macros [S]. The vendor problem is the file's naming
+  and the register-level abstraction, not a copied Windows header.
+- U9 [good] Pure PCI bind (pci_device_id table at :5361, module_pci_driver at
+  :5378, no OF match). For a PCI card with an on-board bridge that is the
+  correct bind; a DT binding is not needed. drivers/gpu/drm/tiny/ is the right
+  home (simple pipe, shadow plane, drm_client_setup), not staging.
+- U10 [minor] Description vs silicon: MODULE_DESCRIPTION says "SM750G10
+  SiI9024A", the project brief says SiI9022A; both parts share the TPI register
+  map, so this is a naming inconsistency only [S/U].
+
+Genuinely hard to fix, in order:
+  1. SiI902x: replace the private TPI driver with an i2c_adapter + the mainline
+     bridge (U2).
+  2. The DDK port: rewrite as a small register-access layer with per-device
+     state (U1, F6).
+  3. The dual driver personality (F7): pick GEM SHMEM + shadow plane and delete
+     the TTM/VRAM personality.
+
+===============================================================
+8. CODE STRUCTURE AND MAINTAINABILITY
+Score 5/10 - the layer boundaries are real (policy / DDK / bridge / dither) but
+the policy file carries two drivers, 24 parameters and the sysfs surface, and
+one helper is dead code.
+===============================================================
+
+- sm750_drm.c 5380 lines holds: DRM objects, atomic callbacks, the shadow
+  DMA engine, the synthetic vblank, CRC, the test pattern, sysfs and debugfs,
+  and both drm_driver structs. Splitting it (sm750_vblank.c, sm750_shadow.c,
+  sm750_sysfs.c) is mechanical and would make section 6 reviewable.
+- ddk750_* (~2100 lines) is a vendor port with global state; sm750_dither.c
+  (609) implements the panel's RGB565 dithering, which is hardware-driven and
+  justified; sm750_drm_mode.c (79) is a small mode conversion helper.
+- F1 [minor] Duplication across the two personalities: sm750_pipe_funcs
+  (:4295-4307) and sm750_shadow_pipe_funcs (:4309-4321) differ in two members
+  (prepare_fb and the shadow-plane macro) but are otherwise copied; the two
+  drm_driver structs (:4537-4590) and the two mode_config_funcs
+  (:4350-4361) are likewise near-copies. Branching on a load-time constant in
+  every path (13+ sites) is what makes the file hard to follow.
+- F2 [minor] Dead code: sm750_mode_from_fb (src/sm750_drm_mode.c:50-79,
+  declared in sm750_drm_mode.h:29) has no caller in src/ (the only call is
+  sm750_mode_from_drm at src/sm750_drm.c:1393), and it drags
+  #include <linux/fb.h> into an otherwise DRM-only helper. Left over from an
+  fbdev entry point that no longer exists.
+- F3 [info] The shadow-scanout machinery is justified on real silicon: the
+  SM750 display engine scans from VRAM with pitch/offset constraints, so
+  damage-clipped copies into a VRAM shadow are the normal tiny-driver answer
+  (the same shape as mgag200's shadow). The double-buffer/async/DMA staging
+  layer on top of it is an optimisation, not a requirement, and it is the part
+  that carries the most state.
+- F4 [info] sm750_scanout_offset (:3057) assumes the fb's object is a
+  drm_gem_vram_object (drm_gem_vram_of_gem). That is true for the TTM
+  personality only; the function is unreachable in the shmem personality
+  because the shadow branch is taken instead (:4014/:4067). A reader cannot
+  tell that without following both branches.
+
+===============================================================
+9. TESTABILITY AND OBSERVABILITY
+Score 6/10 - an unusually good debug surface for a tiny driver (register dump,
+scanout readback with CRC, sysfs link/vblank counters), but nothing that
+observes a failed mode set at the UAPI level, and no automated tests in-tree.
+===============================================================
+
+- debugfs: "regs" (bounded read-only register dump) and "sm750_scanout"
+  (bounded VRAM readback with a CRC32 summary) plus a crc/control file on the
+  >=7.0 path [S].
+- sysfs on the PCI device: hpd, rxsense, link_state, active_crtc,
+  vblank_count, crc_supported, vram totals (devm_device_add_group at :5259)
+  [S]. This is what a field engineer needs.
+- CRC path: drm_vblank_work based scanout CRC, gated on kernel >= 7.0
+  (SM750_CRC_SUPPORTED), reading the scanout window directly rather than the
+  DAC output (:3249-3344) [S]. Honest about what it measures.
+- Missing: no tracepoints (drm has drm_vblank_event and trace_drm_* already;
+  a couple of tracepoints around mode set and DMA fallback would close the
+  field-diagnosis gap), no KUnit, no IGT wiring, no fault injection.
+- T1 [major] The failed mode set is invisible to userspace (A1). A field log
+  shows one drm_err line; the compositor shows a black screen and no error.
+  Adding a counter plus a sysfs file (and a drm_dbg on the successful path)
+  would let a support engineer distinguish "panel dark" from "no mode".
+
+===============================================================
+10. RISKS THAT WOULD BITE IN PRODUCTION AND NO EXISTING GATE CATCHES
+===============================================================
+
+- X1 [major] The 3 s EDID sleep (E1) with no test that exercises a failing DDC.
+- X2 [major] Suspend/resume is shipped untested (P1); a single S3 cycle on a
+  scratch machine would settle it.
+- X3 [major] Two SM750 cards in one machine: the second probe overwrites the
+  global mmio750 (src/sm750_drm.c:4578, ddk750_chip.h:27-34) and both devices
+  then program the same card. No gate tests two cards; the fix is per-device
+  state in the DDK layer.
+- X4 [major] A failed enable reports success (A1); GAP-B8 proves it happens.
+- X5 [minor] Synthetic vblank drift: the timer free-runs at frame_ns derived
+  from the requested mode clock and resyncs from PANEL_CURRENT_LINE only when
+  re-enabled (:443-489). Over a long uptime, vblank timestamps drift against
+  the real PLL, which affects frame pacing but not correctness. The 7.3.4
+  kernel offers drm_vblank_crtc_timer (drm_vblank.h:110-127) and
+  drm_crtc_next_vblank_start (:293), so this is now re-implementing core.
+- X6 [minor] Sticky DMA fallback (P2): one timeout permanently switches to CPU
+  copies until reload; a performance cliff with a single log line.
+- X7 [info] DRIVER_RENDER with no Mesa driver: the render node works but
+  renders on llvmpipe. It is a capability claim the driver cannot accelerate;
+  harmless, but do not count it as an acceleration feature.
+
+===============================================================
+CLAIMS CHECKED AND REFUTED
+===============================================================
+
+- "Enabling the CRTC with the primary plane disabled causes a NULL dereference
+  in sm750_pipe_enable." Not reachable. sm750_pipe_enable does dereference
+  plane_state->fb unconditionally at :4070 and :4073, and via
+  sm750_shadow_rect (:4067) -> sm750_shadow_rect_locked (:2402), while the same
+  function guards another fb use at :4036. But the simple-pipe helper's CRTC
+  atomic_check (drm_simple_kms_crtc_check, System.map:112518) rejects an
+  enabled CRTC without an enabled primary plane, and that callback lives in
+  drm_crtc_helper_funcs (crtc->helper_private), which the driver never
+  overrides [K/S]. Retained as a robustness finding only: the driver's own
+  check (sm750_pipe_check, :3038-3052) does not cover the case, so the safety
+  depends on a helper it does not control. Recommended hardening: return
+  -EINVAL from a driver-supplied check when crtc_state->enable &&
+  !plane_state->fb, and guard the two dereferences.
+- "Installing sm750_crtc_funcs drops the helper's atomic_check." False for the
+  same reason: atomic_check is not a drm_crtc_funcs member
+  (drm_crtc.h, struct drm_crtc_funcs has no atomic_check) and the driver does
+  not touch helper_private.
+- "The binary uses IOCTL_* vendor headers." False; ddk750_reg.h has none.
+
+===============================================================
+WHAT I COULD NOT VERIFY, AND WHAT WOULD VERIFY IT
+===============================================================
+
+1. drm_crtc_arm_vblank_event()/drm_crtc_vblank_get() semantics under
+   event_lock (C1). Verify: read drivers/gpu/drm/drm_vblank.c and
+   drm_simple_kms_helper.c at the 7.3 tag; or a lockdep run of an
+   event-stressing commit loop.
+2. Whether INT_MASK survives D3 in the SM750 (P2). Verify: one S3 cycle and a
+   register read after resume, or the SiI SM750 datasheet power-management
+   chapter.
+3. Suspend/resume behaviour on this board (P1). Verify: rtcwake S3/S4 cycle
+   with the panel attached, capture dmesg and the sysfs vblank/hpd counters.
+4. Whether KWin or another compositor can produce the enabled-CRTC/disabled-
+   plane state in practice. Verify: an IGT kms_atomic test run on a scratch
+   machine (do not run this on the live host).
+5. That the mainline sii902x bridge exists and fits (U2). Verify: full upstream
+   tree at the matching tag; this tree ships no driver sources.
+6. Two-card behaviour (X3). Verify: an x86 machine with two SM750 boards (or a
+   second PCI function) and a register write to card B, checking card A.
+
+===============================================================
+FINDINGS REGISTER (severity, location)
+===============================================================
+
+A1  major   src/sm750_drm.c:4158-4190   failed enable reported as success;
+                                         vblank on, event armed, panel dark.
+E1  major   src/sm750_drm.c:1106,:1148  msleep(3000) inside get_modes under
+                                         connection_mutex, 10 s polled detect.
+P1  major   src/sm750_drm.c:5324-5356   suspend/resume never exercised
+                                         (evidence/runtime/22:31,:203).
+X3  major   ddk750_chip.h:27-34;        global mmio750, one SM750 only.
+            sm750_drm.c:4578,:4690
+U1  major   src/ddk750_*.c/h            vendor DDK port, upstream reject.
+U2  major   src/sii902x.c               private duplicate of the mainline
+                                         bridge.
+U3  major   src/sm750_drm.c:177-294;   33 module parameters, several 0644.
+            src/sii902x.c
+F7  major   sm750_drm.c:5034,:5055      two drm_driver personalities selected
+                                         by a module parameter.
+T1  major   sm750_drm.c:4158-4190       failure not observable by userspace.
+E2  minor   sm750_drm.c:104,:1088,      EDID truncated to 256 bytes and
+            :1113-1121                  published with a rewritten checksum.
+K1  minor   sm750_drm.c:4301,:4316      version guard contradicts 6.17-7.3
+                                         headers.
+K2  minor   sm750_drm.c:4324-4340       private CRTC funcs for CRC only;
+                                         maintenance hazard.
+C1  minor   sm750_drm.c:3070-3087       event_lock held across vblank_get/arm;
+                                         unverified contract.
+P2  minor   ddk750_chip.c:213-300;      INT_MASK not re-armed on resume;
+            sm750_drm.c:1623-1630       sticky DMA fallback.
+R2  minor   sm750_drm.c:5259            devm sysfs group vs unmap race.
+U4  minor   src/Makefile:6,7-18         -O3 and env-selected build knobs.
+U5  minor   src/Makefile                module-only kbuild, no Kconfig/Makefile
+                                         entry for an in-tree home.
+U6  minor   src/*.c                     14 LINUX_VERSION_CODE uses, 13 long
+                                         lines.
+E3  minor   sm750_drm.c:1187-1199       driver edits connector->probed_modes.
+F1  minor   sm750_drm.c:4295-4360       near-duplicate funcs/driver structs.
+F2  minor   sm750_drm_mode.c:50-79      dead sm750_mode_from_fb.
+X5  minor   sm750_drm.c:443-527         synthetic vblank drift; core now has a
+                                         timer helper.
+X6  minor   sm750_drm.c:1556-1638       one DMA timeout disables DMA forever.
+R3  minor   sm750_drm.c:4247,:5300      sii902x_shutdown called from three
+                                         paths; ordering not documented.
+U10 minor   sm750_drm.c:5370            SiI9024A vs SiI9022A naming.
+K4  info    sm750_drm.c:5358,:5373      PM ops are the current idiom.
+R1  info    drm_gem.h:489-493           A52 explained by .owner=THIS_MODULE and
+                                         an open compositor fd.
+U8  info    ddk750_reg.h                no IOCTL_* macros; brief premise false.
+X7  info    835d9de                      DRIVER_RENDER without acceleration.
+A2  info    sm750_drm.c:4606            fb_modifiers_not_supported=1 is a
+                                         justified workaround.
+F3  info    sm750_drm.c:4014-4100      shadow scanout justified; staging layer
+                                         is an optimisation.
+U9  info    sm750_drm.c:5361,:5378     PCI-only bind is correct; tiny/ is the
+                                         right home.
+E4  info    sm750_drm.c:1173-1183       hardcoded mode catalog is a DDC-failure
+                                         fallback.
+
+End of report.

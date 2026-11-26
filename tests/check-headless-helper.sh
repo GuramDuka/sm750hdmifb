@@ -74,6 +74,18 @@ has() { # has TEXT PATTERN MESSAGE
 	esac
 }
 
+# func_body FILE NAME - the body of a shell function with indentation and
+# comment lines dropped, so a call is checked where it runs and not where the
+# definition or a comment happens to name it.
+func_body() {
+	awk -v want="$2() {" '
+		{ line = $0; sub(/^[ \t]+/, "", line) }
+		!inb && line == want { inb = 1; next }
+		inb && line == "}" { exit }
+		inb && line != "" && line !~ /^#/ { print }
+	' "$1"
+}
+
 # --- a. the file exists, is a POSIX sh script and parses ---------------------
 if [ ! -f "$helper" ]; then
 	bad "a: $helper does not exist"
@@ -343,6 +355,74 @@ has "$body" '__GLX_VENDOR_LIBRARY_NAME' \
 	"l: a leaked GLX vendor library selection must be named; it made kwin_x11 crash four times"
 ok "l. the x11 arm runs a root server on :1 with no input device, no VT switch and no TCP listener"
 
+# --- m. a finished session puts the text console back ----------------------
+# Measured on the SM750 on 2026-11-26: when the last client removes its
+# framebuffer the DRM core disables the CRTC (drm_framebuffer.c
+# atomic_remove_fb), the kernel's only restore (drm_lastclose ->
+# drm_client_dev_restore) never ran, and a foreground VT left in KD_GRAPHICS
+# stops the console from repainting at all (drivers/tty/vt/vt.c
+# do_con_write). A chvt to a text VT brought both back within 2 s, so the
+# teardown must do it. The properties pinned here: the VT and its mode are
+# recorded before the client starts, probe and diagnose never touch a VT, and
+# cleanup switches to a text VT without ever failing the run.
+cleanup_body=$(func_body "$helper" cleanup)
+has "$body" '/sys/class/tty/tty0/active' \
+	"m: the helper must record the active VT from /sys/class/tty/tty0/active"
+has "$body" 'fcntl.ioctl(f.fileno(), 0x4B3B' \
+	"m: the VT mode must be read with KDGETMODE (0x4B3B), not assumed"
+has "$cleanup_body" 'vt_restore' \
+	"m: cleanup must put the console back; a teardown that only kills leaves the panel dark"
+has "$body" 'restored text console on' \
+	"m: the teardown must say which VT it restored"
+has "$body" 'the panel was left with no client' \
+	"m: the restored line must say why the console had to be restored"
+has "$body" 'left it alone, it is not ours to switch' \
+	"m: a foreground VT that moved must be reported and left alone"
+has "$body" '/sys/class/tty/$start_vt/active' \
+	"m: the recorded VT must be re-checked against /sys/class/tty/ttyN/active before it is switched"
+has "$body" 'is unavailable; the console may stay dark' \
+	"m: a missing chvt must warn and continue, not fail the run"
+record_line=$(grep -nxF 'vt_record' "$helper" | head -n 1 | cut -d: -f1)
+probe_exit=$(grep -nF 'probe complete, log in' "$helper" | head -n 1 | cut -d: -f1)
+diag_exit=$(grep -nF 'diagnose complete, log in' "$helper" | head -n 1 | cut -d: -f1)
+launch_line=$(grep -nxF 'pid=$!' "$helper" | head -n 1 | cut -d: -f1)
+if [ -z "$record_line" ] || [ -z "$probe_exit" ] || [ -z "$diag_exit" ] || [ -z "$launch_line" ]; then
+	bad "m: the VT record call, both read-only mode exits and the compositor launch must all exist"
+else
+	if [ "$record_line" -le "$probe_exit" ] || [ "$record_line" -le "$diag_exit" ]; then
+		bad "m: probe and diagnose must never record or restore a VT; vt_record at :$record_line comes before the probe exit at :$probe_exit or the diagnose exit at :$diag_exit"
+	fi
+	if [ "$record_line" -ge "$launch_line" ]; then
+		bad "m: the VT must be recorded before the client is launched; vt_record at :$record_line, launch at :$launch_line"
+	fi
+fi
+ok "m. the VT is recorded before the client starts and cleanup restores a text console, leaving foreign VTs alone"
+
+# --- n. diagnose sees every node of the device, not just card0 -------------
+# DRIVER_RENDER publishes /dev/dri/renderD<N> (crw-rw-rw-); a process holding
+# it keeps dev->open_count above zero, which is the leading explanation for
+# the skipped last-close restore. The old scan matched fd targets against the
+# literal string card0 and was blind to that node, and it ignored the fd
+# tables this account cannot read - 673 of 906 at the 2026-11-26 measurement.
+has "$body" '/sys/class/drm/card*/device/drm/*' \
+	"n: diagnose must enumerate the device's nodes from its sysfs drm directory"
+has "$body" '/sys/class/drm/renderD*/device/drm/*' \
+	"n: diagnose must enumerate render nodes; a holder of one suppresses the last-close restore"
+has "$body" '[ "$dev_of" = "$d" ]' \
+	"n: nodes must be matched by device number, not by the literal card0"
+if grep -qF '*card0*)' "$helper"; then
+	bad "n: diagnose must not match fd targets by the literal string card0; renderD128 holders are invisible that way"
+fi
+has "$body" 'inode=%s' \
+	"n: each node must be reported with its inode"
+has "$body" 'fd tables: $fd_seen processes, $fd_dark unreadable' \
+	"n: unreadable fd tables must be counted and reported, not silently skipped"
+has "$body" 'holder node=' \
+	"n: each holder line must name the node it holds"
+has "$body" '# fd-table holders of the card inode' \
+	"n: the existing card0 line must stay"
+ok "n. diagnose matches every node of the device by device number, prints inode and holders, and counts unreadable fd tables"
+
 [ "$fail" -eq 0 ] || exit 1
 
 if [ "$single" -eq 1 ]; then
@@ -463,6 +543,35 @@ open(p, 'w').write(s.replace(anchor, inject, 1))
 MUT
 }
 
+plant_no_console_restore() { # teardown kills the client and leaves the VT dark
+	# The call is removed, not the function: the helper still contains the
+	# restore code, but nothing runs it, so a finished session leaves the
+	# panel dark exactly as measured on 2026-11-26.
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '\tvt_restore\n'
+assert s.count(old) == 1, s.count(old)
+open(p, 'w').write(s.replace(old, ''))
+MUT
+}
+
+plant_diagnose_card0_only() { # holder scan back to the literal card0 node
+	# Name matching instead of device matching: a world-writable renderD128
+	# holder, the leading candidate for the skipped restore, becomes
+	# invisible again, which is the blindness this scan exists to remove.
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '\t\t\tif [ "$dev_of" = "$d" ]; then\n'
+new = '\t\t\tif [ "/dev/dri/${n##*/}" = "/dev/dri/card0" ]; then\n'
+assert s.count(old) == 1, s.count(old)
+open(p, 'w').write(s.replace(old, new))
+MUT
+}
+
 control() {
 	local name=$1
 	local planted=$scratch/sm750-headless.sh
@@ -498,6 +607,8 @@ control x11-abspath-config plant_x11_abspath_config
 control x11-primarygpu-reintroduced plant_x11_primarygpu_reintroduced
 control x11-env-note-dropped plant_x11_env_note_dropped
 control x11-session-script-unset-dropped plant_x11_session_script_unset_dropped
+control console-restore-dropped plant_no_console_restore
+control diagnose-card0-only plant_diagnose_card0_only
 
 # The pristine copy must still pass, otherwise the controls prove nothing.
 cp "$helper" "$scratch/pristine.sh"
@@ -507,7 +618,7 @@ fi
 printf 'negative control pristine: accepted\n'
 
 [ "$fail" -eq 0 ] || exit 1
-controls=18
+controls=20
 if [ "$self_test" -eq 1 ]; then
 	printf 'Headless helper checks passed (%s assertions, %s planted controls, self-test)\n' "$assertions" "$controls"
 else
