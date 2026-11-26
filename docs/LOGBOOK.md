@@ -4196,3 +4196,28 @@ to 149 payload files and 32 gate scripts; README and DELIVERABLES rows updated.
 Still blocked on the host: the installed 0.6.8 cannot be loaded while chromium holds
 renderD128, because DRM fops set .owner = THIS_MODULE. That is the owner's process, so the
 reload and the cycle wait on him.
+
+### 2026-11-26T22:55Z | orchestrator | A65: the hot reload wedged in Unloading and the host stays as it is
+
+The reload that was supposed to activate 0.6.8 never returned. `modprobe -r sm750hdmidrm`
+with the fbcon vtconsole bound left the module in `Unloading` with refcount -1
+(`sm750hdmidrm 200704 -1 - Unloading 0xffffffffc0a3d000 (OE-)`), pid 3139128 stuck in `D`
+state, the vtconsole bind at 0 and the console gone from the panel. The last line of the
+boot journal is `Console: switching to colour VGA+ 80x25`, so the framebuffer unregistered
+inside the remove callback and nothing was logged afterwards. No stack exists: zero
+hung-task, `WARNING`, `BUG` or `Call Trace` lines in the whole boot, `kernel.dmesg_restrict=1`,
+and no allowlisted helper can read `/proc/3139128/stack`.
+
+Recorded as A65, status open with no root cause, evidence
+`docs/evidence/runtime/47-hot-reload-hang.txt`. Three candidate orderings in
+`sm750_pci_remove()` (`src/sm750_drm.c:5446-5457`) are named and none is proven:
+`sm750_test_pattern_cancel()` (`:3990`) cancelling work that takes `mode_lock` at its first
+action; `drm_atomic_helper_shutdown()` committing after `drm_dev_unplug()`; the shadow
+worker cancelled only at devres teardown (`:4836`), after the remove callback returns.
+
+The owner decided to leave the machine until tomorrow, so 0.6.8 stays installed but not
+loaded and the ordered `pm_test=devices` cycle stays blocked. Counts moved to 64 defect
+rows and 54 runtime transcripts; plan decisions 99 and 100 record the defect and the
+decision. Lesson: a hot reload is not a safe operation on this driver until A65 is closed,
+and the reload path in `tools/sm750-pkg.sh` should refuse to unload while the vtconsole is
+bound.

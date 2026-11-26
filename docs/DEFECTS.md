@@ -138,6 +138,7 @@ after (working tree) form of every fixed item. All logs were produced unprivileg
 | A62 | S3 | `sii9024_scl` and `sii9024_sda` were `int` module parameters converted to `u8` without validation, so 256..511 became GPIO 0 and an equal pair was accepted, both silently misconfiguring the DDC bus | fixed; gate-verified | probe rejects a pin outside 0..31 before the conversion and rejects equal pins, naming both values (`src/sm750_drm.c:5138-5146`; parameters declared `int` at `:193-198`). Guard: `tests/check-drm-policy.sh` assertion D3 (`:333`) with planted control `pin_range` (`:576`) | `docs/evidence/review/02-production-readiness-runtime.txt` (confirmed defects, D3) |
 | A63 | S3 | A VRAM strap reporting 1024..1295 bytes underflowed the DMA test carve (`u32` subtraction) and let the driver treat a buffer smaller than the test as free space | fixed; gate-verified | `SM750_DRM_MIN_VRAM` (`src/sm750_drm.c:125-134`) is the cursor buffer, the DMA test, its guard words and one 640x480 XRGB8888 buffer, and probe refuses a device below it (`:5278-5282`). Guard: `tests/check-drm-policy.sh` assertion D4 (`:348`) with planted control `vram_floor` (`:577`) | `docs/evidence/review/02-production-readiness-runtime.txt` (confirmed defects, D4) |
 | A64 | S3 | A DMA acknowledgement that raced the 5 ms completion timeout made the driver declare `DMA1 shadow upload timed out`, disable DMA and require a reload, although the transfer had completed | fixed; gate-verified | after the IRR ack branch the completion is re-read before the timeout error: `if (irq_completion && completion_done(&sdev->dma_completion))` clears `dma_active` and returns 0 (`src/sm750_drm.c:1668-1675`). Guard: `tests/check-drm-policy.sh` assertion R2 (`:360`) with planted control `completion_recheck` (`:578`) | `docs/evidence/review/02-production-readiness-runtime.txt` (confirmed defects, R2) |
+| A65 | S1 | A hot `modprobe -r sm750hdmidrm` with the fbcon vtconsole bound wedged in `Unloading` and never completed: `/proc/modules` showed `sm750hdmidrm 200704 -1 - Unloading 0xffffffffc0a3d000 (OE-)`, `modprobe -r` sat in `D` state for the rest of the boot, the vtconsole bind went `1 -> 0` and the console left the panel for good. Only a reboot cleared it, and the freshly installed 0.6.8 could not be loaded until then. No stack was captured (`kernel.dmesg_restrict=1`, no hung-task report in the boot journal), so the blocked function is NOT identified | open; no root cause | evidence only: `docs/evidence/runtime/47-hot-reload-hang.txt` (module state, the `D`-state `modprobe`, the last two kernel lines, the three candidate orderings in `sm750_pci_remove()` at `src/sm750_drm.c:5446-5457`). Closes with a controlled reproduction that captures a stack, or with `drm_dbg` lines at every step of the remove callback | `docs/evidence/runtime/47-hot-reload-hang.txt` |
 
 ## Deferred and accepted items in detail
 
@@ -1652,3 +1653,35 @@ re-observed after the change.
 Evidence: `docs/evidence/review/02-production-readiness-runtime.txt`, confirmed
 defects D1; gate in
 `docs/evidence/runtime/44-production-readiness-review.txt` section 6.
+
+### A65 - a hot reload wedges in Unloading and cannot be recovered (open)
+
+Observed 2026-11-26 22:45Z on kernel 7.3.4-100 with 0.6.7 loaded and 0.6.8
+installed minutes earlier. `sudo -n /usr/local/sbin/sm750-pkg reload` ran
+`modprobe -r sm750hdmidrm` with the fbcon vtconsole bound and never returned.
+
+Measured state, read-only, recorded in
+`docs/evidence/runtime/47-hot-reload-hang.txt`:
+
+- `/proc/modules`: `sm750hdmidrm 200704 -1 - Unloading 0xffffffffc0a3d000 (OE-)`.
+- `ps`: `3139128 D ... 2245 modprobe -r sm750hdmidrm` (parent 3139126).
+- `sm750-vt show`: `bind now: 0`, `refcnt=-1`, `holders: 0`.
+- Last driver line of the boot is the previous probe message; the last line
+  of the boot is `Console: switching to colour VGA+ 80x25`, i.e. the
+  framebuffer unregistered inside the remove callback and nothing was logged
+  after it.
+- No `blocked for more`, `hung_task`, `WARNING:`, `BUG:` or `Call Trace` in
+  the whole boot journal, so no stack exists to read.
+
+Three orderings in `sm750_pci_remove()` (`src/sm750_drm.c:5446-5457`) are
+candidates and none is proven: `sm750_test_pattern_cancel()` at
+`src/sm750_drm.c:3990` is `cancel_delayed_work_sync()` on work that takes
+`mode_lock` at its first action; `drm_atomic_helper_shutdown()` may commit
+after `drm_dev_unplug()` and wait on hardware it no longer owns; the shadow
+worker is cancelled only at devres teardown
+(`sm750_destroy_shadow_workqueue()`, `src/sm750_drm.c:4836`), after the remove
+callback returns.
+
+Disposition: open, no root cause. Recovery requires a reboot; there is no
+userspace remedy. Next step is a controlled reproduction with a stack, or
+`drm_dbg` at every step of the remove callback.

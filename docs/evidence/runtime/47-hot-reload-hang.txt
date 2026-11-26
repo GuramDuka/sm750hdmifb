@@ -1,0 +1,86 @@
+# 47 - hot reload wedges in Unloading: modprobe -r never returns
+
+Date:    2026-11-26 22:45Z (host clock 22:45)
+Kernel:  7.3.4-100.fc43.x86_64
+Driver:  0.6.7 loaded, 0.6.8 installed by sm750-pkg install a few minutes earlier
+Command: sudo -n /usr/local/sbin/sm750-pkg reload (modprobe -r sm750hdmidrm; modprobe sm750hdmidrm)
+
+## 1. State after the wedge
+
+    # awk $1=="sm750hdmidrm" /proc/modules
+    sm750hdmidrm 200704 -1 - Unloading 0xffffffffc0a3d000 (OE-)
+
+    # ps -eo pid,stat,wchan:34,etimes,comm
+    3139128 D    -    2245 modprobe   (cmdline: modprobe -r sm750hdmidrm, parent 3139126)
+
+    # sudo -n /usr/local/sbin/sm750-vt show
+    bind now: 0
+    module: version=0.6.7 srcversion=FF25FF6111B7C6D174A72F8 refcnt=-1
+    holders: 0 userspace processes hold the card
+
+refcount -1 is the in-kernel state while refcount_dec_and_test() has
+already dropped the last reference: the removal is past the point of no
+return and now waits for the driver remove callback to finish.
+
+## 2. What the kernel logged
+
+The last driver line of this boot is the probe message from the previous
+load cycle; the last line of the whole boot is the console leaving the
+SM750, which happens inside the framebuffer unregister:
+
+    sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (1572864 bytes per buffer)
+    Console: switching to colour VGA+ 80x25
+
+The framebuffer unregistered (the vtconsole bind went 1 -> 0), so the
+remove callback got at least as far as drm_dev_unplug(). Nothing after
+that was logged, and the console did not come back on the panel.
+
+## 3. No stack was available
+
+    grep -inE "blocked for more|hung_task|WARNING:|BUG:|Call Trace" journalctl -k -b   ->  no hits
+
+The hung-task detector did not fire during the whole boot, kernel.dmesg_restrict=1
+and no allowlisted helper can read /proc/3139128/stack, so the blocked function is
+NOT identified. The dmesg ring is also being flooded by ntfs3(sdc2) link-count
+messages, which pushes early kernel output out of the ring.
+
+## 4. Candidate locations in the remove path (not proven)
+
+    src/sm750_drm.c:5446  static void sm750_pci_remove(struct pci_dev *pdev)
+    src/sm750_drm.c:5450      drm_kms_helper_poll_fini(&sdev->drm);
+    src/sm750_drm.c:5451      drm_dev_unplug(&sdev->drm);
+    src/sm750_drm.c:5452      sm750_test_pattern_cancel(sdev);
+    src/sm750_drm.c:5453      drm_atomic_helper_shutdown(&sdev->drm);
+    src/sm750_drm.c:5454      sm750_vblank_timer_stop(sdev, true);
+    src/sm750_drm.c:5455-5457   mutex_lock(&sdev->mode_lock); sm750_sii902x_shutdown(); mutex_unlock();
+
+sm750_test_pattern_cancel() at src/sm750_drm.c:3990 is
+cancel_delayed_work_sync(&sdev->test_pattern_work), and the work takes
+mode_lock at its first action. drm_atomic_helper_shutdown() also takes
+mode_lock paths, and the asynchronous shadow worker is flushed only later,
+from the devm action sm750_destroy_shadow_workqueue() at
+src/sm750_drm.c:4836 (sm750_async_quiesce() -> cancel_work_sync()), which
+runs after the remove callback returns.
+
+Three orderings are therefore worth testing after a reboot, and none of them
+is a conclusion yet:
+  (a) cancel_delayed_work_sync() racing a self re-arming delayed work;
+  (b) drm_atomic_helper_shutdown() issuing a commit after drm_dev_unplug()
+      and waiting inside a bounded poll on hardware it no longer owns;
+  (c) the shadow worker being cancelled only at devres teardown, i.e. after
+      the workqueue is already unreachable from the remove path.
+
+## 5. Recovery
+
+No userspace remedy exists. The module cannot be unloaded any further and
+cannot be loaded, so the 0.6.8 build installed minutes earlier cannot be
+activated without a reboot. The panel is dark and the SM750 console is gone;
+the rest of the machine is unaffected (the NVIDIA cards and the owner session
+continue normally).
+
+## 6. What closes this record
+
+A controlled reproduction with a stack: enable the hung-task detector or take
+/proc/<modprobe pid>/stack as root while it is blocked, or add a drm_dbg line
+at every step of sm750_pci_remove() and read the last one printed. Until then
+the defect stays open with no root cause.
