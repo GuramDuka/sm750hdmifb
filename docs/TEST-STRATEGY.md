@@ -106,6 +106,7 @@ exports `TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}`), never to `/tmp`.
 | S21 | In-repo `tests/check-render-node.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the render node: both `driver_features` lines in `src/sm750_drm.c` carry `DRIVER_RENDER` on the same line as `DRIVER_MODESET`, no executable line carries `DRIVER_RENDER` without `DRIVER_MODESET` (a render-only device would lose card0 and every mode), and `SM750_DRM_VERSION` agrees with the `readonly version=` line of `build-package.sh`. The live half walks `/sys/class/drm/renderD*`, keeps the node whose `device/driver` basename is `sm750hdmidrm`, and requires the matching `/dev/dri/renderDN` character device and write access for the invoking user; with no such node it prints one `SKIP:` line and still exits 0, which is the state before a 0.6.5 module is loaded | PASS (2026-11-25); seven assertions, six source-level (two `DRIVER_RENDER` lines, no `DRIVER_RENDER` without `DRIVER_MODESET`, the two mode_config funcs structs present and installed, the withdrawn modifier capability, the version agreement) and one live on the render node resolved by driver name, plus five planted defects rejected (`render_dropped`, `render_only`, `version_drift`, `fb_modifiers_dropped`, `fb_modifiers_branched`) in `--self-test`. The modifier assertion is described as S23 |
 | S22 | None (observed by hand; no script, no gate) | Session-level result: a full Plasma 6.7.5 Wayland session on `card0`, recorded as evidence rather than enforced, because the session needs a live seatless remote login, a private bus and a real panel | OBSERVED 2026-11-25: the compositor initializes, plasmashell presents, and the panel reads a non-zero scanout window; input and screencast are NOT measured |
 | S23 | In-repo `tests/check-render-node.sh`, extended (via `make check`, called by `tests/check-drm-policy.sh`) | Device-level check that the driver withdraws the framebuffer-modifier capability: both `drm_mode_config_funcs` structs (`sm750_mode_config_funcs`, `sm750_shadow_mode_config_funcs`) must exist and be installed, `drm->mode_config.fb_modifiers_not_supported = 1;` must be present, and it must sit on the line immediately after the two-line `drm->mode_config.funcs` ternary so a guard cannot withdraw the capability for one device only. Reasoning: the plane advertises `DRM_FORMAT_MOD_LINEAR` alone, KWin 6.7.5 submitted a modifier it could not match and AddFB2 failed with EINVAL, so core must report `DRM_CAP_ADDFB2_MODIFIERS=0` and every client must take the modifiers-free path | PASS (2026-11-25); seven assertions (six source-level, one live) and five planted defects rejected (`render_dropped`, `render_only`, `version_drift`, `fb_modifiers_dropped`, `fb_modifiers_branched`) in `--self-test` |
+| S24 | In-repo `tests/check-vt-helper.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the root-only helper `tools/sm750-vt.sh`, which hot-reloads `sm750hdmidrm` by unbinding fbcon from the SM750 vtconsole (A50): POSIX `sh` that passes `sh -n`, the three modes `show`, `off`, `on` in the usage and in the dispatcher with `usage` exiting 2 for anything else, a root check that still lets `show` run unprivileged, the target vtconsole resolved by globbing `/sys/class/vtconsole/vtcon*` and confirmed against `basename $(readlink -f /sys/bus/pci/devices/0000:01:00.0/driver)` = `sm750hdmidrm` with no executed `vtconN` literal, zero and multiple candidates both refused, `write_bind "$TARGET" 0` to detach and `write_bind "$TARGET" 1` to restore with every write read back from the `bind` file, one EXIT trap that re-binds fbcon on a non-zero exit and a restore function that ends in an explicit `return`, the userspace holder refusal gating the unload, `modprobe -r` before `modprobe` by line order, and the loaded version read back from `/sys/module/sm750hdmidrm/version` after the load with a missing file failing as `is missing after the load`. Static only: it writes no sysfs, calls no modprobe, needs no root and never runs the helper | PASS (2026-11-26); ten assertions and five planted defects rejected (`never-restore`, `hardcoded-vtcon`, `modprobe-order-reversed`, `version-readback-removed`, `holder-check-dropped`) plus a pristine control accepted, in `--self-test`; the reload itself is NOT YET OBSERVED |
 ### S1: in-repo `make check`
 
 - Package/version: the repository itself at 0.5.9; no external package. The
@@ -698,6 +699,52 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   switching are unmeasured. The X11 contrast is in the same file: X11 runs but
   cannot composite, because the server's GLX is DRISWRAST without
   `GLX_EXT_texture_from_pixmap`.
+
+### S24: VT hot-reload helper gate
+
+- Command: `./tests/check-vt-helper.sh` (called by `tests/check-drm-policy.sh`,
+  which `make check` runs). It takes an optional script path, defaults to
+  `tools/sm750-vt.sh`, and needs neither root, nor the card, nor a writable
+  sysfs. `--self-test` runs the planted controls; plain invocation runs the
+  assertions and the controls the way the other gates do. Scratch trees go
+  under `${TMPDIR:-/mega/tmp/sm750/tmp}`.
+- Holds, in ten printed sections: (a) the helper exists, starts with
+  `#!/bin/sh` and passes `sh -n`; (b) `show`, `off` and `on` are the only modes,
+  `*) usage ;;` catches the rest and `usage` exits 2; (c) `[ "$(id -u)" -eq 0 ]`
+  exists and the refusal names the problem, so an unprivileged `show` stays
+  allowed while `off` and `on` do not; (d) the target comes from
+  `resolve_target`, which globs `"$VTCLASS"/vtcon*`, refuses
+  `[ "$count" -gt 1 ]` and is cross-checked against the PCI driver, and no
+  executed line carries a `vtconN` literal (a comment may name one as an
+  example, which is why the assertion filters comment-only lines); (e) the
+  detach writes `0` and the restore writes `1` through the single writer
+  `printf '%s\n' "$2" >"$1/bind"`, and every write is read back with
+  `[ "$(cat "$1/bind" ...)" = "$2" ]`; (f) `restore_console` exists, writes
+  `bind` 1, ends in an explicit `return 0`, and the single EXIT trap is
+  exactly `trap 'rc=$?; if [ "$rc" -ne 0 ]; then restore_console; fi; exit
+  $rc' EXIT`; (g) the holder scan walks `/proc/[0-9]*`, the unload is gated on
+  `if [ -n "$h" ]; then` and the refusal names the reason, and the line number
+  of `"$MODPROBE" -r sm750hdmidrm` precedes the line number of
+  `"$MODPROBE" sm750hdmidrm`; (h) `is missing after the load` appears after the
+  load line, so a load without a version attribute fails instead of passing;
+  (i) `off` reports `module unloaded` and a failed restore names the `on` mode;
+  (j) the section counter.
+- Planted controls: the EXIT trap rewritten to `exit $rc` only, so fbcon is
+  left detached after a failed unload (`never-restore`); `TARGET` pinned to
+  `/sys/class/vtconsole/vtcon1` before the resolve call (`hardcoded-vtcon`);
+  the `modprobe -r` and `modprobe` bodies swapped so the load runs first
+  (`modprobe-order-reversed`); the `is missing after the load` block deleted so
+  a failed load reads as a success (`version-readback-removed`); and
+  `if [ -n "$h" ]` rewritten to `if [ -n "" ]`, which drops the holder gate and
+  lets the unload run while a process holds the card
+  (`holder-check-dropped`). Each mutates a copy under the scratch directory and
+  must exit non-zero with a message naming the defect; the unmutated copy must
+  pass, otherwise the controls prove nothing.
+- Status: PASS 2026-11-26, `VT helper checks passed (10 assertions, 5 planted
+  controls)`; the `--self-test` run prints the same line with `, self-test`.
+  The helper has not been installed or executed on this host - the two
+  allowlist lines are the owner's action - so the reload is in the NOT YET
+  OBSERVED list of `docs/evidence/runtime/41-vt-hot-reload.txt`.
 
 ## 3. `make check`: the recipe commands
 

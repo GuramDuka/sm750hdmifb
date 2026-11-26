@@ -41,6 +41,7 @@ section "If the card stops working after removing the package".
 | 8 | proposed | rebuild the module from the working tree, reload it, then run `tests/check-scanout-crc.sh` once as root and store the transcript (section 7) | GAP-B3 readback/CRC half; GAP-B8 if the `-110` recurs during the run |
 | 9 | 2026-11-21T10:28Z | install the console helper `/usr/local/sbin/sm750-console` (144-line source `tools/sm750-console.sh`, sha256 `6e7f5dc758ec6b8d7993466784ffa5b1ab379da4f7442a6228c620829f2b1338`; the installed copy is byte-identical) and add one NOPASSWD line for it (section 3.4) | the one-command `KD_TEXT` route for a panel that looks dead (A34); no GAP |
 | 10 | 2026-11-22T08:41Z | install `/usr/local/sbin/sm750-pkg` and one NOPASSWD line `/etc/sudoers.d/30-sm750-pkg` (section 3.8); source is 487 lines, sha256 `ca6e7b0a66fae43b6b332135ea8da62f61a917385accacc4d48f114e9149cf16`, but the installed body is stale, refresh required (11873 bytes, sha256 `e923a85a3389a13211869f32808b7b7cb77083355f90c5149b6c94cdaf9b976e`) | replaces the per-version `dnf install` allowlist entries; privileged install, remove, status and reload work for any version without the owner |
+| 11 | proposed | install `/usr/local/sbin/sm750-vt` and the two NOPASSWD lines `/usr/local/sbin/sm750-vt off` and `/usr/local/sbin/sm750-vt on` (section 3.12), then run `sm750-vt off` to load the 0.6.7 module without a reboot | the reload blocker: a rebuilt module cannot be loaded while fbcon holds it (`modprobe: FATAL: Module sm750hdmidrm is in use.`) |
 
 Sections below are ordered by subject, not by date: allowlist, recovery recipe,
 helpers, udev rule, installed state and re-verification, gap map.
@@ -1192,6 +1193,143 @@ per-mode rule asks for: a clean exit only passes when the pipe actually
 advanced. Measured vblank deltas and the defect history are recorded under A43
 in `docs/DEFECTS.md`; the five log directories are under
 `/mega/tmp/sm750/headless/`.
+
+### 3.12 `/usr/local/sbin/sm750-vt` (hot module reload without a reboot; allowlist present, helper NOT YET INSTALLED)
+
+Source `tools/sm750-vt.sh`: 279 lines, 9226 bytes, sha256
+`4e2b3ab7fb6f8f68b700ac373fff2d24bdc597106ea146ed71ddb20c7954a91b` as measured
+2026-11-26; static gate `tests/check-vt-helper.sh` (287 lines, sha256
+`4b8d0f2310da5a5a7b760b21a2556d1fabf45ba0792a447f0f686d7c80f93e1e`, part of
+`make check` through `tests/check-drm-policy.sh`, 10 assertions and 5 planted
+controls).
+
+**Installed copy must be refreshed with** (measured 2026-11-26: the two
+allowlist lines below are already present in `sudo -n -l`, but the helper
+itself does not exist - `ls -l /usr/local/sbin/sm750-vt` fails with
+`No such file or directory` - so every mode currently fails at the missing
+file), from the repository root:
+
+```sh
+sudo install -m 0755 -o root -g root tools/sm750-vt.sh /usr/local/sbin/sm750-vt
+```
+
+What it is for: a rebuilt module cannot be loaded without a reboot while the
+framebuffer console holds it. Measured on this host 2026-11-26:
+
+```text
+$ cat /sys/module/sm750hdmidrm/version            # 0.6.5, the DKMS tree has 0.6.7
+0.6.5
+$ cat /sys/module/sm750hdmidrm/srcversion
+76EE5488E11276C6D8610B7
+$ ls /sys/module/sm750hdmidrm/holders/
+$ cat /sys/module/sm750hdmidrm/refcnt
+1
+$ sudo -n /usr/bin/modprobe -r sm750hdmidrm
+modprobe: FATAL: Module sm750hdmidrm is in use.
+```
+
+`refcnt` is 1 with an empty `holders/` directory, so the reference is not a
+module: it is the built-in framebuffer console bound to the SM750 vtconsole
+(`/sys/class/vtconsole/vtcon1/name` = `(M) frame buffer device`, `bind` = 1).
+Writing `0` to that `bind` file releases the reference, and writing `1` takes
+it back. `/usr/bin/tee` and `/usr/bin/systemctl` are not on the allowlist, so
+a bare sudo rule cannot perform that write; the helper is the grant.
+
+Modes, one line each:
+
+| Mode | State change | Root |
+| --- | --- | --- |
+| `show` | none, read-only | no, `show` runs as `coder` |
+| `off` | unbind fbcon, `modprobe -r`, `modprobe`, re-bind fbcon | yes |
+| `on` | re-bind fbcon only, for recovery after an interrupted `off` | yes |
+
+Allowlist lines, one line each, no argument restrictions beyond the helper's
+own argv check and no colons:
+
+```sudoers
+coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-vt off
+coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-vt on
+```
+
+`show` needs no allowlist line because it changes nothing and reads only
+world-readable files (`/sys/class/vtconsole/*`, `/sys/module/sm750hdmidrm/*`,
+`/sys/class/tty/tty0/active`) plus the `/proc/*/fd` table for the holder scan.
+The helper refuses `off` and `on` with `sm750-vt: must run as root` when the
+caller is not root, so `show` is the only mode that works unprivileged.
+
+**Hazard, and it is why `off` is not automatic: while fbcon is unbound there
+is no text console on any VT.** Run `off` from an SSH session or from the
+serial console, never from the SM750 monitor itself at `tty1`
+(`/sys/class/tty/tty0/active` reads `tty1` on this host). The window is
+normally a few hundred milliseconds; if the reload fails the helper's EXIT
+trap re-binds fbcon and the message says so, and if the process is killed
+outright, `sm750-vt on` restores the console from another terminal.
+
+Resolution basis, stated by the helper itself: the target is the **sole
+vtconsole whose name contains `frame buffer device`**, cross-checked against
+`basename $(readlink -f /sys/bus/pci/devices/0000:01:00.0/driver)` =
+`sm750hdmidrm`. It is not a hardcoded `vtcon1`: kernel 7.3.4 exposes no
+`device` link under a vtconsole directory, `/sys/class/graphics/` carries only
+`fbcon` (because `CONFIG_FB_DEVICE` is unset), and there is no `fb0` to walk,
+so the class glob plus the driver check is the only measurable basis available.
+Zero candidates and more than one candidate are both refused with a message
+that lists what was found.
+
+Shape of `show`, with the values measured read-only on 2026-11-26. The helper
+has not been executed on this host - it is not installed - so this is its
+documented layout, not a captured transcript; the numbers are the sysfs values
+above.
+
+```text
+vtconsole:    /sys/class/vtconsole
+  vtcon0       bind=0 name=(S) VGA+
+  vtcon1       bind=1 name=(M) frame buffer device
+target:       /sys/class/vtconsole/vtcon1
+basis:        sole framebuffer vtconsole on the host, with the sole sm750hdmidrm card (card0, 0000:01:00.0); not by a hardcoded index
+  bind now:   1
+module:       version=0.6.5 srcversion=76EE5488E11276C6D8610B7 refcnt=1
+active tty:   tty1
+card:         /dev/dri/by-path/pci-0000:01:00.0-card -> /dev/dri/card0 inode 9:297
+holders:      0 userspace processes hold the card
+```
+
+Guard rails: it refuses when fbcon is already unbound (`run 'sm750-vt on'`),
+when any process holds the card (it prints `pid:comm` per holder instead of
+letting `modprobe -r` fail with `Module ... is in use`), and when the version
+file does not appear after the load. Every sysfs write is read back before it
+is reported, so no line claims success that sysfs does not confirm. While
+`fbcon` is unbound the module reference count is 0 and `modprobe -r` proceeds;
+this is the exact reference the measured error above names.
+
+What it does not touch: the DRM modes, the panel, the EDID, the udev ACL rule
+and the sudoers allowlist. It changes the vtconsole `bind` values and the
+module in memory, and nothing else.
+
+Exit codes: 0 success, 1 environment or restore problem, 2 usage error, 3 a
+measured expectation failed (a bind write that did not take, or a load with no
+version file).
+
+Status: the two allowlist lines are INSTALLED (verified read-only on
+2026-11-26 with `sudo -n -l | grep sm750-vt`, which prints
+`(root) NOPASSWD: /usr/local/sbin/sm750-vt off` and
+`(root) NOPASSWD: /usr/local/sbin/sm750-vt on`); the helper body is NOT
+installed and the reload is NOT YET OBSERVED. Installing the body and running
+`sm750-vt off` are the owner's action; the evidence file
+`docs/evidence/runtime/41-vt-hot-reload.txt` records the measured blocker, the
+sysfs paths and an explicit NOT YET OBSERVED section.
+
+**Refresh (host owner, root), from the repository root:**
+
+```sh
+sudo install -m 0755 -o root -g root tools/sm750-vt.sh /usr/local/sbin/sm750-vt
+sha256sum /usr/local/sbin/sm750-vt tools/sm750-vt.sh
+/usr/local/sbin/sm750-vt show
+```
+
+The two `sha256sum` digests must match, and `show` must name `vtcon1` on this
+host with `bind now: 1`. Until the `install` line runs, the allowlist entries
+resolve to a file that does not exist and `sudo -n sm750-vt show` fails with
+`command not found`, which is the state measured on 2026-11-26.
 
 ## 4. udev ACL rule
 

@@ -3665,3 +3665,92 @@ Still open and belonging to the owner: reinstall the helper with
 bytes / sha256 bc1d3a06...), then install 0.6.7. The isolated compositor run
 itself is NOT YET OBSERVED and I will not run a compositor while the owner's
 session is live.
+
+### 2026-11-26T06:06Z | orchestrator | T60 and A50: the module can be reloaded without a reboot
+
+A rebuilt module could not be loaded while the framebuffer console held it.
+Measured: `/sys/module/sm750hdmidrm/version` read `0.6.5` with srcversion
+`76EE5488E11276C6D8610B7` while the DKMS tree already carried 0.6.7 with
+srcversion `FF25FF6111B7C6D174A72F8`, and every unload ended with
+`modprobe: FATAL: Module sm750hdmidrm is in use.` (rc 1, and the same verdict
+from `/usr/bin/modprobe -n -r`, so it is not a dry-run artefact). The reference
+is not userspace: `refcnt` reads 1, `/sys/module/sm750hdmidrm/holders/` is empty,
+and a scan of `/proc/[0-9]*/fd` against the `9:297` device of
+`/dev/dri/card0` found 0 holders. It is the built-in framebuffer console bound
+to the card's vtconsole: `/sys/class/vtconsole/vtcon1/name` reads
+`(M) frame buffer device` with `bind` 1, `vtcon0` is `(S) VGA+` with `bind` 0,
+`/sys/module/fbcon` does not exist (fbcon is built in), and
+`CONFIG_FRAMEBUFFER_CONSOLE=y` with `# CONFIG_FB_DEVICE is not set` is why there
+is no `fb0` either.
+
+Fix: `tools/sm750-vt.sh` (279 lines, 9226 bytes, sha256 `4e2b3ab7fb6f8f68b700
+ac373fff2d24bdc597106ea146ed71ddb20c7954a91b`), installed as
+`/usr/local/sbin/sm750-vt`, with modes `show`, `off` and `on`. `off` writes 0 to
+the resolved vtconsole's `bind`, runs `modprobe -r sm750hdmidrm`, runs
+`modprobe sm750hdmidrm`, waits for `/sys/module/sm750hdmidrm/version`, and writes
+1 back; one EXIT trap re-binds fbcon on every failing path and re-raises the
+original status. The target is resolved by globbing `/sys/class/vtconsole` for
+the sole `frame buffer device` name and cross-checked against the
+`0000:01:00.0` driver, never by a hardcoded index, because kernel 7.3.4 exposes
+no `device` link under a vtconsole and `/sys/class/graphics/` holds only
+`fbcon`; zero or several candidates are refused. Every bind write is read back,
+and the unload is refused while a process holds the card, naming the holders.
+`show` changes nothing and runs unprivileged; `on` re-binds fbcon as the
+recovery path.
+
+Guard: `tests/check-vt-helper.sh` (287 lines), static only, 10 assertions and 5
+planted controls (`never-restore`, `hardcoded-vtcon`, `modprobe-order-reversed`,
+`version-readback-removed`, `holder-check-dropped`), all rejected. Wired at
+`tests/check-drm-policy.sh:279-287` and added to the
+`tests/check-scratch-policy.sh` census, which now reports 21 scripts. It adds no
+`make check` recipe command, so the count stays 18.
+
+Recorded: defect A50 row `docs/DEFECTS.md:109` and detail `:1062`, gate S24 in
+`docs/TEST-STRATEGY.md` (row `:109`, detail `:703`), section 3.12 of
+`docs/ROOT-ACTIONS.md`, rows in `docs/DELIVERABLES.md:451-452`, the operator
+paragraph and gate row in `README.md` (`:842`, `:1043`), evidence
+`docs/evidence/runtime/41-vt-hot-reload.txt`, and decision 86 in the plan of
+record.
+
+Still open and belonging to the owner: install the helper with
+`sudo install -m 0755 -o root -g root tools/sm750-vt.sh /usr/local/sbin/sm750-vt`
+and then run `sudo sm750-vt off`. The two allowlist lines are already present in
+`sudo -n -l`, but the file itself is missing - `ls -l /usr/local/sbin/sm750-vt`
+fails - so the reload is NOT YET OBSERVED. I did not run the helper, did not
+write sysfs and did not call modprobe: `off` removes the text console for the
+duration of the reload and that risk is the operator's to take deliberately. No
+process owned by the machine owner was touched.
+
+### 2026-11-26T06:09Z | orchestrator | T60 count pass: four stale totals corrected
+
+The counts in `README.md` and `docs/DELIVERABLES.md` were re-measured after
+staging the three new files and four of them were stale. Corrected:
+`README.md:77` defect findings 45 (A01-A45) -> 49 (A01-A50), trackable as
+`grep -c '^| A[0-9]* |' docs/DEFECTS.md` = 49 rows, A31 being a detail-only
+section with no table row; `README.md:79` 30 gate scripts -> 31
+(`git ls-files 'tests/check-*.sh' | wc -l`); `README.md:84` 47 runtime
+transcripts -> 48 (`git ls-files docs/evidence/runtime/ | wc -l`);
+`docs/DELIVERABLES.md:130` 144 payload files -> 146
+(`git ls-files -- . ':(exclude)docs/plan' ':(exclude)docs/evidence'
+':(exclude)docs/images' ':(exclude)docs/notes' | wc -l`).
+
+`make check` still runs 18 commands, so the "18 commands in make check" figure
+in `README.md:79` and in `docs/TEST-STRATEGY.md:751` stands unchanged; the new
+VT gate is reached through `tests/check-drm-policy.sh:287` and adds no recipe
+line. Historical logbook entries quoting 143/144 payload files, 30 gate scripts
+and 43/44/46/47 transcripts were left untouched: this file is append-only.
+
+Evidence: `./build-package.sh` then `./tests/audit-release.sh` both exit 0,
+`git diff --check` clean, and `grep -cP '[^\x00-\x7F]'` is 0 on all twelve
+touched paths.
+
+### 2026-11-26T06:09Z | orchestrator | correction: the A49 entry header time was an hour ahead
+
+Corrects the header of the entry `### 2026-11-26T07:15Z | orchestrator | A49: the
+headless helper took the owner's input, and is now sealed` (line 3612). That
+timestamp is in the future relative to `date -u`, which reads 2026-11-26T06:09Z at the time of
+writing, so the header should read a time at or before the commit it describes.
+The body of the entry and its measurements are unaffected; only the header time
+is wrong. The entry is left in place unedited, as this file is append-only.
+
+Evidence: `date -u +%Y-%m-%dT%H:%MZ` and `grep -n '^### 2026-11-26T' docs/LOGBOOK.md`.

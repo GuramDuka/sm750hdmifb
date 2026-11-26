@@ -276,4 +276,13 @@ test "$stage_count" -ge 6 || {
 # has no 3D engine. Source-level with three planted controls; the live half
 # skips while the running module predates the change.
 ./tests/check-render-node.sh
+# T60: the VT hot-reload helper tools/sm750-vt.sh and its recovery mode. The
+# target vtconsole is resolved by globbing /sys/class/vtconsole (never a
+# hardcoded index) and confirmed by the PCI driver of 0000:01:00.0, the unload
+# is refused while userspace holds the card, modprobe -r precedes modprobe, the
+# loaded version is read back from sysfs, bind 0 detaches and bind 1 restores
+# with a read-back, and one EXIT trap re-binds fbcon on every non-zero exit
+# while preserving the status. Source-level only; it never writes sysfs, calls
+# modprobe or needs root.
+./tests/check-vt-helper.sh
 echo "DRM mode policy checks passed"

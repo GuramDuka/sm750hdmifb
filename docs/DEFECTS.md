@@ -37,7 +37,10 @@ where `crtc.index` was rendered `n/a (malformed active_crtc attribute)` on
 an idle pipe (`docs/evidence/runtime/39-smi-inactive-crtc.txt`), and `A49`, by
 the headless-helper incident of 2026-11-26, where a weston run took the
 machine owner's physical keyboard and mouse
-(`docs/evidence/runtime/40-headless-input-isolation.txt`).
+(`docs/evidence/runtime/40-headless-input-isolation.txt`), and `A50`, by the
+T60 hot-reload work, which measured that a rebuilt module cannot be loaded
+while the framebuffer console holds it
+(`docs/evidence/runtime/41-vt-hot-reload.txt`).
 They are
 recorded here because this
 table is the current defect state, not a copy of the audit. [AUDIT.md](AUDIT.md)
@@ -103,6 +106,7 @@ after (working tree) form of every fixed item. All logs were produced unprivileg
 | A47 | S2 | KWin 6.7.5 on `/dev/dri/card0` could not create a framebuffer: `kwin_wayland_drm: Failed to create framebuffer` (EINVAL) appeared **359** times in one session, after which the scanout died - `PANEL_CURRENT_LINE` froze at `0x00000000` and the panel showed nothing. The driver is not buggy here: `drm_simple_display_pipe_init()` is called with a NULL `format_modifiers` argument (`src/sm750_drm.c:4625-4626`), which per `include/drm/drm_plane.h:885` and `:929` makes the plane advertise exactly `DRM_FORMAT_MOD_LINEAR`. A direct probe confirmed the plane is correct: `CAP_ADDFB2_MODIFIERS=1`, plane 36 formats `0x34325258` with an IN_FORMATS blob of `[0x34325258 LINEAR]`, AddFB2 succeeding both with no flag and with `DRM_FORMAT_MOD_LINEAR`, and failing `errno 22` only for `MOD_INVALID` and bogus modifiers, which is correct core behaviour (the NVIDIA card on this host behaves identically). KWin therefore submits a modifier the plane does not advertise, most likely `DRM_FORMAT_MOD_INVALID` on its CPU-import path, so the advertisement and the client disagree rather than the driver mis-executing an operation | fixed in 0.6.7; observed on KWin 6.7.5 only | the device withdraws the modifier capability: `drm->mode_config.fb_modifiers_not_supported = 1;` set unconditionally in `sm750_modeset_init()` directly after the `drm->mode_config.funcs` selection (`src/sm750_drm.c:4606`), with the reason in the comment above the two `drm_mode_config_funcs` structs (`:4344-4350`). The flag is a `struct drm_mode_config` field, not a `drm_mode_config_funcs` member (`include/drm/drm_mode_config.h:943-951`), so a single assignment covers both the VRAM/TTM and the shmem shadow device; the NULL `format_modifiers` argument is deliberately kept, since the plane still advertises LINEAR and nothing invents a modifier list. Core then reports `DRM_CAP_ADDFB2_MODIFIERS=0` and every client, not just kwin with an environment variable, takes the modifiers-free AddFB2. Guards: `tests/check-render-node.sh` gained `check_fb_modifiers()` (both funcs structs defined and installed, the flag present, and the flag on the line immediately after the two-line funcs selection so a guard cannot withdraw it for one device only) with two planted controls `fb_modifiers_dropped` and `fb_modifiers_branched` | `docs/evidence/runtime/38-modifier-rejection.txt` (the session that produced the 359 lines is `docs/evidence/runtime/37-plasma-wayland.txt`) |
 | A48 | S3 | The monitoring tool misread the driver's own "no output enabled" marker. `active_crtc_show()` (`src/sm750_drm.c:4933-4949`) emits `drm_crtc_index()` only while `crtc->enabled`, and `-1` otherwise, but `get_crtc_index()` (`tools/sm750-smi.c:1106-1140`) passed the raw string to `parse_u64()`, which rejects a leading `-` by design for every other attribute. An idle pipe therefore rendered `crtc.index  n/a (malformed active_crtc attribute)` instead of an honest "nothing is enabled", which sends an operator hunting a driver bug that does not exist. Measured on the target host before the fix: `cat /sys/class/drm/card0/device/active_crtc` = `-1`, `sm750-smi | grep crtc` = `n/a (malformed active_crtc attribute)` | fixed in 0.6.7 | `get_crtc_index()` recognises exactly the literal `-1` before the numeric parse and reports the new `reason_no_active_crtc` constant (`tools/sm750-smi.c:107`), which renders `n/a (no active CRTC)`; the libdrm fallback reaches the same reason when `drm_crtc_index()` returns `< 0`, so sysfs and DRM agree and the old `no active CRTC exposed by sysfs or DRM` string survives only for the "neither source readable" case. The check is not weakened: any other non-numeric or signed value still fails `parse_u64()` and stays `malformed active_crtc attribute`. Guards: `tests/check-sm750-smi.sh` fixtures F8b (`-1` must be `n/a (no active CRTC)` and must not contain `malformed`) and F8c (`bogus` must be `malformed active_crtc attribute` and must not contain `no active CRTC`), plus planted control 5 `minus-one-is-malformed`, which rewrites the `strcmp(buf, "-1")` guard to `if (0)` and must be rejected; the gate adds no `make check` recipe command | `docs/evidence/runtime/39-smi-inactive-crtc.txt` |
 | A49 | S2 | A headless compositor run took the machine owner's input devices. `sm750-headless weston 600` started weston as root with `--backend=drm`, whose DRM backend opens libinput directly, so the `WLR_LIBINPUT_NO_DEVICES=1` the helper exported - a wlroots variable - had no effect. The run log of `20261126T033248Z-weston` records the grab: `[06:32:48.349] event2  - HID 04f3:0103: device is a keyboard`, `[06:32:48.355] event6  - HID 0557:2419: device is a keyboard`, `[06:32:48.357] event7  - HID 0557:2419: device is a pointer`, `[06:32:48.359] event5  - Genius Optical Mouse: device is a pointer`, and eight `libinput: configuring device` lines in total. The owner lost keyboard and mouse for ten minutes and powered the machine off. Weston exited with `rc=0` at 06:42:51, so the helper's own verdict was FAIL for the wrong reason (`weston did not survive 600s`) and said nothing about the grab. No argument can prevent this: in weston 14.0.2 `--no-input` is documented only under `Options for x11:`, and the DRM backend's options are `--seat`, `--drm-device`, `--additional-devices`, `--use-pixman`, `--current-mode` and `--continue-without-input`, the last meaning only that weston starts with zero input devices and not that it stops opening devices it finds. cage 0.2.x has no input-related option at all (`-d`, `-m`, `-s`, `-v`, `-h`). Root cause chain: `coder` has no logind seat (`loginctl list-sessions` shows seat0 only for the owner's session, and that session has `Seat=` empty, `Remote=yes`), so the helper's `LIBSEAT_BACKEND=noop` - the only usable libseat backend here, since `seatd` is not installed - opens the evdev node directly with nobody arbitrating | fixed | `tools/sm750-headless.sh` starts both compositor arms inside a private mount namespace whose `/dev/input` is an empty tmpfs: `isolate()` at `tools/sm750-headless.sh:244-253` runs `exec /usr/bin/unshare --mount --propagation private /bin/sh -c '... mount -t tmpfs -o size=1M,mode=0755 tmpfs /dev/input ...; exec "$@"'`, so the mount exists only for the compositor's own namespace and disappears with it. `--propagation private` is mandatory because `/dev` on this host is a shared mount (`/proc/self/mountinfo` field 7 = `shared:2`), and a mount made under shared propagation can reach the host; the pre-exec guards refuse to start a compositor if `/usr/bin/unshare` or `/usr/bin/mount` is missing (`:85-114`), the isolation is announced once on the console and recorded in `$out/00-plan.txt`, and kmscube keeps its plain `exec` because it takes no input. The `WLR_LIBINPUT_NO_DEVICES=1` export is kept with a comment stating it is a wlroots variable that weston never reads (`:221-224`), so the namespace is the real guard. Guards: `tests/check-headless-helper.sh` section k asserts the private namespace, the exact tmpfs mount, the announcement, `00-plan.txt`, `isolate` in both the weston and the cage arm, its absence from the kmscube arm, and that the mount line precedes both compositor calls; two planted controls, `input-isolation-dropped` (both arms exec directly) and `isolation-one-mode-only` (cage unprotected), must be rejected. Gate count 11 assertions / 12 planted controls (section k added one assertion to the pre-existing ten and two controls to the pre-existing ten) | `docs/evidence/runtime/40-headless-input-isolation.txt` |
+| A50 | S3 | A rebuilt `sm750hdmidrm` could not be loaded without a reboot. The loaded module was 0.6.5 (`/sys/module/sm750hdmidrm/version` = `0.6.5`, `srcversion` = `76EE5488E11276C6D8610B7`) while DKMS had already built 0.6.7 for every installed kernel (`/lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz`, `srcversion` = `FF25FF6111B7C6D174A72F8`), and every unload was refused with `modprobe: FATAL: Module sm750hdmidrm is in use.` (`rc` 1). The refusal is not a hidden userspace reference: `/sys/module/sm750hdmidrm/refcnt` reads `1` while `/sys/module/sm750hdmidrm/holders/` is **empty**, and no process holds the card (a `/proc/[0-9]*/fd` scan against the `9:297` device of `/dev/dri/card0` finds 0 holders). The reference is the built-in framebuffer console bound to the card's vtconsole: `/sys/class/vtconsole/vtcon1/name` reads `(M) frame buffer device` with `bind` = 1, and `vtcon0` is `(S) VGA+` with `bind` = 0. Testing the mode by hand needs a root write to `vtcon1/bind`, and the sudoers allowlist carries `/usr/bin/modprobe sm750hdmidrm` and `-r sm750hdmidrm` but no `tee`, no `systemctl` and no `reboot`, so no existing grant can perform the write; before this task the only way to run a rebuilt module was a host reboot. The two narrow allowlist lines for the helper are already installed (`sudo -n -l` prints `/usr/local/sbin/sm750-vt off` and `/usr/local/sbin/sm750-vt on`, verified 2026-11-26), but the helper body is not: `ls -l /usr/local/sbin/sm750-vt` fails with `No such file or directory`, so the reload is blocked on installing the file, not on the grant | fixed in the tree; the helper is NOT YET INSTALLED, so the reload is not yet observed | `tools/sm750-vt.sh` (279 lines, sha256 `4e2b3ab7fb6f8f68b700ac373fff2d24bdc597106ea146ed71ddb20c7954a91b`) writes `0` to the resolved vtconsole's `bind`, runs `modprobe -r sm750hdmidrm`, runs `modprobe sm750hdmidrm`, waits for `/sys/module/sm750hdmidrm/version` to appear (the driver registers its fbdev client from `drm_client_setup` at `src/sm750_drm.c:5266`, after `drm_dev_register` at `:5262`, so the attribute can lag the load by a moment), and writes `1` back. The target is never a hardcoded index: `fb_vtcons()` globs `/sys/class/vtconsole/vtcon*` for a name containing `frame buffer device` and `resolve_target()` requires exactly one candidate cross-checked against `basename $(readlink -f /sys/bus/pci/devices/0000:01:00.0/driver)` = `sm750hdmidrm`; zero or more than one candidate is refused with the candidates listed, because kernel 7.3.4 exposes no `device` link under a vtconsole and `/sys/class/graphics/` carries only `fbcon` (`CONFIG_FB_DEVICE` is unset), so no finer basis is measurable here. Every bind write is read back, the unload is refused while a userspace process holds the card (it prints `pid:comm` instead of a modprobe error), and one EXIT trap re-binds fbcon on any non-zero exit while re-raising the original status. `on` re-binds fbcon alone as the recovery path after an interrupted `off`. Hazard the helper documents and this row repeats: while fbcon is unbound there is no text console on any VT, so `off` is not to be run from the SM750 monitor itself. Guards: `tests/check-vt-helper.sh`, 10 assertions and 5 planted controls (`never-restore`, `hardcoded-vtcon`, `modprobe-order-reversed`, `version-readback-removed`, `holder-check-dropped`) in `--self-test`, registered at `tests/check-drm-policy.sh:279-287` and counted in the `tests/check-scratch-policy.sh` census (20 -> 21 scripts); it adds no `make check` recipe command | `docs/evidence/runtime/41-vt-hot-reload.txt` |
 
 ## Deferred and accepted items in detail
 
@@ -1054,3 +1058,81 @@ incident timeline, the quoted log lines, the loginuid proof, the namespace
 rationale, the non-leak measurement and an explicit NOT YET OBSERVED section:
 the isolated run has not been executed on the host because the installed copy
 must be refreshed first.
+
+### A50 - a rebuilt module could not be hot-reloaded because fbcon held it (fixed in the tree; helper NOT YET INSTALLED)
+
+Measured 2026-11-26 on the target host, kernel `7.3.4-100.fc43.x86_64`:
+
+```text
+$ cat /sys/module/sm750hdmidrm/version
+0.6.5
+$ cat /sys/module/sm750hdmidrm/srcversion
+76EE5488E11276C6D8610B7
+$ cat /sys/module/sm750hdmidrm/refcnt
+1
+$ ls -A /sys/module/sm750hdmidrm/holders/
+$ sudo -n /usr/bin/modprobe -r sm750hdmidrm
+modprobe: FATAL: Module sm750hdmidrm is in use.
+rc 1
+$ cat /sys/class/vtconsole/vtcon1/name
+(M) frame buffer device
+$ cat /sys/class/vtconsole/vtcon1/bind
+1
+$ cat /sys/module/fbcon/version
+(no such directory: fbcon is built in, not a module)
+```
+
+The 0.6.7 module that the DKMS tree already holds differs by `srcversion`
+(`FF25FF6111B7C6D174A72F8`), so the running driver is the previous build and
+every fix landed since 0.6.5 needs either a reboot or a released reference.
+
+Why `refcnt` is 1 with an empty `holders/` directory: a module's reference
+count includes non-module users, and the framebuffer console is built in
+(`CONFIG_FRAMEBUFFER_CONSOLE=y`, `CONFIG_FB_DEVICE` unset). fbcon registers a
+vtconsole per registered `fb_info` and binds it, which is the vtcon whose name
+reads `(M) frame buffer device`. The card's fbdev client comes from the driver's
+own `drm_client_setup` (`src/sm750_drm.c:5266`), registered after
+`drm_dev_register` (`:5262`). Unbinding that console drops the reference and
+`modprobe -r` then proceeds; binding it again restores the console.
+
+The mechanism was previously available only as a manual root write, and no
+allowlist entry can express it: `/etc/sudoers.d/10-sm750-debug` grants
+`/usr/bin/modprobe sm750hdmidrm` and `/usr/bin/modprobe -r sm750hdmidrm` but
+neither `/usr/bin/tee` nor a shell, so a bare grant cannot write `bind`. The
+helper exists so the write is reachable with two narrow NOPASSWD lines that
+take no arguments beyond `off` and `on`
+(`docs/ROOT-ACTIONS.md` section 3.12).
+
+Deliberate limits, so the next reader does not mistake them for omissions:
+
+- The target is resolved from the class glob, not from an index. Kernel 7.3.4
+  gives a vtconsole directory only `bind`, `name`, `power`, `subsystem` and
+  `uevent` - there is no `device` link - and `/sys/class/graphics/` holds only
+  `fbcon` because `CONFIG_FB_DEVICE` is unset, so neither the device tree nor an
+  `fb0` node can attribute the console to a driver. The available basis is
+  therefore "the sole framebuffer vtconsole", cross-checked against the SM750
+  PCI driver, and more than one candidate is a refusal rather than a guess.
+- `show` changes nothing and runs unprivileged; `off` and `on` refuse without
+  root. `off` also refuses when fbcon is already unbound and when any process
+  holds the card, naming the holders, because `modprobe -r` would fail anyway
+  and its error does not say who.
+- The reload is a console-visibility risk by nature, not by implementation:
+  while fbcon is unbound there is no text console on any VT. The helper says so
+  before it writes, restores on every failing path, and `on` exists for the case
+  where the process was killed outright.
+- Nothing verifies the loaded module's behaviour beyond the version attribute.
+  A load that succeeds and a driver that works are different claims; the
+  behavioural run is the owner's, and the evidence file records it as NOT YET
+  OBSERVED.
+
+Residual note, explicitly out of scope: an automatic reload triggered by a
+package transaction (a DKMS post-install hook) is not implemented and is not
+proposed here. A post-install hook runs inside the transaction, where an
+unbound console plus a failed load would leave a machine with no text console
+and no rollback; this helper is a deliberate, operator-initiated action with a
+recovery mode instead.
+
+Evidence: `docs/evidence/runtime/41-vt-hot-reload.txt` records the measured
+blocker, the sysfs paths, the resolution basis, the helper's step order and an
+explicit NOT YET OBSERVED section: the helper is not installed on the host, so
+the reload has not been executed.

@@ -74,14 +74,14 @@ packaged tarball.
 | Measure | Value |
 | --- | --- |
 | Driver source | 11252 lines of C and headers under `src/` |
-| Defect findings tracked | 45, from A01 to A45, each with a disposition |
+| Defect findings tracked | 49, from A01 to A50, each with a disposition |
 | Acceptance criteria | 6 PASS, 0 FAIL, 1 GAP - the gap is pixel-level capture at the panel, which needs a human or capture hardware |
-| Project gates | 30 gate scripts, 18 commands in `make check`, seven opt-in verification targets with planted-defect controls |
+| Project gates | 31 gate scripts, 18 commands in `make check`, seven opt-in verification targets with planted-defect controls |
 | Kernel and format matrix | 9 combinations, kernel 6.17.1 through the 7.4 daily headers |
 | IGT KMS subset | 26 pass, 14 skip, 1 fail by design |
 | GL path | `kmscube`, 299 frames in 5.07 s, 59.01 fps on llvmpipe |
 | Vblank rate | 60.43 per second measured over 120 events |
-| Evidence | 47 runtime transcripts, 28 build transcripts and 7 packaging transcripts under `docs/evidence/` |
+| Evidence | 48 runtime transcripts, 28 build transcripts and 7 packaging transcripts under `docs/evidence/` |
 | Documentation | 22 documents under `docs/`, plus the specification archive and the deck |
 
 ### How a claim is checked
@@ -839,6 +839,29 @@ and records the same line, with the `unshare` and `mount` commands used, in
 only guard: weston's DRM backend offers no `--no-input` (that option is x11
 only) and cage has no input option at all.
 
+`tools/sm750-vt.sh` (installed as `/usr/local/sbin/sm750-vt`, root only for
+`off` and `on`) covers the other half of the reload problem: a rebuilt module
+stays unloadable while the built-in framebuffer console is bound to the SM750
+vtconsole, because that console is the reference behind
+`modprobe: FATAL: Module sm750hdmidrm is in use.`. The helper writes `0` to the
+resolved vtconsole's `bind`, reloads the module, verifies the version attribute
+after the load, and writes `1` back:
+
+```sh
+sudo sm750-vt show      # read-only: vtconsoles, resolved target, module, holders
+sudo sm750-vt off       # unbind fbcon, modprobe -r, modprobe, re-bind
+sudo sm750-vt on        # re-bind fbcon only, recovery after an interrupted off
+```
+
+While fbcon is unbound there is no text console on any VT, so `off` is run from
+an SSH or serial session, never from the SM750 monitor; the helper prints that
+warning itself, refuses while a process holds the card, and re-binds the console
+from an EXIT trap on every failing path. The target is resolved by globbing
+`/sys/class/vtconsole`, never by a hardcoded index, and more than one candidate
+is a refusal. Defect A50 in `docs/DEFECTS.md` records the measured blocker; the
+installed copy and the two allowlist lines are the owner's action
+(`docs/ROOT-ACTIONS.md` section 3.12).
+
 `SECONDS` defaults to 20 and is clamped to 1..600; no other argument is
 accepted. The compositors run with `LIBSEAT_BACKEND=noop`, so they open the
 DRM device directly and never touch seat0, logind or a VT; `cage` gets no `-s`
@@ -1017,6 +1040,7 @@ VBIOS and scanout checks are documented in
 | `tests/check-sysfs-attributes.sh` | Source-level gate for the twelve monitoring attributes `sm750-smi` reads from `/sys/class/drm/cardN/device/`: names and array entries, the group on the PCI device before `drm_dev_register`, `sysfs_emit()` with no sleep and no lock beyond the mode lock in every show function, `clear_events` false on the link-status read; five planted controls |
 | `tests/check-headless-helper.sh` | Source-level gate for `tools/sm750-headless.sh`: POSIX `sh` plus `sh -n`, the five modes and the usage path, the `0000:01:00.0` / `sm750hdmidrm` binding test, `LIBSEAT_BACKEND=noop` and never `builtin`, the weston, cage and kmscube argument sets read out of the executed switch arms (`-s` rejected on cage, `-n` rejected on kmscube), the `SECONDS` numeric test and 1..600 clamp, the survivor and vblank failures, TERM before KILL on an EXIT trap, no local absolute path and no non-ASCII byte, and that both compositor arms run in a private mount namespace with an empty `/dev/input` (`unshare --mount --propagation private` plus a tmpfs over `/dev/input` mounted before the exec, `isolate` in the weston arm and in the cage arm and absent from the kmscube arm, `WLR_LIBINPUT_NO_DEVICES` documented as wlroots-only); twelve planted controls in `--self-test`, no compositor, no root and no card needed |
 | `tests/check-render-node.sh` | Source-level and live gate for the render node: both `driver_features` lines in `src/sm750_drm.c` carry `DRIVER_RENDER` beside `DRIVER_MODESET`, no executable line sets `DRIVER_RENDER` without `DRIVER_MODESET`, `SM750_DRM_VERSION` agrees with `build-package.sh`, and a live `renderD*` node owned by `sm750hdmidrm` must be writable by the invoking user; three planted controls `render_dropped`, `render_only` and `version_drift` in `--self-test`, one `SKIP:` line before a 0.6.5 module is loaded |
+| `tests/check-vt-helper.sh` | Source-level gate for `tools/sm750-vt.sh`, the hot-reload helper: the three modes and the usage path, the class-glob vtconsole resolution with no `vtconN` literal, the PCI driver cross-check, `bind` 0 and 1 each read back, one EXIT trap that restores fbcon on any failure, the holder gate on the unload, `modprobe -r` before `modprobe`, and the post-load version read-back; ten assertions and five planted controls in `--self-test`, no sysfs write, no modprobe, no root and no card needed |
 | `make console-check` | Opt-in console reachability: writes to the foreground VT, then requires the `sm750_scanout` window to carry content, to differ from the all-zero sentinel `0xe20eea22` and to report the `PANEL_FB_ADDRESS` offset; exits 77 (a skip) without root, card or a `KD_TEXT` foreground VT |
 | `make crc-check` | Opt-in live scanout readback: enables the CRTC CRC source `scanout`, checks that entries arrive, stay constant for a static frame, change with the content and agree with the `sm750_scanout` debugfs dump; exits 77 (a skip) without root, card or an active CRTC |
 | `make check-pkg` | Self-tests for the sudo package helper (`tools/sm750-pkg.sh` into `/usr/local/sbin/sm750-pkg`): stubbed dnf/dkms/rpm through a temporary PATH, so no package is touched and no root is needed; nine groups |

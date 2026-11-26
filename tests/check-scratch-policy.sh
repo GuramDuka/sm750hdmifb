@@ -44,6 +44,7 @@ scripts=(
 	tests/check-sysfs-attributes.sh
 	tests/check-headless-helper.sh
 	tests/check-render-node.sh
+	tests/check-vt-helper.sh
 	tools/benchmark-staging.sh
 	tools/sm750-crc-cycle.sh
 )

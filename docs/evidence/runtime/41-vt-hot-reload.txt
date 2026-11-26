@@ -1,0 +1,244 @@
+================================================================================
+41 - the VT hot reload: what fbcon holds and what the helper does about it
+================================================================================
+
+Recorded 2026-11-26 by the T60 implementation session on the target host
+deneb, Fedora 43, kernel 7.3.4-100.fc43.x86_64. Everything in sections 1 to 5
+is READ-ONLY measurement: no sysfs write, no modprobe, no sudo, no compositor.
+Section 6 states what has NOT been observed and why.
+
+Defect: A50 in docs/DEFECTS.md.
+Helper: tools/sm750-vt.sh, installed as /usr/local/sbin/sm750-vt.
+Gate: tests/check-vt-helper.sh (static only).
+
+--------------------------------------------------------------------------------
+1. The blocker, measured
+--------------------------------------------------------------------------------
+
+The DKMS tree already carries the 0.6.7 module for every installed kernel; the
+running module is the previous build and cannot be unloaded:
+
+  $ uname -r
+  7.3.4-100.fc43.x86_64
+  $ cat /sys/module/sm750hdmidrm/version
+  0.6.5
+  $ cat /sys/module/sm750hdmidrm/srcversion
+  76EE5488E11276C6D8610B7
+  $ ls -l /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+  -rw-r--r--. 1 root root ... /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+  $ modinfo -F srcversion /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+  FF25FF6111B7C6D174A72F8
+  $ sudo -n /usr/bin/modprobe -r sm750hdmidrm
+  modprobe: FATAL: Module sm750hdmidrm is in use.
+  rc 1
+
+The dry run gives the same verdict, so the refusal is not an artefact of the
+real unload:
+
+  $ /usr/bin/modprobe -n -r sm750hdmidrm
+  modprobe: FATAL: Module sm750hdmidrm is in use.
+  rc 1
+
+The two srcversion values differ (76EE5488E11276C6D8610B7 loaded,
+FF25FF6111B7C6D174A72F8 on disk), which is the concrete statement that the
+loaded driver is not the built one. Every fix landed since 0.6.5 therefore
+needs either a reboot or a released reference.
+
+--------------------------------------------------------------------------------
+2. Why the reference count is 1 with an empty holders/ directory
+--------------------------------------------------------------------------------
+
+  $ cat /sys/module/sm750hdmidrm/refcnt
+  1
+  $ ls -A /sys/module/sm750hdmidrm/holders/
+  (empty)
+  $ ls /sys/module/fbcon
+  ls: cannot access '/sys/module/fbcon': No such file or directory
+  $ grep -nE '^CONFIG_(FB|FRAMEBUFFER_CONSOLE|DRM_FBDEV_EMULATION)' \
+      /boot/config-7.3.4-100.fc43.x86_64
+  7199:CONFIG_FB=y
+  7242:CONFIG_FB_CORE=y
+  7244:# CONFIG_FB_DEVICE is not set
+  7317:CONFIG_FRAMEBUFFER_CONSOLE=y
+  6967:CONFIG_DRM_FBDEV_EMULATION=y
+
+`refcnt` counts non-module users too, and the framebuffer console is built in,
+not a module, so it never appears under `holders/`. The console it registers for
+the card is a vtconsole:
+
+  $ ls /sys/class/vtconsole/
+  vtcon0  vtcon1
+  $ cat /sys/class/vtconsole/vtcon0/name
+  (S) VGA+
+  $ cat /sys/class/vtconsole/vtcon0/bind
+  0
+  $ cat -A /sys/class/vtconsole/vtcon1/name
+  (M) frame buffer device$
+  $ cat /sys/class/vtconsole/vtcon1/bind
+  1
+  $ cat /proc/consoles
+  tty0  -WU (EC p ) 4:1
+  $ cat /sys/class/tty/tty0/active
+  tty1
+
+`(M)` marks the vtconsole whose backing fb_info comes from a module, and the
+bind value 1 is the reference. Writing 0 to that `bind` file releases it, and
+writing 1 takes it back. The driver's fbdev client is registered from
+`drm_client_setup` at src/sm750_drm.c:5266, after `drm_dev_register` at
+src/sm750_drm.c:5262, which is why the version attribute can appear a moment
+after a load returns and why the helper waits for it in a bounded loop.
+
+No process holds the card, so the reference is not a leaked client either:
+
+  $ stat -L -c '%d %i' /dev/dri/card0
+  9 297
+  $ (scan of /proc/[0-9]*/fd for links resolving to card0)
+  0 holders
+
+--------------------------------------------------------------------------------
+3. How the target vtconsole is identified, and why not better
+--------------------------------------------------------------------------------
+
+Kernel 7.3.4 exposes no way to attribute a vtconsole to a driver:
+
+  $ ls /sys/class/vtconsole/vtcon1/
+  bind  name  power  subsystem  uevent
+
+There is no `device` link, so the usual "walk the device tree to the driver"
+rule cannot be used. The framebuffer class is equally unhelpful because no
+framebuffer character device is built:
+
+  $ ls /sys/class/graphics/
+  fbcon
+  $ ls /sys/class/graphics/fb[0-9]*
+  ls: cannot access '/sys/class/graphics/fb[0-9]*': No such file or directory
+  $ ls /dev/fb*
+  ls: cannot access '/dev/fb*': No such file or directory
+
+`CONFIG_FB_DEVICE` is unset, so `/dev/fb0` and `fb0` do not exist and
+`/proc/fb` is absent. What remains measurable is the class glob plus the PCI
+side of the card:
+
+  $ readlink -f /sys/bus/pci/devices/0000:01:00.0/driver
+  /sys/bus/pci/drivers/sm750hdmidrm
+
+The implemented basis is therefore: exactly one vtconsole whose `name` contains
+`frame buffer device`, cross-checked against the `0000:01:00.0` driver being
+`sm750hdmidrm`. Zero candidates and more than one candidate are refusals that
+list what was found. This is stated by the helper itself as the `basis:` line
+of `sm750-vt show`, and it is deliberately not a hardcoded `vtcon1`: on a host
+with two framebuffer consoles the index would be a guess.
+
+--------------------------------------------------------------------------------
+4. What the helper does, in order
+--------------------------------------------------------------------------------
+
+`show` - no state change, runs unprivileged: prints each vtconsole with its
+bind value, the resolved target and the basis string, the current bind, the
+module version/srcversion/refcnt, the active tty, the card node with its
+dev:inode, and the holder count with a `pid:comm` line per holder.
+
+`off` - the reload, root only:
+
+  1. resolve the target (section 3); refuse if not root
+  2. refuse if `bind` already reads 0, naming the `on` mode
+  3. refuse if any process holds the card, printing `pid:comm` per holder -
+     `modprobe -r` would fail with "is in use" and would not say who
+  4. announce: target, basis, and that there will be no text console until the
+     reload ends
+  5. write 0 to `$TARGET/bind`, read it back
+  6. `modprobe -r sm750hdmidrm`; on failure restore the console, say the console
+     was restored and nothing changed, exit 1
+  7. `modprobe sm750hdmidrm`; on failure exit 1 (the console stays detached
+     only for the length of the failing run; the EXIT trap restores it)
+  8. wait up to 20 x 0.1 s for `/sys/module/sm750hdmidrm/version`; if it never
+     appears, exit 3 with "is missing after the load"
+  9. write 1 to `$TARGET/bind`, read it back; exit 3 if the write does not take
+ 10. print the reloaded version, srcversion and refcnt, the restored bind and
+     the card's driver
+
+One EXIT trap covers every non-zero path: it re-binds fbcon if this run
+detached it and then re-raises the original status. The restore function ends
+in an explicit `return` because a trap whose last command can fail silently
+replaces the real exit status.
+
+`on` - recovery: refuses if `bind` already reads 1, otherwise writes 1, reads it
+back, prints the module line.
+
+Exit codes: 0 success, 1 environment or restore problem, 2 usage error, 3 a
+measured expectation failed.
+
+--------------------------------------------------------------------------------
+5. The grants the helper needs, and why no existing grant covers it
+--------------------------------------------------------------------------------
+
+`/etc/sudoers.d/10-sm750-debug` carries `/usr/bin/modprobe sm750hdmidrm` and
+`/usr/bin/modprobe -r sm750hdmidrm` but no `tee`, no `systemctl` and no
+`reboot`, so no existing line can write a sysfs `bind` file. The two lines the
+helper needs are in docs/ROOT-ACTIONS.md section 3.12:
+
+  coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-vt off
+  coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-vt on
+
+`show` needs no line: it changes nothing and reads only world-readable files.
+
+Source measured 2026-11-26:
+
+  $ wc -lc tools/sm750-vt.sh
+  279 9226 tools/sm750-vt.sh
+  $ sha256sum tools/sm750-vt.sh
+  4e2b3ab7fb6f8f68b700ac373fff2d24bdc597106ea146ed71ddb20c7954a91b
+  $ ls -l /usr/local/sbin/sm750-vt
+  ls: cannot access '/usr/local/sbin/sm750-vt': No such file or directory
+
+Static gate, run on the same day:
+
+  $ ./tests/check-vt-helper.sh
+  ok: a. the helper exists, starts with #!/bin/sh and passes sh -n
+  ok: b. modes show, off and on dispatch, anything else exits 2
+  ok: c. show may run unprivileged, off and on refuse without root
+  ok: d. the vtconsole is resolved by globbing the class, and an index is never used
+  ok: e. bind 0 detaches and bind 1 restores, each read back from sysfs
+  ok: f. one EXIT trap restores fbcon after any non-zero exit and keeps the status
+  ok: g. the holder refusal runs first and the unload precedes the load
+  ok: h. the version is read back from sysfs after the load
+  ok: i. off reports the unload and a failed restore points the operator at on
+  ok: j. helper structure checked
+  negative control never-restore: rejected
+  negative control hardcoded-vtcon: rejected
+  negative control modprobe-order-reversed: rejected
+  negative control version-readback-removed: rejected
+  negative control holder-check-dropped: rejected
+  negative control pristine: accepted
+  VT helper checks passed (10 assertions, 5 planted controls)
+  rc 0
+
+The gate is static by design: it reads the script text and parses it with
+`sh -n`. It never writes sysfs, never calls modprobe and needs no root, so it
+can run inside `make check`.
+
+--------------------------------------------------------------------------------
+6. NOT YET OBSERVED
+--------------------------------------------------------------------------------
+
+The reload itself has NOT been executed, and the helper is NOT installed:
+
+  * `/usr/local/sbin/sm750-vt` does not exist on the host (measurement in
+    section 5), so there is nothing to run yet.
+  * The two allowlist lines of section 5 are the host owner's action. No agent
+    holds a root credential on this host and the sudoers file is 0440 root:root.
+  * Unbinding fbcon from a remote session is a console-visibility risk that
+    must be taken deliberately: while it is unbound there is no text console on
+    any VT, so the run must not be started from the SM750 monitor at `tty1`.
+  * Consequently the transition 0.6.5 -> 0.6.7 in the running module, the
+    `refcnt` 1 -> 0 -> 1 sequence, the version attribute read-back after a real
+    load, and the `on`-mode recovery after a simulated kill are all UNMEASURED.
+
+What the owner's run should record, when it happens, is: `sm750-vt show` before,
+`sm750-vt off` with its full output, `cat /sys/module/sm750hdmidrm/version`
+(the expected value is 0.6.7), `cat /sys/module/sm750hdmidrm/srcversion` (the
+expected value is FF25FF6111B7C6D174A72F8), `cat
+/sys/class/vtconsole/vtcon1/bind` (expected 1) and `sm750-vt show` after. Until
+those lines exist, the claim of this file is limited to: the blocker is
+measured, the mechanism is identified from readable sysfs, the helper that
+performs it is written and statically gated, and it has not run.
