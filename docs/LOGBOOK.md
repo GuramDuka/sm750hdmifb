@@ -3961,3 +3961,26 @@ enabled connector for `tests/check-drm-module.sh`, so it ran with
 `master: acquired`, `master: dropped`) and exits 0 with `Ran 4 tests ... OK`.
 `git diff --check` is clean and `grep -cP '[^\x00-\x7F]'` is 0 on every
 touched file.
+
+### 2026-11-26T14:35Z | orchestrator | the owner sees the Plasma desktop on the SM750 monitor
+
+The KWin 6.7.5 session described in the 10:45Z entry was started again at
+14:27:18 local time so the owner could look at the panel. It reached
+`compositing ready after 4s` and `plasmashell up after 1s`, `card0-HDMI-A-1`
+read `enabled`, three `sm750-regs` samples two seconds apart gave
+`PANEL_CURRENT_LINE` 0x1e0 -> 0x24c -> 0x2e6 with `PANEL_FB_ADDRESS` held at
+0x00180000, and the readback window reported `nonzero 262144` with
+`crc32 0xc33175c0`, which is not the 256 KiB zero frame.
+
+The owner then switched the monitor to the HDMI input of card 0 and confirmed:
+"there is a Plasma desktop on the HDMI output - OK" (m09335). So the Wayland
+session is not only present in a log - it is on the glass, on the card this
+driver owns, with no environment override, no logind seat and no root session.
+This is the physical observation that was still outstanding after 0.6.7 landed,
+and it is the last item of the Plasma work that could only be settled by a
+person in front of the monitor.
+
+The honest limits recorded elsewhere do not change: the compositor renders with
+software GL because no Mesa driver exists for 126f:0750, input injection and
+screencast capture remain limited, and GAP-B8 still awaits a hardware
+recurrence. A47 is now proven twice over - at the ioctl level and by eye.

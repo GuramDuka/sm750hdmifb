@@ -190,3 +190,16 @@ mode does not recur, which is the claim being made here.
 To finish the gate run the session was then stopped (`kill` on its four
 processes), the connector was confirmed free, and `make check` ran with a
 compositor holding master, exiting 0.
+
+8. Confirmed on the panel by the owner
+
+The session started at 14:27 local time was left running and the owner switched
+the monitor to the HDMI input of card 0. Verbatim confirmation (translated from
+the Russian): "there is a Plasma desktop on the HDMI output - OK" (message
+m09335, 2026-11-26T14:34Z).
+
+That closes the last physical step of the Plasma-on-SM750 work: the desktop is
+not merely composited in a log, it is visible on the monitor attached to
+`0000:01:00.0` with no environment override and no seat. The measurements that
+preceded it are in sections 3 to 6; the software-GL limit in section 6 stands
+unchanged, the compositor draws with the CPU and the card is the output device.
