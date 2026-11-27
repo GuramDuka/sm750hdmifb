@@ -1,0 +1,126 @@
+# 49 - the armed pm_test cycle runs the SM750 callbacks and completes
+
+Date:    2026-11-27 16:12 host clock (13:12Z)
+Kernel:  7.3.5-100.fc43.x86_64 (boot 2026-11-27 15:58, boot_id
+         754801ec-8f74-4f7e-93ff-24bee4033da5)
+Driver:  0.6.9 loaded, srcversion 67300D6D1C065017A0D1328
+Command: sudo -n /usr/local/sbin/sm750-pmtest run devices
+
+## 1. Why this run happened
+
+Evidence 48 recorded an armed devices-level cycle that stopped at two Tesla
+P100s: `nv_pmops_suspend [nvidia] returns -5`, `last_failed_dev=0000:83:00.0`,
+and not a single `sm750 ... pm: ` line in the window. The SM750 sleep path was
+therefore unmeasured, and defect A66 stayed `open; measurement pending`.
+
+The owner reopened the route himself: he added
+`nvidia.NVreg_PreserveVideoMemoryAllocations=0` to the kernel command line and
+rebooted (m10287). That parameter exists precisely to make
+nv_pmops_suspend() stop returning -5, at the cost of VRAM save and restore
+across real sleep, which this test never exercises because pm_test=devices
+does not remove power.
+
+## 2. Preconditions verified before the run
+
+    /proc/cmdline:
+      BOOT_IMAGE=(hd0,gpt2)/vmlinuz-7.3.5-100.fc43.x86_64 ...
+      intel_iommu=on iommu=pt nvidia.NVreg_PreserveVideoMemoryAllocations=0
+    /proc/driver/nvidia/params:
+      PreserveVideoMemoryAllocations: 0
+      TemporaryFilePath: "/var/tmp"
+    /sys/module/sm750hdmidrm/version:  0.6.9
+    /sys/module/sm750hdmidrm/refcnt:   1   (held by the fbcon vtconsole)
+    /sys/power/pm_test: [none] core processors platform devices freezer
+    /sys/power/mem_sleep: [s2idle]
+    /sys/bus/pci/devices/0000:01:00.0/pm_probe: --w------- root root
+    dkms status: sm750hdmifb/0.6.9 installed for 7.2.15-100, 7.3.3-100,
+                 7.3.4-100 and 7.3.5-100 (the new kernel tree built on boot)
+    iommu groups: 116, `DMAR: IOMMU enabled` present
+
+The kernel changed to 7.3.5-100 with this boot: the fourth tree, built and
+installed by DKMS automatically, and the module that booted is 0.6.9.
+
+## 3. Output of the run
+
+    sm750-pmtest: pm_test=devices, suspending once with freeze; the panel may blank briefly
+    sm750-pmtest: pm_test armed at devices (readback: devices)
+    journal lines added since the snapshot: 73
+    driver pm: lines in that window:
+      ноя 27 16:12:29 ... sm750hdmidrm 0000:01:00.0: [drm] pm: suspend entry
+      ноя 27 16:12:29 ... sm750hdmidrm 0000:01:00.0: [drm] pm: suspend complete
+      ноя 27 16:12:29 ... sm750hdmidrm 0000:01:00.0: [drm] pm: resume entry
+      ноя 27 16:12:29 ... sm750hdmidrm 0000:01:00.0: [drm] pm: resume complete
+    pm: suspend complete count: 1
+    pm: resume complete count: 1
+    pm: failure lines: 0
+    PANEL_CURRENT_LINE: 0x00000182 -> 0x00000122 (advances)
+    suspend_stats error counters before: fail=0 failed_freeze=0 failed_prepare=0
+      failed_suspend=0 failed_suspend_late=0 failed_suspend_noirq=0 failed_resume=0
+      failed_resume_early=0 failed_resume_noirq=0 last_failed_dev= last_failed_errno=0
+      last_failed_step=
+    suspend_stats error counters after:  (identical, all zero, last_failed_dev empty)
+    verdict: PASS
+    sm750-pmtest: pm_test readback after cleanup: none
+
+## 4. The kernel log of the window (73 lines, condensed to the decision-makers)
+
+    16:12:15 PM: suspend entry (s2idle)
+    16:12:15 Filesystems sync: 0.080 seconds
+    16:12:29 Freezing user space processes completed (elapsed 0.002 seconds)
+    16:12:29 OOM killer disabled.
+    16:12:29 printk: Suspending console(s) (use no_console_suspend to debug)
+    16:12:29 serial 00:01: disabled
+    16:12:29 sm750hdmidrm 0000:01:00.0: [drm] pm: suspend entry
+    16:12:29 sm750hdmidrm 0000:01:00.0: [drm] pm: suspend complete
+    16:12:29 PM: suspend devices took 4.919 seconds
+    16:12:29 PM: suspend debug: Waiting for 5 second(s).
+    16:12:29 pci 0000:80:05.0: disabled boot interrupts on device [8086:6f28]
+    16:12:29 acpi ACPI000D:00: Found ACPI power meter.
+    16:12:29 sm750hdmidrm 0000:01:00.0: [drm] pm: resume entry
+    16:12:29 sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (1572864 bytes per buffer)
+    16:12:29 sm750hdmidrm 0000:01:00.0: [drm] painted a test card: no client has produced a frame (test_pattern=auto)
+    16:12:29 sm750hdmidrm 0000:01:00.0: [drm] pm: resume complete
+    16:12:29 nvidia-modeset: WARNING: GPU:0: Lost display notification (0:0x00000000); continuing.
+    16:12:29 PM: resume devices took 3.363 seconds
+    16:12:29 PM: suspend exit
+
+`PM: suspend debug: Waiting for 5 second(s).` is the armed level executing: the
+kernel really held the freeze at devices.
+
+## 5. Post-run state
+
+    sm750-smi: driver_version 0.6.9, srcversion 67300D6D1C065017A0D1328,
+      display.connector HDMI-A-1, display.connected connected,
+      display.mode 1024x768, display.refresh_hz 75.00,
+      display.hpd 1, display.rxsense 1, display.link connected,
+      crtc.index 0, vblank.count 6508 (advancing), memory.used 3147008
+    sm750-crc dump: scanout readback 1024x768 pitch 2048, nonzero 24410,
+      crc32 0xa76f0aeb - the test card is on the panel
+
+The panel came back with a live raster (0x182 -> 0x122 while the cycle ran) and
+the connector stayed connected across the freeze.
+
+## 6. What this proves
+
+- `sm750_pm_suspend()` and `sm750_pm_resume()` ran inside a real system-sleep
+  attempt driven by the kernel's own PM core, not by a synthetic call.
+- The device-level suspend and resume completed: both edges logged, both
+  counted once, no failure line, and the suspend_stats error counters did not
+  move, so no device blamed 0000:01:00.0.
+- The device survives the cycle: it re-stages the backbuffer, repaints the
+  fallback frame and resumes scanning out, with the connector still connected.
+
+## 7. What this does not prove
+
+- No power was removed: pm_test=devices stops before the point where the
+  platform would power down, so VRAM retention, hot-plug on a real wake and
+  the SiI9022 link after a real power loss are all outside this measurement.
+- This host has no S3 (`ACPI: PM: (supports S0 S4 S5)`, `mem_sleep=[s2idle]`),
+  so freeze is the only sleep state it has; a deep-sleep claim is not possible
+  here at all.
+- VRAM preservation on the two Tesla P100s is deliberately disabled for this
+  test (`PreserveVideoMemoryAllocations: 0`), so nothing here says anything
+  about CUDA context survival across a real suspend.
+- `nvidia-modeset: WARNING: GPU:0: Lost display notification` appeared on
+  resume; it belongs to the NVIDIA display GPU 0000:02:00.0, not to the SM750,
+  and the session continued.

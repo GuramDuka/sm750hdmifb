@@ -4433,3 +4433,45 @@ sm750hdmifb-tools-0.6.9-1.fc43.x86_64.rpm.
 Lesson: a version number copied into a test is not a test input, it is a deadline. Every copy that
 sits outside build-package.sh will fail the build that raises it, and it will fail while looking like
 the thing it is testing.
+
+### 2026-11-27T16:45Z | orchestrator | the sleep path executed: 0.6.9 measured on a real devices cycle
+
+- Action: measured the system-sleep path on the target host, which had been owed since the
+  production-readiness review.
+  - Precondition: the machine owner added `nvidia.NVreg_PreserveVideoMemoryAllocations=0` to the
+    kernel command line and rebooted at 15:58, which brought up kernel 7.3.5-100.fc43.x86_64. DKMS
+    built and installed 0.6.9 for that tree on its own; `intel_iommu=on iommu=pt` came in the same
+    edit and IOMMU is now live with 116 `iommu_groups`, so the guest-binding avenue of
+    ROOT-ACTIONS section 3.13 stopped being blocked by the hardware.
+  - Run: `sudo -n /usr/local/sbin/sm750-pmtest run devices` -> `verdict: PASS`, exit 0, 73 journal
+    lines, driver 0.6.9 srcversion `67300D6D1C065017A0D1328`.
+  - Result: all four edges once each (`pm: suspend entry`, `pm: suspend complete`, `pm: resume
+    entry`, `pm: resume complete`), every `suspend_stats` error counter still zero and
+    `last_failed_dev` empty, `PM: suspend debug: Waiting for 5 second(s).` proving the armed level
+    executed, panel back at 1024x768 at 75 Hz with the raster moving `0x182 -> 0x122` and
+    `crc32 0xa76f0aeb` on the frame. A66 is closed by measurement, not by inference.
+- Second finding, A67: the new `pm_probe` route reported FAIL on a cycle that had succeeded. The
+  driver echoes a callback's return code for a single command (`pm probe: suspend returned <n>`) but
+  reports `cycle` as one combined line (`pm probe: cycle suspend ok, resume ok`), and the helper's
+  patterns only knew the first form. Two more faults in the same block: `if ! printf ... >"$ATTR";
+  then rc=$?` always stored 0, and the cycle depth check looked for a line `cycle` never writes.
+  - Fix: per-command result matching, failure captured as `cycle suspend failed:`, `resume failed:`
+    or `returned <n>`, write status taken from the write itself; and section k of
+    `tests/check-pm-probe.sh` now pins the three driver result literals plus the two failure
+    fragments against `src/sm750_drm.c`, so a drift in either file fails `make check` instead of
+    turning a healthy run red at three in the morning.
+  - Gate: `PM probe gate checks passed (11 assertions, 6 planted controls)`, pristine copy accepted.
+- Evidence: `docs/evidence/runtime/49-pmtest-devices-cycle.txt` (the real cycle),
+  `docs/evidence/runtime/50-pm-probe-cycle.txt` (the helper defect). Defect ledger 65 -> 66 rows.
+- Release decision: no version bump. No module source, no spec and no packaged binary changed in
+  this batch - the fixed file is a shell helper that ships only inside the source tarball and is
+  installed by hand, so a new number would force a DKMS rebuild and a reload for a script.
+- Verified: `make CC=/usr/bin/gcc KDIR=/usr/src/kernels/7.3.4-100.fc43.x86_64 check` with the libdrm
+  pkg-config path, `build-package.sh`, `tests/audit-release.sh`, plus the individual gates.
+- Owner action outstanding: the installed `/usr/local/sbin/sm750-pm-probe` is the pre-fix copy
+  (5390 bytes, sha256 `ca5b5981...`), while the repository file is 167 lines, sha256
+  `986a441cf4977d2753711254e983c98bc63b6076a7f6cc54fe6b17a210d87048`.
+
+Lesson: a result contract that has two sides and a test on neither side turns a healthy run red.
+The gate now compares the driver's literals with the reader's patterns, which is the only place a
+drift can be caught before an operator sees it.

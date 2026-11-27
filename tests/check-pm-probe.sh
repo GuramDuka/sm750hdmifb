@@ -257,6 +257,24 @@ else
 	fi
 	has "$(cat "$helper")" 'this is not a system sleep' \
 		"k: the helper must state that a pass is not a system sleep"
+	# The verdict is a string match against the driver's own result lines, so a
+	# drift in either file turns a healthy callback into a red verdict with no
+	# compile error anywhere. That happened: cycle logs one combined line, and
+	# the helper only knew the single-command form, so it reported FAIL on a
+	# cycle that had in fact succeeded. Both sides are pinned here.
+	has "$(cat "$helper")" 'pm probe: suspend returned 0' \
+		"k: the helper does not match the driver's suspend result line"
+	has "$(cat "$helper")" 'pm probe: resume returned 0' \
+		"k: the helper does not match the driver's resume result line"
+	has "$(cat "$helper")" 'pm probe: cycle suspend ok, resume ok' \
+		"k: the helper does not match the driver's cycle result line"
+	has "$(cat "$helper")" 'cycle suspend failed:' \
+		"k: the helper does not recognise a failed cycle suspend"
+	has "$(cat "$helper")" 'resume failed:' \
+		"k: the helper does not recognise a failed cycle resume"
+	if ! bash -n "$helper" 2>/dev/null; then
+		bad "k: tools/sm750-pm-probe.sh does not parse"
+	fi
 fi
 ok "k. the helper drives the attribute through the allowlist and says what a pass means"
 

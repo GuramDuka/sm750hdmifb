@@ -58,14 +58,15 @@ archived hashes are the datasheet `fac31257...531889` and the product brief
 grep -cE '^.[[:space:]]A[0-9]' docs/AUDIT.md docs/DEFECTS.md
 ```
 
-Expected: `docs/AUDIT.md:24` and `docs/DEFECTS.md:65` - the command counts one
-table row per defect id, A01-A24 in the audit and 30 rows A01-A30 plus 35 rows
-A32-A66 in the defect list (`A31` is documented in prose only, so it has no
+Expected: `docs/AUDIT.md:24` and `docs/DEFECTS.md:66` - the command counts one
+table row per defect id, A01-A24 in the audit and 30 rows A01-A30 plus 36 rows
+A32-A67 in the defect list (`A31` is documented in prose only, so it has no
 table row).
 `docs/AUDIT.md` keeps the 24 defects it audited (S1 = 2, S2 = 8, S3 = 11,
 S4 = 3); `docs/DEFECTS.md` adds the later dispositions `A25`-`A30`,
 `A32`-`A53`, from the 2026-11-26 production-readiness review
-`A54`-`A64`, and from the 2026-11-27 `pm_test` attempt `A66`. Every
+`A54`-`A64`, from the 2026-11-27 `pm_test` attempt `A66`, and from the same
+batch the fixed `A67` (the `pm_probe` helper's false `FAIL`). Every
 row in `docs/DEFECTS.md` carries a status of `fixed`, `diagnosed`, `accepted`,
 `deferred` or `open`
 with a change reference; `A01` (no RPM spec) and `A02` (untracked files in the
@@ -130,7 +131,7 @@ to `src/*.c` or `src/*.h` (`docs/evidence/builds/11-warnings-scan.log`).
 ```
 
 Expected: exit 0. The script rebuilds the noarch RPM from a fresh `_topdir`,
-asserts the payload against `git ls-files` (152 payload files in the current
+asserts the payload against `git ls-files` (153 payload files in the current
 tree; the same command the script uses is `git ls-files -- . ':(exclude)docs/plan'
 ':(exclude)docs/evidence' ':(exclude)docs/images' ':(exclude)docs/notes' |
 wc -l`), the `%files` list
@@ -551,6 +552,8 @@ list.
 | `docs/evidence/review/01-production-readiness-architecture.txt` | 2026-11-26 architecture and upstreamability review against HEAD 434cb0c, source-only: ten scores, the verdict `production ready with conditions` with its three conditions, the refuted candidate blocker (an enabled CRTC with the primary plane disabled is unreachable because `drm_simple_kms_crtc_check` stays installed through `crtc->helper_private`), and the findings register that the ledger rows `A56`-`A64` come from |
 | `docs/evidence/review/02-production-readiness-runtime.txt` | 2026-11-26 runtime review against the same tree: eleven lead verdicts, the confirmed defects D1-D4 with their triggers and fixes, the R1 latency risk and the R2 false DMA timeout, and the verdict `production ready with conditions` naming D1 as the only condition for shipping |
 | `docs/evidence/runtime/44-production-readiness-review.txt` | 2026-11-26: the two reviews distilled - both verdicts with their exact text, the A54 panel measurement with its three-part mechanism, the A55 CRC window, the nine fixes with the assertion and planted control each is gated by, and the measured counts |
+| `docs/evidence/runtime/49-pmtest-devices-cycle.txt` | 2026-11-27: the devices-level PM cycle that actually ran - `sudo -n /usr/local/sbin/sm750-pmtest run devices` at 16:12 host clock on kernel `7.3.5-100.fc43.x86_64` with driver 0.6.9 (`srcversion 67300D6D1C065017A0D1328`), `verdict: PASS`, exit 0, 73 journal lines added, the four edges logged once each (`pm: suspend entry`, `pm: suspend complete`, `pm: resume entry`, `pm: resume complete`), `suspend_stats` error counters unchanged with `last_failed_dev` empty, the armed fingerprint `PM: suspend debug: Waiting for 5 second(s).`, `PM: suspend devices took 4.919 seconds` and `PM: resume devices took 3.363 seconds`, the panel back at 1024x768 at 75 Hz with `vblank.count` 6508 advancing, raster `0x182 -> 0x122`, `sm750-crc dump` -> `nonzero 24410` and `crc32 0xa76f0aeb`, and what the pass does not claim: no power was removed, the host has no S3 (`mem_sleep` = `[s2idle]`), `nvidia.NVreg_PreserveVideoMemoryAllocations=0` was set deliberately so the two Tesla P100s at `0000:83:00.0` and `0000:84:00.0` neither saved nor restored VRAM, and the single `nvidia-modeset: WARNING: GPU:0: Lost display notification` belongs to the owner's display GPU `0000:02:00.0` |
+| `docs/evidence/runtime/50-pm-probe-cycle.txt` | 2026-11-27: the `pm_probe` route and the A67 fix - the driver's per-command result lines (`pm probe: command <cmd>`, `pm probe: suspend returned <n>`, `pm probe: resume returned <n>`, `pm probe: cycle suspend ok, resume ok`, `pm probe: cycle suspend failed: <n>, resume skipped`, `pm probe: cycle suspend ok, resume failed: <n>`), the wrong verdict the installed helper printed on a cycle that had succeeded, the three faults in the same block (the verdict only knew the single-command form, `if ! printf ... >"$ATTR"; then rc=$?` always stored 0, and the cycle depth check grepped a `pm probe: resume returned 0` line that `cycle` never writes), the fix in `tools/sm750-pm-probe.sh` (per-command result matching, the failure fragments `cycle suspend failed:`, `resume failed:` or `returned <n>`, the write status taken from the write itself), the gate result `PM probe gate checks passed (11 assertions, 6 planted controls)` with section k pinning the three result literals and two failure fragments against `src/sm750_drm.c`, and the limit that a pass through `pm_probe` is not a system sleep |
 | `docs/evidence/packaging/06-posttrans-missing-headers.log` | missing-header branch of `%posttrans`, plus the stale-purge run whose `dkms remove` fails (exit 4) and the dangling-link run (A40) |
 | `docs/evidence/packaging/07-check-rpm-dkms.log` | full `tests/check-rpm-dkms.sh` run |
 | `docs/evidence/packaging/0.5.9/01-rpmbuild.log` | `rpmbuild -ba` at 0.5.9, exit 0, frozen: produced before the T45 `LC_ALL=C` capture, non-ASCII lines left unedited as the historical record |

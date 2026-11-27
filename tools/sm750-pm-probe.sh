@@ -123,9 +123,11 @@ suspend | resume | cycle)
 	printf 'raster:     %s\n' "$before"
 	printf 'writing %s to %s\n' "$command" "$ATTR"
 	# The attribute returns the byte count on success and the callback's own
-	# error otherwise, so a failed callback fails this write as well.
-	if ! printf '%s' "$command" >"$ATTR" 2>/dev/null; then
-		rc=$?
+	# error otherwise, so a failed callback fails this write as well. The status
+	# is captured from the write itself: `if ! cmd` would report 0 here.
+	rc=0
+	printf '%s' "$command" >"$ATTR" 2>/dev/null || rc=$?
+	if [ "$rc" -ne 0 ]; then
 		echo "write failed (rc=$rc); the kernel log carries the reason:"
 		probe_lines | tail -n 6 | sed 's/^/  /'
 		exit 1
@@ -139,22 +141,24 @@ suspend | resume | cycle)
 	else
 		echo '  (the reader returned no line; kernel.dmesg_restrict=1 needs root)'
 	fi
-	case "$lines" in
-	*'pm probe: suspend returned 0'* | *'pm probe: resume returned 0'*) ;;
-	*'returned '*)
-		echo 'verdict:    FAIL: a callback returned a non-zero code'
-		exit 1
-		;;
-	*)
-		echo 'verdict:    FAIL: no "pm probe:" result line in the log'
-		exit 1
-		;;
+	case "$command:$lines" in
+	suspend:*'pm probe: suspend returned 0'*) ok=1 ;;
+	resume:*'pm probe: resume returned 0'*) ok=1 ;;
+	cycle:*'pm probe: cycle suspend ok, resume ok'*) ok=1 ;;
+	*) ok=0 ;;
 	esac
-	echo 'verdict:    pass (callback bodies ran and returned 0; this is not a system sleep)'
-	if [ "$command" = cycle ] && ! probe_lines | grep -qF 'pm probe: resume returned 0'; then
-		echo 'verdict:    FAIL: cycle did not reach the resume callback'
+	if [ "$ok" != 1 ]; then
+		case "$lines" in
+		*'cycle suspend failed:'* | *'resume failed:'* | *'returned '*)
+			echo 'verdict:    FAIL: a callback returned a non-zero code'
+			;;
+		*)
+			echo 'verdict:    FAIL: no "pm probe:" result line for this command'
+			;;
+		esac
 		exit 1
 	fi
+	echo 'verdict:    pass (callback bodies ran and returned 0; this is not a system sleep)'
 	;;
 *)
 	usage

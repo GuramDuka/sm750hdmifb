@@ -1,0 +1,75 @@
+# 50 - pm_probe cycle: the callbacks run on demand, and the helper misread its own result
+
+Date:    2026-11-27 16:15 host clock (13:15Z)
+Kernel:  7.3.5-100.fc43.x86_64 (boot 2026-11-27 15:58)
+Driver:  0.6.9 loaded, srcversion 67300D6D1C065017A0D1328
+Command: sudo -n /usr/local/sbin/sm750-pm-probe cycle
+
+## 1. Why this run happened
+
+The real devices-level cycle in evidence 49 already passed, so this run is not
+the measurement A66 needed any more. It exercises the second route: the
+root-only `pm_probe` attribute calls `sm750_pm_suspend()` and
+`sm750_pm_resume()` directly, which stays useful when a system sleep is
+refused by another device, as it was in evidence 48. Running it once on the
+live host also validates the delivery path an operator would use.
+
+## 2. Output of the run
+
+    driver:     0.6.9
+    refcnt:     0
+    raster:     0x00000007
+    writing cycle to /sys/bus/pci/devices/0000:01:00.0/pm_probe
+    raster:     0x00000214
+    kernel log:
+      ноя 27 16:15:47 ... sm750hdmidrm 0000:01:00.0: [drm] pm probe: command cycle
+      ноя 27 16:15:48 ... sm750hdmidrm 0000:01:00.0: [drm] pm probe: cycle suspend ok, resume ok
+    verdict:    FAIL: no "pm probe:" result line in the log
+
+The write succeeded, both callback bodies ran, both returned 0, and the raster
+moved (0x7 -> 0x214) - yet the helper printed FAIL.
+
+## 3. Cause: a string contract with two sides and one test (defect A67)
+
+`pm_probe` reports a single command by echoing the callback's return code
+(`pm probe: suspend returned %d`), but `cycle` reports the two halves it
+actually ran (`pm probe: cycle suspend ok, resume ok`). The helper's success
+patterns only knew the single-command form, so a healthy cycle fell through to
+the "no result line" branch. Two further defects were found in the same block
+while fixing it:
+
+- `if ! printf '%s' "$command" >"$ATTR"; then rc=$?` always stored 0, so the
+  write-failure message would have printed `rc=0`.
+- the cycle depth check grepped for `pm probe: resume returned 0`, a line
+  `cycle` never writes, so even a passing verdict would have been overwritten
+  by a second failure.
+
+The durable fix is not the three patterns: it is that the driver's result
+literals and the helper's patterns are pinned against each other by the gate,
+so a drift in either file fails `make check` instead of turning a healthy run
+red at three in the morning.
+
+## 4. Fix
+
+    tools/sm750-pm-probe.sh   result matching driven by the command
+                              (suspend|resume use "returned 0", cycle uses the
+                              combined line), failures detected by
+                              "cycle suspend failed:", "resume failed:" or
+                              "returned <n>"; write status captured from the
+                              write itself
+    tests/check-pm-probe.sh   section k pins the three result literals and the
+                              two failure fragments against the driver source,
+                              and requires the helper to parse
+
+Gate after the fix: `PM probe gate checks passed (11 assertions, 6 planted
+controls)`.
+
+## 5. What this run adds, and what it does not
+
+Adds: on-demand invocation of both callback bodies works on the live host,
+the attribute is present with mode 0200 and root-only, the write returns the
+byte count on success, and the raster keeps advancing across the call.
+
+Does not add: nothing about system sleep. There is no PCI config-space save or
+restore, the device never enters D3hot, no power is removed, and no wake event
+is involved. Evidence 49 is the measurement that counts for A66.

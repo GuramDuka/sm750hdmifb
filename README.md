@@ -10,7 +10,8 @@ release **0.6.9**: atomic KMS, dithered 16-bit scanout, hardware cursor, DMA and
 polling upload paths, sysfs monitoring attributes, a test-card fallback so a
 panel with no client is never dead-black, DKMS packages for `.deb` and `.rpm`,
 and an acceptance audit of 6 PASS / 0 FAIL / 1 GAP run against the 0.6.0 tree
-and re-verified since.
+and re-verified since. The devices-level sleep cycle was measured and passed on
+2026-11-27 (`docs/evidence/runtime/49-pmtest-devices-cycle.txt`).
 
 > **Scope and risk:** this out-of-tree driver supports one specific SM750
 > board. Optional non-EDID modes can exceed published GPU or monitor clock
@@ -74,14 +75,14 @@ packaged tarball.
 | Measure | Value |
 | --- | --- |
 | Driver source | 11252 lines of C and headers under `src/` |
-| Defect findings tracked | 65, from A01 to A66, each with a disposition |
+| Defect findings tracked | 66, from A01 to A67, each with a disposition |
 | Acceptance criteria | 6 PASS, 0 FAIL, 1 GAP - the gap is pixel-level capture at the panel, which needs a human or capture hardware |
 | Project gates | 34 gate scripts, 18 commands in `make check`, seven opt-in verification targets with planted-defect controls |
 | Kernel and format matrix | 9 combinations, kernel 6.17.1 through the 7.4 daily headers |
 | IGT KMS subset | 26 pass, 14 skip, 1 fail by design |
 | GL path | `kmscube`, 299 frames in 5.07 s, 59.01 fps on llvmpipe |
 | Vblank rate | 60.43 per second measured over 120 events |
-| Evidence | 55 runtime transcripts, 28 build transcripts and 7 packaging transcripts under `docs/evidence/` |
+| Evidence | 57 runtime transcripts, 28 build transcripts and 7 packaging transcripts under `docs/evidence/` |
 | Documentation | 22 documents under `docs/`, plus the specification archive and the deck |
 
 ### How a claim is checked
@@ -148,7 +149,8 @@ panel; see the [acceptance report](docs/ACCEPTANCE-REPORT.md).
 | Area | Verified state |
 |---|---|
 | Module | `sm750hdmidrm` 0.6.9, built by DKMS from one source tree |
-| Runtime | DKMS built and installed 0.6.9 for kernels 7.2.15-100, 7.3.3-100 and 7.3.4-100 (Fedora 43) from this tree; the 0.6.8 module remains loaded until `sudo sm750-pkg reload` (or a reboot) after the card has no holders; the version-free `sm750-pkg` helper performs install and rollback (`docs/ROOT-ACTIONS.md` 3.8) |
+| Runtime | 0.6.9 loaded and exercised on kernel 7.3.5-100 (Fedora 43); DKMS built and installed it from this tree for 7.2.15-100, 7.3.3-100, 7.3.4-100 and 7.3.5-100; the version-free `sm750-pkg` helper performs install and rollback (`docs/ROOT-ACTIONS.md` 3.8) |
+| Sleep path | devices-level `pm_test` cycle PASS 2026-11-27: all four `pm:` edges once, `suspend_stats` unchanged, panel back at 1024x768 and 75 Hz, CRC `0xa76f0aeb` (`docs/evidence/runtime/49-pmtest-devices-cycle.txt`); a `pm_probe` pass is not a system sleep |
 | Test card | seen on the panel; the disc animates and the scanout CRC gate stays green while it runs (`docs/evidence/runtime/26-test-card-crc-fix.txt`) |
 | Build matrix | 9 kernel and scanout-format combinations, 6.17.1 through the 7.4 daily headers |
 | Modeset | atomic commit verified with `modetest`, 1920x1080 at 60 Hz |
@@ -282,10 +284,11 @@ module is `sm750hdmidrm.ko` so it cannot be confused with `sm750fb.ko`.
 
 ### Kernel compatibility
 
-**Built on 6.17 through 7.4, runtime-validated on 7.3.4.** Release 0.6.5 is
-installed by DKMS for the Fedora 43 kernels 7.2.15-100, 7.3.3-100 and
-7.3.4-100, and was loaded and exercised on 7.3.4-100, the reference host
-kernel. The other two are built and installed but have not been booted. Linux
+**Built on 6.17 through 7.4, runtime-validated on 7.3.5.** Release 0.6.9 is
+installed by DKMS for the Fedora 43 kernels 7.2.15-100, 7.3.3-100, 7.3.4-100 and
+7.3.5-100, and was loaded and exercised on 7.3.5-100, the reference host kernel,
+including the devices-level `pm_test` cycle. The earlier trees are built and
+installed; 7.3.4-100 was the reference kernel until 2026-11-27. Linux
 7.4 is still in development: only its headers have been compiled against, so it
 remains untested at runtime. See the
 [release notes](docs/RELEASE-NOTES.md) and the
@@ -1064,7 +1067,7 @@ VBIOS and scanout checks are documented in
 | `tests/check-static.sh` | Opt-in static analysis gate with baseline comparison |
 | `tests/check-sm750-smi.sh` | Fixture-driven gate for `tools/sm750-smi`: 27 fields from synthetic sysfs/DRM trees, `--strict` exit codes, CSV/JSON parsing, five planted controls; no GPU or root needed |
 | `tests/check-sysfs-attributes.sh` | Source-level gate for the twelve monitoring attributes `sm750-smi` reads plus the write-only `pm_probe` diagnostic from `/sys/class/drm/cardN/device/`: names and array entries, the group on the PCI device before `drm_dev_register`, `sysfs_emit()` with no sleep and no lock beyond the mode lock in every show function, `clear_events` false on the link-status read, and `pm_probe` as the only non-monitoring attribute; five planted controls |
-| `tests/check-pm-probe.sh` | Source-level gate for the 0.6.9 `pm_probe` attribute (part of `make check` through `tests/check-drm-policy.sh`): `DEVICE_ATTR_WO` (mode 0200) plus its array entry and group registration, `dev_get_drvdata()`, the master, registration and `drm_dev_enter()` guards in that order, the dedicated mutex with `mode_lock` rejected, exactly `suspend`/`resume`/`cycle`, the `pm probe: ` log lines and `resume skipped` after a failed suspend, and the return value: the byte count on success and a callback failure propagated so a script under `set -e` stops; ten assertions and six planted controls plus a pristine control |
+| `tests/check-pm-probe.sh` | Source-level gate for the 0.6.9 `pm_probe` attribute (part of `make check` through `tests/check-drm-policy.sh`): `DEVICE_ATTR_WO` (mode 0200) plus its array entry and group registration, `dev_get_drvdata()`, the master, registration and `drm_dev_enter()` guards in that order, the dedicated mutex with `mode_lock` rejected, exactly `suspend`/`resume`/`cycle`, the `pm probe: ` log lines and `resume skipped` after a failed suspend, and the return value: the byte count on success and a callback failure propagated so a script under `set -e` stops; eleven assertions and six planted controls plus a pristine control |
 | `tests/check-headless-helper.sh` | Source-level gate for `tools/sm750-headless.sh`: POSIX `sh` plus `sh -n`, the five modes and the usage path, the `0000:01:00.0` / `sm750hdmidrm` binding test, `LIBSEAT_BACKEND=noop` and never `builtin`, the weston, cage and kmscube argument sets read out of the executed switch arms (`-s` rejected on cage, `-n` rejected on kmscube), the `SECONDS` numeric test and 1..600 clamp, the survivor and vblank failures, TERM before KILL on an EXIT trap, no local absolute path and no non-ASCII byte, and that both compositor arms run in a private mount namespace with an empty `/dev/input` (`unshare --mount --propagation private` plus a tmpfs over `/dev/input` mounted before the exec, `isolate` in the weston arm and in the cage arm and absent from the kmscube arm, `WLR_LIBINPUT_NO_DEVICES` documented as wlroots-only); twelve planted controls in `--self-test`, no compositor, no root and no card needed |
 | `tests/check-render-node.sh` | Source-level and live gate for the render node: both `driver_features` lines in `src/sm750_drm.c` carry `DRIVER_RENDER` beside `DRIVER_MODESET`, no executable line sets `DRIVER_RENDER` without `DRIVER_MODESET`, `SM750_DRM_VERSION` agrees with `build-package.sh`, and a live `renderD*` node owned by `sm750hdmidrm` must be writable by the invoking user; three planted controls `render_dropped`, `render_only` and `version_drift` in `--self-test`, one `SKIP:` line before a 0.6.5 module is loaded |
 | `tests/check-vt-helper.sh` | Source-level gate for `tools/sm750-vt.sh`, the hot-reload helper: the three modes and the usage path, the class-glob vtconsole resolution with no `vtconN` literal, the PCI driver cross-check, `bind` 0 and 1 each read back, one EXIT trap that restores the module, the device and then the console on any failure with a `FINISHED=1` disarm, the holder gate on the unload with the scan matched on the node `dev:inode` identity through the by-path card and render links instead of a node name, `modprobe -r` before `modprobe`, the post-load version read-back, and the A51 PCI step: the unbind after the console detach and before the unload, the refcount printed on both sides of it, and the device re-bound and read back after the load; thirteen assertions and ten planted controls in `--self-test`, no sysfs write, no modprobe, no root and no card needed |

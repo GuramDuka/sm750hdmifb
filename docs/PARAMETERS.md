@@ -142,9 +142,22 @@ inside the `drm_dev_enter()` / `drm_dev_exit()` bracket.
 The write returns the byte count on success, `-EINVAL` for anything that is not
 one of the three words, and the callback's own non-zero return otherwise. A
 failing callback therefore makes `echo cycle > pm_probe` fail, and a script
-under `set -e` stops at that line. The kernel log carries the evidence:
-`pm probe: command ...` before the call and `pm probe: suspend returned N` or
-`pm probe: resume returned N` after it.
+under `set -e` stops at that line. The kernel log carries the evidence, and the
+wording differs per command:
+
+| Write | Result lines in the kernel log |
+|---|---|
+| `suspend` | `pm probe: command suspend`, then `pm probe: suspend returned <n>` |
+| `resume` | `pm probe: command resume`, then `pm probe: resume returned <n>` |
+| `cycle` | `pm probe: command cycle`, then one of `pm probe: cycle suspend failed: <n>, resume skipped`, `pm probe: cycle suspend ok, resume failed: <n>`, or `pm probe: cycle suspend ok, resume ok` |
+
+`<n>` is the callback return value; the guarded paths return 0. The three
+`cycle` lines are the only result a guarded cycle writes, and a consumer that
+matched only `<cmd> returned <n>` therefore read a successful `cycle` as a
+missing result line. That was defect A67, fixed in `tools/sm750-pm-probe.sh`
+and pinned against the literals above by `tests/check-pm-probe.sh` section k,
+so a drift in either file fails `make check`
+(`docs/evidence/runtime/50-pm-probe-cycle.txt`).
 
 This is NOT a system sleep. It calls the driver's callback bodies only: there
 is no PCI config space save and restore, the device never enters D3hot, and no
@@ -153,7 +166,10 @@ evidence that system sleep works, because the parts of a real cycle the driver
 does not own - PCI core state, the platform wake path, the firmware and every
 other device on the bus - are not exercised.
 
-Intended use: measure the callbacks while an environmental blocker prevents a
-real devices-level cycle. On the reference host two neighbouring Tesla P100s
-refuse `pm_test=devices` (`docs/DEFECTS.md` A66), so the driver's sleep path
-cannot otherwise be reached.
+Intended use: reach the callbacks without a system-wide cycle. On the reference
+host two neighbouring Tesla P100s refused `pm_test=devices`
+(`docs/DEFECTS.md` A66); the owner then set
+`nvidia.NVreg_PreserveVideoMemoryAllocations=0` and the armed devices cycle
+passed on 2026-11-27
+(`docs/evidence/runtime/49-pmtest-devices-cycle.txt`). The attribute remains a
+convenience for a running system, not the measurement itself.

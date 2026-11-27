@@ -16,10 +16,22 @@
   stops. An unknown word is still `-EINVAL`.
 - **This is a measurement aid, not a system sleep.** No PCI config space is
   saved or restored, the device never enters D3hot and no power state changes,
-  so a pass here says nothing about system sleep. The real devices-level cycle
-  is still unmeasured: two neighbouring Tesla P100s refuse it with
-  `PreserveVideoMemoryAllocations=1` (`docs/DEFECTS.md` A66), and the cycle is
-  owed after a reboot with `nvidia.NVreg_PreserveVideoMemoryAllocations=0`.
+  so a pass here says nothing about system sleep. The devices-level cycle was
+  owed after a reboot with `nvidia.NVreg_PreserveVideoMemoryAllocations=0`; two
+  neighbouring Tesla P100s refused it while the parameter was 1
+  (`docs/DEFECTS.md` A66).
+- **The sleep path was measured and passed.** With
+  `nvidia.NVreg_PreserveVideoMemoryAllocations=0` on the command line, the armed
+  devices cycle returned PASS on 2026-11-27 on kernel 7.3.5-100: all four `pm:`
+  edges once, `suspend_stats` unchanged, and the panel back at 1024x768 and
+  75 Hz. A66 is `fixed; measured on the host`
+  (`docs/evidence/runtime/49-pmtest-devices-cycle.txt`).
+- **A67: the probe helper misread a successful cycle.** It matched only
+  `<cmd> returned <n>`, a line `cycle` never writes, and two further faults sat
+  in the same block; `tools/sm750-pm-probe.sh` now matches the per-command
+  result literals, and `tests/check-pm-probe.sh` section k pins them against the
+  driver so a drift fails `make check`
+  (`docs/evidence/runtime/50-pm-probe-cycle.txt`).
 
 ## 0.6.8 - What a production-readiness review found
 

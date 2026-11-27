@@ -29,12 +29,15 @@ one-line refresh. Its single allowlist line replaces the per-version
 a reboot leaves the card with no driver; the recovery runbook is in `README.md`,
 section "If the card stops working after removing the package".
 
-Row 12 is proposed and gated on a reboot: manual VFIO binding of the card to a
-guest (section 3.13). It is inert until the host boots with `intel_iommu=on`,
-and it does not close P1. Row 13 is proposed and needs a maintenance window: the
-PM test helper (section 3.14) runs the host-wide cycle that does exercise the
-host's own suspend and resume callbacks, and it is the only row that can close
-that half of P1.
+Row 12 is proposed and no longer gated on a reboot: the host now boots with
+`intel_iommu=on iommu=pt` and has 116 `iommu_groups`
+(`docs/evidence/runtime/49-pmtest-devices-cycle.txt` section 2), so the manual
+VFIO binding of the card to a guest (section 3.13) is executable. It still does
+not close P1. Row 13 is done: the PM test helper (section 3.14) ran the
+host-wide cycle on 2026-11-27 with `verdict: PASS`, which is what closed the
+sleep half of P1 on this host. Row 15 installed the `pm_probe` helper and A66
+is fixed and measured; its installed copy needs one refresh after the A67 fix
+(section 3.16).
 
 | # | Date (UTC) | Action | Closes |
 | --- | --- | --- | --- |
@@ -49,10 +52,10 @@ that half of P1.
 | 9 | 2026-11-21T10:28Z | install the console helper `/usr/local/sbin/sm750-console` (144-line source `tools/sm750-console.sh`, sha256 `6e7f5dc758ec6b8d7993466784ffa5b1ab379da4f7442a6228c620829f2b1338`; the installed copy is byte-identical) and add one NOPASSWD line for it (section 3.4) | the one-command `KD_TEXT` route for a panel that looks dead (A34); no GAP |
 | 10 | 2026-11-22T08:41Z | install `/usr/local/sbin/sm750-pkg` and one NOPASSWD line `/etc/sudoers.d/30-sm750-pkg` (section 3.8); source is 487 lines, sha256 `ca6e7b0a66fae43b6b332135ea8da62f61a917385accacc4d48f114e9149cf16`, but the installed body is stale, refresh required (11873 bytes, sha256 `e923a85a3389a13211869f32808b7b7cb77083355f90c5149b6c94cdaf9b976e`) | replaces the per-version `dnf install` allowlist entries; privileged install, remove, status and reload work for any version without the owner |
 | 11 | proposed | refresh `/usr/local/sbin/sm750-vt` from the tree (the installed body is the first version, which fails) and use the two NOPASSWD lines already in place for `/usr/local/sbin/sm750-vt off` and `/usr/local/sbin/sm750-vt on` (section 3.12), then run `sm750-vt off` to load the 0.6.7 module without a reboot | the reload blocker: a rebuilt module cannot be loaded while the vtconsole holds the framebuffer reference (`modprobe: FATAL: Module sm750hdmidrm is in use.`), and detaching the vtconsole alone does not release it (A51) |
-| 12 | proposed | reboot with `intel_iommu=on iommu=pt`, then bind `0000:01:00.0` to `vfio-pci` for a guest (section 3.13) | no GAP and no P1: the guest runs its own copies of `sm750_pm_suspend()` / `sm750_pm_resume()`, the host's copies never execute, and the chip stays in D0 from the host's point of view |
-| 13 | proposed | install the PM test helper with `sudo install -m 0755 -o root -g root tools/sm750-pmtest.sh /usr/local/sbin/sm750-pmtest`, add `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-pmtest` (section 3.14), then run `sm750-pmtest run devices` in a maintenance window | the host-wide `pm_test` cycle that P1 needs, still deferred to the owner's window; the helper makes the cycle repeatable and cannot leave `pm_test` armed |
+| 12 | proposed | reboot with `intel_iommu=on iommu=pt` (done: the host now reports 116 `iommu_groups` and `DMAR: IOMMU enabled`), then bind `0000:01:00.0` to `vfio-pci` for a guest (section 3.13) | no GAP and no P1: the guest runs its own copies of `sm750_pm_suspend()` / `sm750_pm_resume()`, the host's copies never execute, and the chip stays in D0 from the host's point of view |
+| 13 | 2026-11-27T16:12Z | install the PM test helper with `sudo install -m 0755 -o root -g root tools/sm750-pmtest.sh /usr/local/sbin/sm750-pmtest`, add `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-pmtest` (section 3.14), then run `sm750-pmtest run devices` | done: the owner set `nvidia.NVreg_PreserveVideoMemoryAllocations=0` and the armed `devices` cycle returned `verdict: PASS` on 2026-11-27 at 16:12 host clock (73 journal lines, all four `pm:` edges, `suspend_stats` unchanged); transcript `docs/evidence/runtime/49-pmtest-devices-cycle.txt` |
 | 14 | proposed | install the hang capture with `sudo install -m 0755 -o root -g root tools/sm750-hang.sh /usr/local/sbin/sm750-hang`, add `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-hang` (section 3.15), then run `sudo -n /usr/local/sbin/sm750-hang capture` after the next wedge | A65: the 2026-11-26 hot reload wedged the module in `Unloading` with no stack captured, so the blocked function is unknown; this helper exists before the next reproduction so `02-stacks.txt` finally closes it |
-| 15 | proposed | install the pm_probe helper with `sudo install -m 0755 -o root -g root tools/sm750-pm-probe.sh /usr/local/sbin/sm750-pm-probe`, add `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-pm-probe` (section 3.16), then run `sudo -n /usr/local/sbin/sm750-pm-probe cycle` once the 0.6.9 module is loaded | A66: the 2026-11-27 armed `pm_test=devices` cycle stopped at the two neighbouring Tesla P100s (`-EIO`), so `sm750_pm_suspend()` and `sm750_pm_resume()` have never executed on this host; the helper drives the same two bodies through a 0200 sysfs write and prints the kernel's own `pm probe: ` lines. A pass is not a system sleep |
+| 15 | done; refresh outstanding | install the pm_probe helper with `sudo install -m 0755 -o root -g root tools/sm750-pm-probe.sh /usr/local/sbin/sm750-pm-probe`, add `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-pm-probe` (section 3.16), then run `sudo -n /usr/local/sbin/sm750-pm-probe cycle` once the 0.6.9 module is loaded | A66 is fixed and measured on the host. The installed copy was put in place on 2026-11-27T14:14Z (5390 bytes, sha256 `ca5b5981...`) and is stale after the A67 fix: the repository file `tools/sm750-pm-probe.sh` is 167 lines, sha256 `986a441cf4977d2753711254e983c98bc63b6076a7f6cc54fe6b17a210d87048`, so refresh it from the repository root with `sudo install -m 0755 -o root -g root tools/sm750-pm-probe.sh /usr/local/sbin/sm750-pm-probe`. A pass through `pm_probe` is not a system sleep |
 
 Sections below are ordered by subject, not by date: allowlist, recovery recipe,
 helpers, udev rule, installed state and re-verification, gap map.
@@ -1377,40 +1380,46 @@ monitor at `tty1`.
 
 ### 3.13 Manual VFIO binding for a guest (only after intel_iommu=on)
 
-Status: proposed, not performed. Nothing in this subsection has been run, and
-nothing here is allowlisted. Two things have to be true before the binding
-commands do anything: the host must boot with `intel_iommu=on iommu=pt`, and an
-interactive root shell must be open, because section 1's zero-colon rule cannot
-express these paths (see "Why the allowlist cannot carry this" below).
+Status: the prerequisite is met, the binding is not performed. The reboot this
+subsection needed has happened and nothing else here has been run; nothing is
+allowlisted either. Two conditions decide whether the binding commands do
+anything: the host must boot with `intel_iommu=on iommu=pt`, which it now does,
+and an interactive root shell must be open, because section 1's zero-colon rule
+cannot express these paths (see "Why the allowlist cannot carry this" below).
 
-**The IOMMU is off on this host, measured 2026-11-26.**
+**The IOMMU is on this host, measured 2026-11-27.** The command line carries
+`intel_iommu=on iommu=pt` beside
+`nvidia.NVreg_PreserveVideoMemoryAllocations=0`, `DMAR: IOMMU enabled` is
+present, and 116 groups exist
+(`docs/evidence/runtime/49-pmtest-devices-cycle.txt` section 2):
 
 ```sh
 $ ls /sys/kernel/iommu_groups | wc -l
-0
-$ ls /sys/class/iommu
+116
 $ dmesg | grep -c 'DMAR: IOMMU enabled'
-0
-$ dmesg | grep 'DMAR-IR'
-DMAR-IR: Enabled IRQ remapping in x2apic mode
+1
 $ grep -c 'intel_iommu=on' /proc/cmdline
-0
-$ grep CONFIG_INTEL_IOMMU_DEFAULT_ON /boot/config-7.3.4-100.fc43.x86_64
-# CONFIG_INTEL_IOMMU_DEFAULT_ON is not set
+1
 ```
 
-`ls /sys/class/iommu` prints nothing at all. The `DMAR-IR` line is the trap: it
-proves interrupt remapping alone is on, which is not a DMA translation domain.
-With no IOMMU group, binding the device to `vfio-pci` appears to succeed, but
-opening `/dev/vfio/vfio` fails with
+Before that reboot the same three readings were `0`, `0` and `0`,
+`ls /sys/class/iommu` printed nothing at all, and
+`CONFIG_INTEL_IOMMU_DEFAULT_ON` was not set; that 2026-11-26 measurement stays
+as history in `docs/evidence/runtime/45-suspend-route-assessment.txt`, together
+with the trap it described: a `DMAR-IR: Enabled IRQ remapping in x2apic mode`
+line proves interrupt remapping alone, which is not a DMA translation domain,
+and with no IOMMU group the binding appears to succeed while opening
+`/dev/vfio/vfio` fails with
 
 ```text
 VFIO: No available IOMMU models
 ```
 
-so the whole recipe is inert until the reboot.
+The recipe below is therefore executable on this host. It has not been run, and
+running it would still not measure this driver: the caveat at the end of this
+subsection holds.
 
-**The reboot line.**
+**The reboot line (applied on this host; kept for another machine).**
 
 ```sh
 sudo grubby --update-kernel=ALL --args="intel_iommu=on iommu=pt"
@@ -1434,7 +1443,7 @@ deliberately absent:
 - no `pcie_acs_override`: the group contents have not been measured yet, and the
   override belongs after that measurement, not before it.
 
-**Verify the reboot before binding anything.** All four readings must hold:
+**Verify the IOMMU before binding anything.** All four readings must hold:
 
 ```sh
 ls /sys/kernel/iommu_groups | wc -l
@@ -1443,10 +1452,12 @@ readlink -f /sys/bus/pci/devices/0000:01:00.0/iommu_group
 ls /sys/kernel/iommu_groups/<N>/devices
 ```
 
-The count is greater than zero, the `DMAR: IOMMU enabled` line is present, the
-`iommu_group` link resolves, and the last listing shows `0000:01:00.0` alone in
-its group. A group shared with another device means the binding takes that other
-device's driver down too, and the answer is a different slot, not an override.
+The count is greater than zero (it reads 116 here), the `DMAR: IOMMU enabled`
+line is present, the `iommu_group` link resolves, and the last listing shows
+`0000:01:00.0` alone in its group. A group shared with another device means the
+binding takes that other device's driver down too, and the answer is a different
+slot, not an override. The group contents of this card have still not been
+measured, which is why no `pcie_acs_override` appears above.
 
 **Binding sequence.**
 
@@ -1565,25 +1576,56 @@ In this order:
    reports the card normally again (the path is the one granted in section 1).
 
 Guest work proves the driver's code paths inside the guest and nothing about
-the host's power state. When the guest work is finished the host side still owes
-one deferred test: the host-wide `pm_test=devices` cycle that exercises
-`sm750_pm_suspend()` and `sm750_pm_resume()` on the host itself. That cycle
-remains deferred by the owner's decision until a maintenance window exists; the
-route and its risks are assessed in
-`docs/evidence/runtime/45-suspend-route-assessment.txt`. The proof to look for
-in `dmesg` is four `pm:` lines from `src/sm750_drm.c`: `pm: suspend entry`
+the host's power state. The host side owed one test for the same reason: the
+host-wide `pm_test=devices` cycle that exercises `sm750_pm_suspend()` and
+`sm750_pm_resume()` on the host itself. That cycle ran on 2026-11-27 and passed
+(section 3.14), so the guest route is no longer needed to reach the callbacks
+and the guest route never could have replaced it; the route and its risks are
+assessed in `docs/evidence/runtime/45-suspend-route-assessment.txt`. The proof
+to look for in `dmesg` is four `pm:` lines from `src/sm750_drm.c`:
+`pm: suspend entry`
 (`:5476`), `pm: suspend complete` (`:5486`), `pm: resume entry` (`:5496`) and
 `pm: resume complete` (`:5515`), with no `pm: suspend failed:` (`:5479`) or
 `pm: resume failed:` (`:5499`, `:5507`, `:5512`) line in the same cycle.
 
-### 3.14 The deferred PM cycle
+### 3.14 The PM cycle
 
 This helper exists to execute the host-wide `pm_test` cycle that P1 needs. The
 guest work in section 3.13 proves the driver's code paths inside the guest and
-nothing about the host's power state, so the host still owes one cycle that runs
-the host's own `sm750_pm_suspend()` and `sm750_pm_resume()`. The helper makes
-that cycle repeatable and safe to run; it does not make the test automatic, and
-it does not run itself.
+nothing about the host's power state, so the host owed one cycle that runs the
+host's own `sm750_pm_suspend()` and `sm750_pm_resume()`; it ran on 2026-11-27
+(see the result below). The helper makes that cycle repeatable and safe to run;
+it does not make the test automatic, and it does not run itself.
+
+**Result, 2026-11-27 16:12 host clock: PASS.** The owner set
+`nvidia.NVreg_PreserveVideoMemoryAllocations=0` on the command line and
+rebooted, which stops `nv_pmops_suspend()` returning `-5` for the two Tesla
+P100s at `0000:83:00.0` and `0000:84:00.0`; the cost is that those two cards do
+not save or restore VRAM across a real sleep, which this level never exercises.
+
+```sh
+$ sudo -n /usr/local/sbin/sm750-pmtest run devices
+sm750-pmtest: pm_test armed at devices (readback: devices)
+journal lines added since the snapshot: 73
+verdict: PASS
+sm750-pmtest: pm_test readback after cleanup: none
+```
+
+On kernel `7.3.5-100.fc43.x86_64` with driver 0.6.9 (`srcversion
+67300D6D1C065017A0D1328`) the command exited 0 and the driver logged all four
+edges once each: `pm: suspend entry`, `pm: suspend complete`, `pm: resume
+entry`, `pm: resume complete`. `suspend_stats` kept every error counter at zero
+with `last_failed_dev` empty, the armed level showed its fingerprint
+`PM: suspend debug: Waiting for 5 second(s).`, the kernel reported
+`PM: suspend devices took 4.919 seconds` and `PM: resume devices took 3.363
+seconds`, and the panel came back at 1024x768 at 75 Hz with `vblank.count` 6508
+advancing and raster `0x182 -> 0x122`; `sm750-crc dump` read `nonzero 24410`,
+`crc32 0xa76f0aeb`. Defect A66 is `fixed; measured on the host`.
+
+What the pass does not claim: no power was removed, the host has no S3, and the
+only warning in the window, `nvidia-modeset: WARNING: GPU:0: Lost display
+notification`, belongs to the owner's display GPU `0000:02:00.0`, not to the
+SM750. Transcript: `docs/evidence/runtime/49-pmtest-devices-cycle.txt`.
 
 Install (repo-relative source; the installed copy is byte-identical):
 
@@ -1624,16 +1666,17 @@ reads it back and prints the readback, so an interrupted run cannot leave the
 machine in a test mode. The verdict needs both completion lines, no failure line
 and unchanged `suspend_stats` error counters; anything less is `FAIL`.
 
-Run it in a maintenance window:
+Run it again with the same two commands:
 
 ```sh
 sudo -n /usr/local/sbin/sm750-pmtest run devices
 sudo -n /usr/local/sbin/sm750-pmtest status
 ```
 
-The proof to look for is the same four `pm:` lines named in section 3.13, with
-no `pm: suspend failed:` or `pm: resume failed:` line in the same cycle, and
-`PANEL_CURRENT_LINE` advancing between two reads.
+The proof is the same four `pm:` lines named in section 3.13, with no
+`pm: suspend failed:` or `pm: resume failed:` line in the same cycle, and
+`PANEL_CURRENT_LINE` advancing between two reads; the 2026-11-27 run above
+shows all three.
 
 ### 3.15 Capturing a stack from a wedged driver
 
@@ -2044,12 +2087,16 @@ Defect A66: on 2026-11-27 an armed `pm_test=devices` cycle never reached the
 SM750. The freeze write failed with `Input/output error` because the two
 neighbouring Tesla P100s at `0000:83:00.0` and `0000:84:00.0` return `-5` from
 `nv_pmops_suspend`, and `suspend_stats` named `last_failed_dev=0000:83:00.0`.
-The driver's `pm: suspend entry` line never appeared, so its sleep path is
-unmeasured rather than broken. The 0.6.9 driver publishes
+The driver's `pm: suspend entry` line never appeared, so its sleep path was
+unmeasured rather than broken. A66 is now `fixed; measured on the host`: the
+cycle passed once `nvidia.NVreg_PreserveVideoMemoryAllocations=0` was set
+(section 3.14). The `pm_probe` route stays useful because it needs neither a
+reboot nor a maintenance window. The 0.6.9 driver publishes
 `/sys/bus/pci/devices/0000:01:00.0/pm_probe`, mode `0200`, which calls the same
 two callback bodies from a running system (`docs/PARAMETERS.md`).
 
-Install (repo-relative source; the installed copy is byte-identical):
+Install (repo-relative source; the installed copy is stale after the A67 fix,
+so install it again from the repository root):
 
 ```sh
 sudo install -m 0755 -o root -g root tools/sm750-pm-probe.sh /usr/local/sbin/sm750-pm-probe
@@ -2074,9 +2121,35 @@ count, the attribute mode and every `pm probe: ` line from this boot.
 panel raster position before and after plus the kernel's own result lines. A
 non-zero callback return is reported as FAIL with exit 1.
 
+**Result, and the A67 fix.** On 2026-11-27 the callbacks ran through the
+attribute and returned 0. The helper's verdict was wrong on that run: it
+reported FAIL with a message saying it had found no `pm probe:` result line,
+because it matched only the single-command form `pm probe: suspend returned
+<n>`, while `cycle` logs one combined line, `pm probe: cycle suspend ok, resume
+ok`. Two more faults sat in the same block: `if ! printf ... >"$ATTR"; then
+rc=$?` always stored 0, and the cycle depth check grepped `pm probe: resume
+returned 0`, a line `cycle` never writes. The fix in
+`tools/sm750-pm-probe.sh` matches the result line per command, recognises the
+failure fragments (`cycle suspend failed:`, `resume failed:` or `returned
+<n>`) and takes the write status from the write itself.
+`tests/check-pm-probe.sh` section k now pins the three driver result literals
+and the two failure fragments against `src/sm750_drm.c`, so a drift in either
+file fails `make check`: `PM probe gate checks passed (11 assertions, 6 planted
+controls)`. Transcript: `docs/evidence/runtime/50-pm-probe-cycle.txt`.
+
+The installed copy predates that fix - 5390 bytes, sha256 `ca5b5981...`,
+installed 2026-11-27T14:14Z - while the repository file is 167 lines, sha256
+`986a441cf4977d2753711254e983c98bc63b6076a7f6cc54fe6b17a210d87048`. Refresh it
+from the repository root:
+
+```sh
+sudo install -m 0755 -o root -g root tools/sm750-pm-probe.sh /usr/local/sbin/sm750-pm-probe
+```
+
 What a pass proves and what it does not: the callback bodies run and return 0.
 It does not prove that system sleep works, because no PCI config space is saved
 or restored, the device never enters D3hot, no power state changes, and the
 platform wake path and every other device on the bus are untouched. The real
-verification stays the devices-level `pm_test` cycle after a reboot with
-`nvidia.NVreg_PreserveVideoMemoryAllocations=0` (section 3.14).
+verification is the devices-level `pm_test` cycle, which now has a PASS on this
+host (section 3.14); `pm_probe` was the aid that reached the callbacks while
+that cycle was blocked.

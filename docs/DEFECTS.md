@@ -1,7 +1,7 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Defect dispositions
 
-One row per defect inventoried in [AUDIT.md](AUDIT.md), plus the forty
+One row per defect inventoried in [AUDIT.md](AUDIT.md), plus the forty-two
 found later that are enumerated here (`A31` is not a defect and is recorded in
 the detail sections below instead of in this table):
 `A25`, in the kernel log of the running 0.5.9 build, `A26`, in the IGT
@@ -54,7 +54,15 @@ measurement left behind, and `A56`-`A64` are the review's nine confirmed
 defects and findings, each fixed with a `tests/check-drm-policy.sh` assertion
 (`docs/evidence/review/01-production-readiness-architecture.txt`,
 `docs/evidence/review/02-production-readiness-runtime.txt`; transcript
-`docs/evidence/runtime/44-production-readiness-review.txt`).
+`docs/evidence/runtime/44-production-readiness-review.txt`), and `A65`, by the
+first hot `modprobe -r` after that review, which wedged in `Unloading` and
+needed a reboot (`docs/evidence/runtime/47-hot-reload-wedge.txt`), and `A66`
+and `A67`, by the 2026-11-27 sleep measurement: `A66` is the sleep path that
+had never executed because two neighbouring P100s refused the devices cycle,
+and `A67` is the `pm_probe` helper failing a cycle that had succeeded
+(`docs/evidence/runtime/48-pmtest-devices-attempt.txt`,
+`docs/evidence/runtime/49-pmtest-devices-cycle.txt`,
+`docs/evidence/runtime/50-pm-probe-cycle.txt`).
 They are
 recorded here because this
 table is the current defect state, not a copy of the audit. [AUDIT.md](AUDIT.md)
@@ -139,7 +147,8 @@ after (working tree) form of every fixed item. All logs were produced unprivileg
 | A63 | S3 | A VRAM strap reporting 1024..1295 bytes underflowed the DMA test carve (`u32` subtraction) and let the driver treat a buffer smaller than the test as free space | fixed; gate-verified | `SM750_DRM_MIN_VRAM` (`src/sm750_drm.c:125-134`) is the cursor buffer, the DMA test, its guard words and one 640x480 XRGB8888 buffer, and probe refuses a device below it (`:5278-5282`). Guard: `tests/check-drm-policy.sh` assertion D4 (`:348`) with planted control `vram_floor` (`:577`) | `docs/evidence/review/02-production-readiness-runtime.txt` (confirmed defects, D4) |
 | A64 | S3 | A DMA acknowledgement that raced the 5 ms completion timeout made the driver declare `DMA1 shadow upload timed out`, disable DMA and require a reload, although the transfer had completed | fixed; gate-verified | after the IRR ack branch the completion is re-read before the timeout error: `if (irq_completion && completion_done(&sdev->dma_completion))` clears `dma_active` and returns 0 (`src/sm750_drm.c:1668-1675`). Guard: `tests/check-drm-policy.sh` assertion R2 (`:360`) with planted control `completion_recheck` (`:578`) | `docs/evidence/review/02-production-readiness-runtime.txt` (confirmed defects, R2) |
 | A65 | S1 | A hot `modprobe -r sm750hdmidrm` with the fbcon vtconsole bound wedged in `Unloading` and never completed: `/proc/modules` showed `sm750hdmidrm 200704 -1 - Unloading 0xffffffffc0a3d000 (OE-)`, `modprobe -r` sat in `D` state for the rest of the boot, the vtconsole bind went `1 -> 0` and the console left the panel for good. Only a reboot cleared it, and the freshly installed 0.6.8 could not be loaded until then. No stack was captured (`kernel.dmesg_restrict=1`, no hung-task report in the boot journal), so the blocked function is NOT identified | open; no root cause | evidence only: `docs/evidence/runtime/47-hot-reload-hang.txt` (module state, the `D`-state `modprobe`, the last two kernel lines, the three candidate orderings in `sm750_pci_remove()` at `src/sm750_drm.c:5446-5457`). Closes with a controlled reproduction that captures a stack, or with `drm_dbg` lines at every step of the remove callback | `docs/evidence/runtime/47-hot-reload-hang.txt` |
-| A66 | S4 | The driver's system-sleep path has never executed on the reference board: the first armed devices-level `pm_test` cycle was refused before the SM750 was reached. Two neighbouring Tesla P100s (`0000:83:00.0` and `0000:84:00.0`) returned `-EIO` from `nv_pmops_suspend` while `PreserveVideoMemoryAllocations=1`, so writing `freeze` to `/sys/power/state` failed with `Input/output error` and the journal held zero driver `pm:` lines; `suspend_stats` recorded `fail=1`, `failed_suspend=1`, `last_failed_dev=0000:83:00.0`, `last_failed_errno=-5`, `last_failed_step=suspend`. The panel survived and `PANEL_CURRENT_LINE` advanced, so the driver was not disturbed, but neither `sm750_pm_suspend()` nor `sm750_pm_resume()` was ever called | open; measurement pending | the 0.6.9 `pm_probe` attribute drives the callback bodies directly so they can be measured without a system sleep (`docs/PARAMETERS.md`); it is a measurement aid only, not a substitute for the real cycle, and the devices-level cycle is still owed after a reboot with `nvidia.NVreg_PreserveVideoMemoryAllocations=0` | `docs/evidence/runtime/48-pmtest-devices-attempt.txt` |
+| A66 | S4 | The driver's system-sleep path has never executed on the reference board: the first armed devices-level `pm_test` cycle was refused before the SM750 was reached. Two neighbouring Tesla P100s (`0000:83:00.0` and `0000:84:00.0`) returned `-EIO` from `nv_pmops_suspend` while `PreserveVideoMemoryAllocations=1`, so writing `freeze` to `/sys/power/state` failed with `Input/output error` and the journal held zero driver `pm:` lines; `suspend_stats` recorded `fail=1`, `failed_suspend=1`, `last_failed_dev=0000:83:00.0`, `last_failed_errno=-5`, `last_failed_step=suspend`. The panel survived and `PANEL_CURRENT_LINE` advanced, so the driver was not disturbed, but neither `sm750_pm_suspend()` nor `sm750_pm_resume()` was ever called | fixed; measured on the host | the owner opened the route at his own level by adding `nvidia.NVreg_PreserveVideoMemoryAllocations=0` to the kernel command line; `sudo -n /usr/local/sbin/sm750-pmtest run devices` then ran the real devices-level cycle on kernel 7.3.5-100 with 0.6.9 loaded and logged all four edges (`pm: suspend entry`, `pm: suspend complete`, `pm: resume entry`, `pm: resume complete`), counted each once, left every `suspend_stats` error counter at zero with an empty `last_failed_dev`, and the panel came back scanning (raster `0x182 -> 0x122`, `sm750-smi` 1024x768 at 75 Hz, `crc32 0xa76f0aeb`); `PM: suspend debug: Waiting for 5 second(s).` proves the armed level really executed. Still not covered: no power was removed, this host has no S3, and VRAM preservation on the two P100s was deliberately disabled for the run | `docs/evidence/runtime/48-pmtest-devices-attempt.txt`, `docs/evidence/runtime/49-pmtest-devices-cycle.txt` |
+| A67 | S4 | The `pm_probe` helper reported `verdict: FAIL: no "pm probe:" result line in the log` on a cycle that had in fact succeeded: the driver reports a single command with the callback's own return code (`pm probe: suspend returned %d`) but reports `cycle` with one combined line (`pm probe: cycle suspend ok, resume ok`), and the helper's success patterns only knew the single-command form. Two more defects sat in the same block: `if ! printf ... >"$ATTR"; then rc=$?` stored 0 unconditionally, and the cycle depth check grepped for `pm probe: resume returned 0`, a line `cycle` never writes, so a passing verdict would have been overwritten by a second failure | fixed | `tools/sm750-pm-probe.sh` matches per command (suspend|resume on `returned 0`, cycle on the combined line), detects failure by `cycle suspend failed:`, `resume failed:` or `returned <n>`, and captures the write status from the write itself; `tests/check-pm-probe.sh` section k now pins the three driver result literals and the two failure fragments against `src/sm750_drm.c`, so a drift in either file fails the gate instead of turning a healthy run red at three in the morning. A pass is still not a system sleep: evidence 49 is the measurement that counts | `docs/evidence/runtime/50-pm-probe-cycle.txt` |
 
 ## Deferred and accepted items in detail
 
@@ -1687,7 +1696,7 @@ Disposition: open, no root cause. Recovery requires a reboot; there is no
 userspace remedy. Next step is a controlled reproduction with a stack, or
 `drm_dbg` at every step of the remove callback.
 
-### A66 - the sleep path is unmeasured because nvidia refuses the devices cycle (open)
+### A66 - the sleep path was unmeasured because nvidia refuses the devices cycle (fixed)
 
 Observed 2026-11-27 11:55Z on kernel 7.3.4-100.fc43.x86_64 with 0.6.8 loaded.
 `sudo -n /usr/local/sbin/sm750-pmtest run devices` armed `pm_test` at `devices`
@@ -1717,6 +1726,75 @@ callback bodies directly, so their behaviour can be measured while the sleep
 cycle stays blocked. It is not a system sleep, and a pass there is not evidence
 that sleep works.
 
-Owed: reboot with `nvidia.NVreg_PreserveVideoMemoryAllocations=0`, then run the
-real devices-level cycle (`sm750-pmtest run devices`) so the callbacks execute
-inside a genuine suspend and the completion lines exist.
+Owed at the time: reboot with `nvidia.NVreg_PreserveVideoMemoryAllocations=0`,
+then run the real devices-level cycle (`sm750-pmtest run devices`) so the
+callbacks execute inside a genuine suspend and the completion lines exist.
+
+Observed 2026-11-27 16:12 host clock (13:19Z) on kernel
+7.3.5-100.fc43.x86_64 with 0.6.9 loaded - the owed run, discharged:
+
+    /proc/cmdline: intel_iommu=on iommu=pt nvidia.NVreg_PreserveVideoMemoryAllocations=0
+    /proc/driver/nvidia/params: PreserveVideoMemoryAllocations: 0
+    verdict: PASS
+
+`sudo -n /usr/local/sbin/sm750-pmtest run devices` armed `pm_test` at
+`devices`, added 73 journal lines, and the driver logged all four edges once:
+`pm: suspend entry`, `pm: suspend complete`, `pm: resume entry`,
+`pm: resume complete`. `suspend_stats` did not move - `fail`, `failed_suspend`
+and the `last_failed_*` fields all stayed at zero with an empty
+`last_failed_dev` - so nothing aborted the phase this time. The kernel itself
+confirms the armed level executed:
+
+    PM: suspend devices took 4.919 seconds
+    PM: suspend debug: Waiting for 5 second(s).
+    PM: resume devices took 3.363 seconds
+
+On resume the driver re-staged its full-frame backbuffer
+(`full-frame backbuffer staging enabled (1572864 bytes per buffer)`) and
+repainted the test card, the panel came back at 1024x768 at 75 Hz with
+`vblank.count` advancing (6508), `PANEL_CURRENT_LINE` moved `0x182 -> 0x122`
+across the cycle, and `sm750-crc dump` read `nonzero 24410`,
+`crc32 0xa76f0aeb`. The one warning in the window,
+`nvidia-modeset: WARNING: GPU:0: Lost display notification`, belongs to the
+owner's display GPU `0000:02:00.0`, not to the SM750.
+
+What the pass does not claim: no power was removed, this host has no S3 to
+reach (`mem_sleep` is `[s2idle]`), and `PreserveVideoMemoryAllocations=0` was
+set deliberately for the run, so the two P100s did not save or restore VRAM.
+Evidence: `docs/evidence/runtime/49-pmtest-devices-cycle.txt`; the refused
+attempt that preceded it stays in
+`docs/evidence/runtime/48-pmtest-devices-attempt.txt`.
+
+### A67 - the pm_probe helper failed a cycle that had succeeded (fixed)
+
+Observed 2026-11-27 16:15 host clock on 0.6.9, kernel 7.3.5-100. Root-only
+attribute `pm_probe` accepted `cycle`, the driver logged `pm probe: command
+cycle` followed by `pm probe: cycle suspend ok, resume ok`, and the raster
+advanced `0x00000007 -> 0x00000214` - all correct - while the helper printed:
+
+    verdict:    FAIL: no "pm probe:" result line in the log
+
+Cause: a string contract with two sides and a test on neither. `pm_probe`
+reports a single command by echoing the callback's return code
+(`pm probe: suspend returned %d`), but reports `cycle` with one combined line
+(`pm probe: cycle suspend ok, resume ok`); the helper's success patterns knew
+only the single-command form. Two further defects sat in the same block:
+`if ! printf '%s' "$command" >"$ATTR"; then rc=$?` always stored 0, so a write
+failure would have printed `rc=0`; and the cycle depth check grepped for
+`pm probe: resume returned 0`, a line `cycle` never writes, so even a passing
+verdict would have been overwritten by a second failure.
+
+Fix: `tools/sm750-pm-probe.sh` matches per command (`suspend`/`resume` on
+`returned 0`, `cycle` on the combined line), detects failure by
+`cycle suspend failed:`, `resume failed:` or `returned <n>`, and captures the
+write status from the write itself. `tests/check-pm-probe.sh` section k pins
+the three driver result literals and the two failure fragments against
+`src/sm750_drm.c`, so a drift in either file fails `make check` instead of
+turning a healthy run red later. Gate: `PM probe gate checks passed (11
+assertions, 6 planted controls)`.
+
+A pass here is still not a system sleep: no PCI config space is saved or
+restored, the device never enters D3hot, no power is removed. Evidence 49 is
+the measurement that counts for A66; this route only keeps the callback bodies
+exercisable when another device refuses the cycle, as in evidence 48.
+Evidence: `docs/evidence/runtime/50-pm-probe-cycle.txt`.
