@@ -52,7 +52,7 @@ Every modeset funnels through `sm750_program_mode()` (`src/sm750_drm.c:1356`), w
 | `SM750_MODE_STAGE_SII_ENABLE` | `sm750_sii902x_enable()` | `:1440` |
 
 - Enum and names: `src/sm750_drm.c:293-299`, `:302-318`; the field is cleared on success at `:1443`
-- A failure prints `failed to enable HDMI mode: %d at stage %s (commit finished, event consumed)` (`src/sm750_drm.c:3824-3825`)
+- A failure prints `failed to enable HDMI mode: %d at stage %s (pipe left down; commit event not armed)`, the 0.6.8-and-newer text (`src/sm750_drm.c:4410-4412`; the suffix changed in commit `8e4e09f`, 2026-11-26)
 
 ---
 

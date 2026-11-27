@@ -4968,3 +4968,30 @@ alone.
 Measured for the privilege-surface row that had no evidence: 78 NOPASSWD
 lines, twelve helpers, captured to
 `docs/evidence/environment/01-sudo-allowlist.txt`.
+
+### 2026-11-28T00:20Z | orchestrator | the rejected verdict is gone from the README, and 47 audited claims are corrected
+
+The T3 review found 47 statements in the tree that its own evidence does not
+support, three of them blocking. This entry records the correction pass.
+
+- README.md no longer publishes `Acceptance verdict: 6 PASS, 0 FAIL, 1 GAP`. It
+  prints a strict-bar status instead: six of nine elements open, with A53 and
+  A54 named as platform items that no driver change can close, each pointing at
+  its committed proof. The current release in the file is 0.6.10, not 0.6.9.
+- docs/DEFECTS.md, docs/TEST-STRATEGY.md, docs/PACKAGING-RPM.md,
+  docs/ROOT-ACTIONS.md, docs/DELIVERABLES.md, docs/ACCEPTANCE-REPORT.md and
+  docs/evidence/EVIDENCE-GAPS.md carry the corrected claims: the real capture
+  path for the hot-reload evidence, the 18-command recipe, the CRC source that
+  does exist, the -110 suffix the driver prints since 0.6.8, the 78-line
+  allowlist with all twelve helpers, the 0.6.10 package version, GAP-B7 closed,
+  and the 49152-byte v3 helper rerun that closed the old EXPECT warning.
+- Two claims were left standing deliberately: the A54 row at docs/DEFECTS.md:125
+  describes the pre-fix 2000 ms loop and is not drift, and the surviving "17
+  command" mentions in capture descriptions describe the captures themselves.
+- My own premise was wrong once: I asked for the README input-isolation claim to
+  be qualified because the installed helper was stale. It is not stale any more.
+  /usr/local/sbin/sm750-headless and tools/sm750-headless.sh are both 28930
+  bytes with sha256 da71bc31... so the claim is true of the installed copy.
+  Recorded here rather than silently dropped.
+- Left open: docs/DECK.md:55 and docs/deck/index.html:326 still quote the
+  pre-0.6.8 failure suffix and the line numbers that went with it.
