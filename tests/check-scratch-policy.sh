@@ -28,6 +28,7 @@ harness=tools/sm750-restore-cycle.sh
 scripts=(
 	build-package.sh
 	tests/audit-release.sh
+	tests/check-a65-trace.sh
 	tests/check-drm-xorg-config.sh
 	tests/check-drm-module.sh
 	tests/check-rpm-dkms.sh

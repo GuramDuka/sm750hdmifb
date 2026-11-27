@@ -18,7 +18,7 @@
 #   tests/check-rpm-dkms.sh
 
 Name:           sm750hdmifb-tools
-Version:        0.6.9
+Version:        0.6.10
 Release:        1%{?dist}
 Summary:        Monitoring and control utility for SM750G10 HDMI cards
 License:        GPL-2.0-only
@@ -71,6 +71,9 @@ install -m 0755 tools/sm750-smi "%{buildroot}%{_bindir}/sm750-smi"
 %{_bindir}/sm750-smi
 
 %changelog
+* Fri Nov 27 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.10-1
+- Rebuild against the 0.6.10 module release; the tools payload is unchanged
+  from 0.6.9-1 and both halves of the release move together.
 * Fri Nov 27 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.9-1
 - Rebuild against the 0.6.9 module release; the tools payload is unchanged
   from 0.6.8-1 and both halves of the release move together.

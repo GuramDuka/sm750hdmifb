@@ -20,15 +20,20 @@ make static                                    # configured tree, compare to bas
 KDIR=/usr/src/kernels/7.3.4-100.fc43.x86_64 \
   STATIC_KERNELS=/path/to/6.17.1-300.fc43.x86_64 \
   ./tests/check-static.sh --logs /tmp/static    # two trees, keep raw output
-./tests/check-static.sh --update                # rewrite tests/static/baseline/
+./tests/check-static.sh --update                # rewrite ALL trees' entries
+KDIR=/usr/src/kernels/7.3.5-100.fc43.x86_64 \
+  ./tests/check-static.sh --update-kernel       # rewrite only 7.3.5's entries
 ```
 
 `CC` defaults to `/usr/bin/gcc`: the `gcc` on `PATH` on this host is the CUDA
 toolchain, and the kernel rejects it. `KDIR` defaults to
 `/lib/modules/$(uname -r)/build`; `STATIC_KERNELS` adds further header trees,
 space separated. The first tree also drives the cppcheck and pahole runs, and
-the tree version (`<release>.fc43.<arch>`) is part of every fingerprint, so a
-finding that only one tree produces cannot be hidden by the other.
+the tree version (`<release>.fc43.<arch>`) is part of every sparse and smatch
+fingerprint. The baseline is compared per tree, so a finding that only one tree
+produces cannot be hidden by another tree's line, and an installed tree with no
+baseline of its own is reported as a missing baseline rather than as a new
+finding.
 
 ## 2. Fingerprints and the baseline
 
@@ -49,6 +54,45 @@ so a *second* copy of an already-known finding is reported as new while a pure
 line shift is not. pahole is informational (struct layout and BTF status): it
 fails the gate only if the probe build fails.
 
+The `<tree>` field is compared, not ignored. sparse and smatch fingerprints
+start with the kernel release, and the gate splits both the run and the
+baseline on that field, then compares one tree's lines against that same
+tree's baseline lines. Identity inside a tree is the rest of the fingerprint,
+so a line shift is still invisible while a distinct finding, or a second copy
+of one, still fails. cppcheck and coccinelle fingerprints carry no tree because
+they analyse `src/` itself; they keep the single global comparison.
+
+Consequences, all deliberate:
+
+- A tree that reports findings but has no baseline line of its own fails with
+  `no baseline for kernel tree <release>: run ./tests/check-static.sh
+  --update-kernel`. That message is not `NEW <tool> findings beyond the
+  recorded baseline`: the first says the tree was never baselined, the second
+  says a baselined tree produced a new fingerprint.
+- A tree that reports nothing needs no baseline line, so installing a tree and
+  running the gate clean does not demand an update.
+- `--update-kernel` rewrites only the analysed trees' lines and keeps every
+  other tree's entries verbatim; `--update` still rewrites the whole file and
+  therefore drops the entries of trees that are not in that run.
+
+### A new kernel tree
+
+Installing a kernel whose headers the driver builds against adds a new tree
+value to every sparse and smatch fingerprint. The procedure is:
+
+1. Run the gate once to confirm the failure is the missing baseline, not a
+   `NEW ... findings` line: the message must name the tree and
+   `--update-kernel`.
+2. `KDIR=/usr/src/kernels/<release> ./tests/check-static.sh --update-kernel`.
+   It prints the tree and how many baseline lines it wrote.
+3. Review the added lines with `git diff tests/static/baseline/` and compare
+   them against rows ST-05 to ST-09. The known set is one `sii902x.c`
+   `sii902x_begin_control()` warning and four `sm750_drm.c` `sm750_dma_init()`
+   warnings, all `shift has higher precedence than mask` from `GENMASK_TYPE()`.
+4. If a line is not one of those, do not accept it. Triage it as a new row in
+   section 4 first; a genuinely new message is a finding, and the baseline is
+   the record of a triage, not a way to silence one.
+
 ## 3. Result counts
 
 `sparse` and `smatch` were run per tree with kbuild's own checker hook
@@ -62,6 +106,7 @@ actually analysed the files rather than skipping them.
 | sparse | 0.6.4 | 6.17.1-300 | 0 | 4 | 4 | 0 (fixed) |
 | smatch | 1.73-8.fc43 | 7.3.4-100 | 0 | 5 | 5 | 5 false positives (baseline) |
 | smatch | 1.73-8.fc43 | 6.17.1-300 | 0 | 21 | 3 | 3 false positives (baseline) |
+| smatch | 1.73-8.fc43 | 7.3.5-100 | 0 | 5 | 5 | 5 false positives (baseline) |
 | cppcheck | 2.19.1 | 7.3.4-100 | 0 | 1 | 1 | 1 suppressed (documented) |
 | coccinelle | 1.3 | 7.3.4-100 | 0 | 0 | 0 | 0 |
 | pahole | 1.32 | 7.3.4-100 | 0 | n/a | informational | no action |
@@ -90,11 +135,11 @@ they are also the only rows with a source change, so no defect row is owed for a
 | ST-02 | sparse | `src/sm750_drm.c:136` `sm750_test_low_vco_pll` | style | Same pattern; used at `src/ddk750_mode.c:324,328`. | fixed: `src/ddk750_chip.h:22` |
 | ST-03 | sparse | `src/sm750_drm.c:137` `sm750_test_panel_fifo` | style | Same pattern; used at `src/ddk750_mode.c:260-314`. | fixed: `src/ddk750_chip.h:23` |
 | ST-04 | sparse | `src/sm750_drm.c:138` `sm750_test_refresh_centihz` | style | Same pattern; used at `src/sii902x.c:331,346`. | fixed: `src/ddk750_chip.h:24` |
-| ST-05 | smatch | `src/sm750_drm.c:1651` `dma_set_mask_and_coherent(..., DMA_BIT_MASK(31))` | false-positive | `DMA_BIT_MASK(n)` is `GENMASK_ULL((n) - 1, 0)` (`include/linux/dma-mapping.h:126`) and `GENMASK_TYPE()` (`include/linux/bits.h:52`) mixes `<<` with `&`/`>>` without inner parentheses. The outer cast and parentheses make the value correct; smatch's precedence check does not model the cast. A 5-line out-of-tree probe reproduces the same warning with no driver code involved. Reported by 7.3.4 only. | documented baseline |
-| ST-06 | smatch | `src/sm750_drm.c:1663` `address > DMA_BIT_MASK(31)` | false-positive | Same macro expansion as ST-05. Reported by 7.3.4 only. | documented baseline |
-| ST-07 | smatch | `src/sm750_drm.c:1665` `(address & GENMASK_ULL(22, 0)) +` | false-positive | Same `GENMASK_TYPE()` expansion; `address & GENMASK_ULL(22, 0)` is a plain mask of a `dma_addr_t` with no shift outside the macro. Both trees report it. | documented baseline |
-| ST-08 | smatch | `src/sm750_drm.c:1673` `(address & GENMASK_ULL(22, 2))` | false-positive | Same as ST-07, on the source-address programming path. Both trees report it. | documented baseline |
-| ST-09 | smatch | `src/sii902x.c:741` `control & ~SII902X_PWR_STATE_MASK` | false-positive | `SII902X_PWR_STATE_MASK` is `GENMASK(1, 0)` (`src/sii902x.c:28`), so the same header expansion. No shift appears in the driver expression. Both trees report it. (Line 743 before the ST-04 change removed two `extern` lines.) | documented baseline |
+| ST-05 | smatch | `src/sm750_drm.c:1651` `dma_set_mask_and_coherent(..., DMA_BIT_MASK(31))` | false-positive | `DMA_BIT_MASK(n)` is `GENMASK_ULL((n) - 1, 0)` (`include/linux/dma-mapping.h:126`) and `GENMASK_TYPE()` (`include/linux/bits.h:52`) mixes `<<` with `&`/`>>` without inner parentheses. The outer cast and parentheses make the value correct; smatch's precedence check does not model the cast. A 5-line out-of-tree probe reproduces the same warning with no driver code involved. Every analysed tree reports it. ST-05 to ST-08 share one fingerprint (same tree, function and message), recorded as 4 copies on 7.3.4-100 and 7.3.5-100 and 2 on 6.17.1-300. | documented baseline |
+| ST-06 | smatch | `src/sm750_drm.c:1663` `address > DMA_BIT_MASK(31)` | false-positive | Same macro expansion as ST-05, part of the same 4/4/2 copy count shared by ST-05 to ST-08. | documented baseline |
+| ST-07 | smatch | `src/sm750_drm.c:1665` `(address & GENMASK_ULL(22, 0)) +` | false-positive | Same `GENMASK_TYPE()` expansion; `address & GENMASK_ULL(22, 0)` is a plain mask of a `dma_addr_t` with no shift outside the macro. Every analysed tree reports it (7.3.4-100, 7.3.5-100, 6.17.1-300). | documented baseline |
+| ST-08 | smatch | `src/sm750_drm.c:1673` `(address & GENMASK_ULL(22, 2))` | false-positive | Same as ST-07, on the source-address programming path. Every analysed tree reports it (7.3.4-100, 7.3.5-100, 6.17.1-300). | documented baseline |
+| ST-09 | smatch | `src/sii902x.c:741` `control & ~SII902X_PWR_STATE_MASK` | false-positive | `SII902X_PWR_STATE_MASK` is `GENMASK(1, 0)` (`src/sii902x.c:28`), so the same header expansion. No shift appears in the driver expression. Every analysed tree reports it (one copy each on 7.3.4-100, 7.3.5-100 and 6.17.1-300). (Line 743 before the ST-04 change removed two `extern` lines.) | documented baseline |
 | ST-10 | cppcheck | `src/sm750_drm.c:815` `list_for_each_entry` | false-positive | `unknownMacro`: cppcheck cannot expand the kernel's list iterator when the kernel headers are intentionally not parsed (section 6). The same construct appears at every `list_for_each_entry` in the file, so the message carries no location information. | suppressed with `--suppress=unknownMacro`, reason recorded in `tests/check-static.sh` |
 | ST-11 | pahole | `src/sm750hdmidrm.ko` | false-positive | No `.BTF` section: kbuild prints `Skipping BTF generation for sm750hdmidrm.ko due to unavailability of vmlinux`, because out-of-tree modules need a `vmlinux` with BTF for the *target* tree and `/boot/vmlinux*` does not exist here. Not a driver property. DWARF is present, so `pahole -C` reads the layouts. | documented baseline; layouts in `24-static-pahole.log` |
 | ST-12 | pahole | `sm750_dither_scale_map` (2 bytes trailing padding), `sm750_drm_device` (8 holes, 29 bytes) | style | All gaps are 1 to 5 byte alignment padding between members of a struct allocated once per device; no hot-path struct is affected and there is no cacheline-scale waste. | no action |
@@ -227,8 +272,9 @@ What a PASS means now:
 
 - every listed analyser ran to completion over `src/` and exited 0, for every
   kernel tree in the run;
-- the normalised fingerprint multiset equals the baseline, i.e. no finding
-  beyond `tests/static/baseline/` and no second copy of a recorded finding;
+- every analysed tree's normalised fingerprint multiset equals that tree's
+  slice of the baseline, i.e. no finding beyond `tests/static/baseline/`, no
+  second copy of a recorded finding, and no analysed tree left unbaselined;
 - the result does not depend on the caller's pkg-config resolver settings.
 
 It is still a hard gate: a non-zero spatch exit fails the run, and a 255 is

@@ -6,13 +6,14 @@ runtime. Use `sm750hdmidrm.name=value` on the kernel command line or an
 `options sm750hdmidrm ...` line in `/etc/modprobe.d/`. Runtime parameters
 override build-time defaults.
 
-Six diagnostic parameters are deliberately writable after load:
+Seven diagnostic parameters are deliberately writable after load:
 `dma_batch_rows`, `staging_timing`, `test_pattern`,
-`test_pattern_period_ms`, `test_pattern_anim_ms` and `crc_window_bytes` are
-exposed with mode `0644`, so they can be changed through
+`test_pattern_period_ms`, `test_pattern_anim_ms`, `crc_window_bytes` and
+`a65_trace` are exposed with mode `0644`, so they can be changed through
 `/sys/module/sm750hdmidrm/parameters/` to compare upload batching and timing
-on a live system, to turn the test card on and off, or to widen the scanout
-readback window without reloading the module. Every other parameter is `0444`
+on a live system, to turn the test card on and off, to widen the scanout
+readback window without reloading the module, or to trace the teardown of a
+hot remove. Every other parameter is `0444`
 and is fixed once the module is loaded.
 
 ## Everyday options
@@ -34,6 +35,7 @@ and is fixed once the module is loaded.
 | `backbuffer_staging` | `1` | Render an exact full-frame update into off-screen VRAM, then present it with the display controller's vblank-synchronised address flip. It is automatically unavailable when two scanout buffers do not fit. |
 | `shadow_dma_min_bytes` | `4096` | Smallest aligned upload span sent through DMA1. The one-RGB565-scanline default avoids DMA setup overhead for small interactive updates. Valid range is checked at probe. |
 | `crc_window_bytes` | `262144` | Writable through sysfs. Bytes read from the visible scanout offset for each CRC entry and by the `sm750_scanout` debugfs dump; the CRC source and the dump share one window, so widening it changes both. The value is sampled on every use, so a write takes effect on the next vblank or dump. Values below 4096 are raised to 4096, the length is rounded down to a multiple of 4 and clamped to the visible frame, so a larger write cannot read past it. Growing it to a whole frame is a diagnostic action, not something to poll: a full 1920x1080 XRGB8888 frame at pitch 7680 is 8294400 bytes, and the dump prints every byte in hex. |
+| `a65_trace` | `0` | Writable through sysfs. Print an `A65: <step>` line through `pr_err` (stderr-level printk, visible at the default loglevel) while the driver tears down: every step of `sm750_pci_remove()` and the shadow-workqueue teardown. It is instrumentation for defect A65, off by default, and it runs only during teardown. Enable it before a controlled hot remove that is expected to wedge; the last mark names the step that was executing. See `docs/DEFECTS.md` A65 and `docs/evidence/runtime/52-a65-teardown-trace.txt`. |
 | `test_pattern` | `auto` | Writable through sysfs. Test-card fallback when no client paints the panel: `off` never paints, `auto` paints only a frame that samples as entirely blank and is not owned by a userspace DRM master, `always` paints on every enable. Skipped on softscaled windows, below 320x200, and when the frame does not fit the VRAM left after the scanout offset. Inert, in every mode, while a scanout CRC source is armed: arming it cancels a running card and the flag stays set across a suspend/resume of the source. |
 | `test_pattern_period_ms` | `5000` | Writable through sysfs. Milliseconds between test-card palette rotations; `0` keeps the palette static. Values outside 500-600000 ms are clamped once with a `drm_info` line. |
 | `test_pattern_anim_ms` | `40` | Writable through sysfs. Milliseconds between test-card animation ticks (25 fps at the default); `0` stops the bouncing disc and leaves the card with the palette rotation only. Values outside 10-1000 ms are clamped once with a `drm_info` line. |

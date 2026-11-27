@@ -76,12 +76,12 @@ typedef struct drm_atomic_state sm750_atomic_commit;
 #define SM750_DRM_NAME "sm750hdmidrm"
 /* Keep in step with the package version in build-package.sh and dkms.conf;
  * tests/check-release-version.sh fails when the three disagree. */
-#define SM750_DRM_VERSION "0.6.9"
+#define SM750_DRM_VERSION "0.6.10"
 /* modetest reports these as the driver version, so they must track the release
  * number above; tests/check-release-version.sh fails when they drift. */
 #define DRIVER_MAJOR 0
 #define DRIVER_MINOR 6
-#define DRIVER_PATCHLEVEL 9
+#define DRIVER_PATCHLEVEL 10
 #define SM750_DRM_MAX_WIDTH 2560
 #define SM750_DRM_PHYSICAL_MAX_WIDTH 2048
 #define SM750_DRM_PLL PRIMARY_PLL
@@ -301,6 +301,12 @@ MODULE_PARM_DESC(shadow_dma_min_bytes,
 	"Minimum aligned shadow span for DMA (default 4096 bytes)");
 MODULE_PARM_DESC(crc_window_bytes,
 	"Bytes of the visible scanout region read per CRC (default 262144, minimum 4096, clamped to the visible frame; writable at runtime)");
+/* Defect A65 teardown marks; see docs/evidence/runtime/
+ * 51-a65-teardown-trace.txt. Default off, writes no state. */
+static bool a65_trace;
+module_param(a65_trace, bool, 0644);
+MODULE_PARM_DESC(a65_trace,
+	"Print A65: <step> marks while the driver tears down (defect A65)");
 module_param(test_pattern, charp, 0644);
 module_param(test_pattern_period_ms, uint, 0644);
 module_param(test_pattern_anim_ms, uint, 0644);
@@ -4834,12 +4840,23 @@ static void sm750_free_shadow_buffer(void *data)
 	kvfree(data);
 }
 
+/* Defect A65: a hot remove wedges in Unloading with fbcon bound and no
+ * stack exists.  The marks record which teardown step was executing. */
+static void a65_mark(const char *what)
+{
+	if (a65_trace)
+		pr_err("A65: %s\n", what);
+}
+
 static void sm750_destroy_shadow_workqueue(void *data)
 {
 	struct sm750_drm_device *sdev = data;
 
+	a65_mark("before async_quiesce");
 	sm750_async_quiesce(sdev);
+	a65_mark("after async_quiesce");
 	destroy_workqueue(sdev->shadow_workqueue);
+	a65_mark("after destroy_workqueue");
 	sdev->shadow_workqueue = NULL;
 }
 
@@ -5545,14 +5562,27 @@ static void sm750_pci_remove(struct pci_dev *pdev)
 {
 	struct sm750_drm_device *sdev = pci_get_drvdata(pdev);
 
+	a65_mark("remove enter");
+	a65_mark("before poll_fini");
 	drm_kms_helper_poll_fini(&sdev->drm);
+	a65_mark("after poll_fini");
+	a65_mark("before unplug");
 	drm_dev_unplug(&sdev->drm);
+	a65_mark("after unplug");
+	a65_mark("before test_pattern_cancel");
 	sm750_test_pattern_cancel(sdev);
+	a65_mark("after test_pattern_cancel");
+	a65_mark("before atomic_shutdown");
 	drm_atomic_helper_shutdown(&sdev->drm);
+	a65_mark("after atomic_shutdown");
+	a65_mark("before vblank_stop");
 	sm750_vblank_timer_stop(sdev, true);
+	a65_mark("after vblank_stop");
 	mutex_lock(&sdev->mode_lock);
 	sm750_sii902x_shutdown();
 	mutex_unlock(&sdev->mode_lock);
+	a65_mark("after sii902x_shutdown");
+	a65_mark("remove exit");
 }
 
 static void sm750_pci_shutdown(struct pci_dev *pdev)

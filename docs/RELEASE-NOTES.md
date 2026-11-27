@@ -1,6 +1,30 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Release notes
 
+## 0.6.10 - The next wedge becomes observable
+
+- **`a65_trace=1` marks the hot-reload teardown path.** The remove sequence
+  that wedges A65 prints sixteen bracketed `A65: <mark>` records through
+  `pr_err`, behind a default-off `bool` parameter (mode `0644`): thirteen in
+  `sm750_pci_remove()` and three in `sm750_destroy_shadow_workqueue()`. The
+  parameter is read-only in effect on code paths - it adds no lock, no sleep
+  and no change to call order. `tests/check-a65-trace.sh` pins the parameter
+  shape, the guard, the exact mark strings and the bracket order, and is wired
+  into `make check`.
+- **A54 is no longer a suspicion.** The last-close restore hook is
+  structurally unreachable on this host: with `drm.debug=0x7` the boot journal
+  records zero `drm_lastclose` calls, every client release leaves
+  `open_count = 2`, and the count never reaches zero because the in-kernel
+  fbdev client holds a card0 file while chromium holds renderD128. No
+  driver-side hook can fire; the limitation is documented and the
+  `sm750-headless` vt handoff remains the workaround
+  (`docs/evidence/runtime/51-lastclose-open-count.txt`).
+- **The static gate compares one kernel tree at a time.** A new installed
+  kernel no longer fails `make static` by re-reporting already-triaged smatch
+  macro noise: the baseline is read and merged per `kernelrelease`, and
+  `--update-kernel` adds only the tree under test
+  (`docs/DEFECTS.md` A68).
+
 ## 0.6.9 - The sleep path becomes measurable
 
 - **A root-only `pm_probe` attribute drives the PM callbacks directly.**

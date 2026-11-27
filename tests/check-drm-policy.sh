@@ -299,6 +299,15 @@ test "$stage_count" -ge 6 || {
 # `set -e` stops. Source-level, with six planted controls; it is invoked from
 # here, so the documented count of 18 `make check` recipe commands is unchanged.
 ./tests/check-pm-probe.sh
+# T63: the default-off A65 teardown marks in src/sm750_drm.c. Defect A65 is a
+# hot remove that wedges in Unloading with fbcon bound and leaves no stack, so
+# a65_trace=1 prints `A65: <step>` through pr_err from the remove callback and
+# from the shadow-workqueue teardown. The gate pins the bool 0644 declaration,
+# the pr_err/guard pair, the no-lock/no-sleep body, the exact mark set per
+# function and the original bracket order. Source-level, with four planted
+# controls; it is invoked from here, so the documented count of 18 `make check`
+# recipe commands is unchanged.
+./tests/check-a65-trace.sh
 # Runtime guard properties found by the 2026-11-26 production-readiness
 # review (docs/evidence/review/02-production-readiness-runtime.txt): D1 (the
 # direct scanout path must not read past the plane object or VRAM), D2 (the

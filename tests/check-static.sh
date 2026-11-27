@@ -10,9 +10,18 @@
 # fingerprint multiset is compared against tests/static/baseline/<tool>.txt.
 # Any fingerprint beyond the recorded baseline fails the gate.
 #
+# sparse and smatch fingerprints begin with the kernel tree, and the baseline
+# is compared per tree: an installed tree that reports findings but has no
+# baseline of its own is a missing baseline, not a new finding.
+#
 #   ./tests/check-static.sh                 run and compare against baseline
-#   ./tests/check-static.sh --update        rewrite the baseline from this run
+#   ./tests/check-static.sh --update        rewrite the baseline, ALL trees
+#   ./tests/check-static.sh --update-kernel rewrite only this tree's entries
 #   ./tests/check-static.sh --logs DIR      keep raw analyser output in DIR
+#
+# --update wipes the entries of every kernel tree. Use --update-kernel when a
+# new tree is installed, then compare the added lines with the triage in
+# docs/STATIC-ANALYSIS.md.
 #
 # When none of the analysers is installed the gate exits 0 with a skip notice,
 # so a machine without the toolchain can still build, package and run
@@ -47,12 +56,14 @@ unset LANGUAGE
 unset PKG_CONFIG_SYSROOT_DIR PKG_CONFIG_PATH PKG_CONFIG_LIBDIR
 KDIR=${KDIR:-/lib/modules/$(uname -r)/build}
 update=0
+update_kernel=0
 logdir=
 while [ $# -gt 0 ]; do
 	case $1 in
 	--update) update=1 ;;
+	--update-kernel) update_kernel=1 ;;
 	--logs) logdir=${2:?--logs needs a directory}; shift ;;
-	-h|--help) sed -n '3,20p' "$0"; exit 0 ;;
+	-h|--help) sed -n '3,24p' "$0"; exit 0 ;;
 	*) echo "unknown argument: $1" >&2; exit 2 ;;
 	esac
 	shift
@@ -313,7 +324,19 @@ else
 fi
 
 # --- baseline comparison ----------------------------------------------------
+# sparse and smatch fingerprints carry the kernel tree in their first field,
+# because a finding depends on the headers the driver is built against. The
+# baseline is therefore compared per tree: one tree's lines can neither mask
+# nor invent another tree's, and a tree that reports findings with no recorded
+# line of its own is an unbaselined tree, not a new code finding.
 mkdir -p "$baseline_dir"
+tree_tools=" sparse smatch "
+is_tree_tool() {
+	case "$tree_tools" in
+	*" $1 "*) return 0 ;;
+	*) return 1 ;;
+	esac
+}
 for tool in sparse smatch cppcheck coccinelle; do
 	[ -e "$logdir/$tool.fingerprints" ] || continue
 	# Collapse repeats to "count fingerprint": a second copy of an already
@@ -324,22 +347,74 @@ for tool in sparse smatch cppcheck coccinelle; do
 	baseline=$baseline_dir/$tool.txt
 	if [ "$update" -eq 1 ]; then
 		cp "$counts" "$baseline"
-		echo "baseline updated: ${baseline#$project_dir/}"
+		echo "baseline updated: ${baseline#$project_dir/} (all kernel trees)"
 		continue
 	fi
-	if [ ! -e "$baseline" ]; then
-		echo "no baseline for $tool: run ./tests/check-static.sh --update" >&2
-		fail=1
+	if ! is_tree_tool "$tool"; then
+		# cppcheck and coccinelle analyse src/ itself, not the kernel
+		# headers, so their fingerprints have no tree to compare per tree.
+		if [ "$update_kernel" -eq 1 ]; then
+			echo "baseline unchanged: ${baseline#$project_dir/} (tree-independent)"
+			continue
+		fi
+		if [ ! -e "$baseline" ]; then
+			echo "no baseline for $tool: run ./tests/check-static.sh --update" >&2
+			fail=1
+			continue
+		fi
+		if ! new=$(comm -13 "$baseline" "$counts" | grep . || true); then
+			new=
+		fi
+		if [ -n "$new" ]; then
+			echo "NEW $tool findings beyond the recorded baseline:" >&2
+			printf '%s\n' "$new" | sed 's/^/  /' >&2
+			fail=1
+		fi
 		continue
 	fi
-	if ! new=$(comm -13 "$baseline" "$counts" | grep . || true); then
-		new=
-	fi
-	if [ -n "$new" ]; then
-		echo "NEW $tool findings beyond the recorded baseline:" >&2
-		printf '%s\n' "$new" | sed 's/^/  /' >&2
-		fail=1
-	fi
+	for kdir in "${kdirs[@]}"; do
+		key=$(tree_key "$kdir")
+		tree_counts=$logdir/$tool.$key.counts
+		tree_baseline=$logdir/$tool.$key.baseline
+		# Field 2 of a "count tree fingerprint" line is the kernel release;
+		# filtering both sides by it compares identity within one tree.
+		awk -v t="$key" '$2 == t' "$counts" >"$tree_counts"
+		if [ -e "$baseline" ]; then
+			awk -v t="$key" '$2 == t' "$baseline" >"$tree_baseline"
+		else
+			: >"$tree_baseline"
+		fi
+		if [ "$update_kernel" -eq 1 ]; then
+			replaced=$(grep -c . "$tree_counts" || true)
+			{
+				if [ -e "$baseline" ]; then
+					awk -v t="$key" '$2 != t' "$baseline"
+				fi
+				cat "$tree_counts"
+			} | sort >"$logdir/$tool.baseline.new"
+			cp "$logdir/$tool.baseline.new" "$baseline"
+			echo "baseline updated: ${baseline#$project_dir/} (kernel tree $key: $replaced line(s) written)"
+			continue
+		fi
+		# A tree that reports nothing needs no baseline. A tree that reports
+		# anything and has no recorded line for it is unbaselined: the gate
+		# cannot tell a new finding from a first run on a new tree, so it says
+		# which it is instead of reporting a false positive.
+		[ -s "$tree_counts" ] || continue
+		if [ ! -s "$tree_baseline" ]; then
+			echo "no baseline for kernel tree $key: run ./tests/check-static.sh --update-kernel" >&2
+			fail=1
+			continue
+		fi
+		if ! new=$(comm -13 "$tree_baseline" "$tree_counts" | grep . || true); then
+			new=
+		fi
+		if [ -n "$new" ]; then
+			echo "NEW $tool findings beyond the recorded baseline for kernel tree $key:" >&2
+			printf '%s\n' "$new" | sed 's/^/  /' >&2
+			fail=1
+		fi
+	done
 done
 
 if [ "$fail" -ne 0 ]; then

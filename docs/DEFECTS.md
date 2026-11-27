@@ -135,7 +135,7 @@ after (working tree) form of every fixed item. All logs were produced unprivileg
 
 | A52 | S2 | The hot-reload helper proves the module reference is not the framebuffer and cannot be released by any operation the driver exposes. The second live run detached fbcon (`bind=0`), unbound `0000:01:00.0` from `sm750hdmidrm` and verified the driver link disappeared, and `/sys/module/sm750hdmidrm/refcnt` still read `1`, so `modprobe -r` could not run. Measured either side of the detach: `refcnt` = 1, `holders/` empty, no process holding the card or render node by inode across a whole-host fd scan, and no `try_module_get` call and no other subsystem registration in the module, so `module_pci_driver(sm750_pci_driver)` at `src/sm750_drm.c:5375` is its only registration. `refcnt` semantics on this host are normal (34 modules read 0, 36 read 1), so the 1 is a real reference, not an artefact. The detach is real: `dmesg` shows the full re-probe on rebind (`Initialized sm750hdmidrm 0.6.5 for 0000:01:00.0 on minor 4`, `fb0: sm750hdmidrmdrm frame buffer device`) and the DRM minor advanced 0 -> 4 across cycles | open, narrowed 2026-11-26T10:20Z: the reference clears by itself, so a reload is possible but not schedulable; no code change made | The helper's `off` prints the refcount before touching anything, prints it again after the unbind, and refuses with the number instead of reporting a modprobe error, so a failed reload restores the module, the device and the console and leaves the host exactly as it found it. `drm_dev_unregister()` in `sm750_pci_remove` at `src/sm750_drm.c:5300-5313` was considered and rejected as speculative: `include/drm/drm_drv.h:460-461` gives `devm_drm_dev_alloc` ownership of the put, `drm_dev_unregister` has no documented reference semantics, and the change could not be measured on this host. Guards: `tests/check-vt-helper.sh` section k asserts the unbind, the rebind, both refcount prints, the non-zero-refcount refusal and the restore order; section l pins the holder scan to the card identity; the `--self-test` planted controls `refcount-not-reported`, `pci-unbind-dropped`, `pci-rebind-dropped` and `trap-restores-fbcon-only` must be rejected (13 assertions, 10 planted controls) | `docs/evidence/runtime/41-vt-hot-reload.txt` |
 | A53 | S2 | `/etc/environment` selects the NVIDIA card for every login session and for GLX, so a Plasma X11 session on the SM750 crash-loops before it draws. The file is `root:root`, mode 644, 821 bytes, mtime 2026-11-23 13:20:32, and its uncommented lines set `KWIN_DRM_DEVICES=/dev/dri/pci-0000-02-00-0-card` (a symlink to `card1`, the NVIDIA card at `0000:02:00.0`), `KWIN_DISABLE_VULKAN=1`, `__GLX_VENDOR_LIBRARY_NAME=nvidia`, `GBM_BACKEND=nvidia-drm`, `VK_DRIVER_FILES` and `VK_ICD_FILENAMES`. Every login inherits those, `startplasma-x11` passes its environment to `kwin_x11`, and the measured session log carries four `KCrash: Application 'kwin_x11' crashing... crashRecursionCounter = 2` lines with kwin settling on a `--crashes 4` argument; the session's screenshots are 16339 to 27556 bytes, and every GLX-less server in that family also printed `Xlib: extension "NV-GLX" missing` because the vendor library was forced to nvidia. This is a host configuration conflict, not a driver defect: the same card has no such failure once the six variables are cleared | open; environment conflict, not a driver defect, worked around per session since 2026-11-26 (card0 X11 session observed) | Cure, measured on scratch X servers (`Xvfb` at 1920x1080x24, private `XDG_RUNTIME_DIR`, `QT_QPA_PLATFORM=xcb`, no root and no seat): with `KWIN_DRM_DEVICES`, `KWIN_RENDER_NODES`, `__GLX_VENDOR_LIBRARY_NAME`, `KWIN_DISABLE_VULKAN` and `KWIN_COMPOSE` unset, `kwin_x11` held pid 1513813 for 40 s with zero `crashing` lines and a 1692991-byte screenshot; with the same variables cleared and no `kwinrc` at all, pid 1537736, zero crashes, 1582653 bytes, and kwin wrote no `[Compositing]` section, so no configuration key is needed either (the backdrop and theme stanzas are left for the user's own choices). `KWIN_COMPOSE` must stay unset: `X` or `Q` makes a foreground kwin exit at once (rc 0 under `timeout`), empty or `O2` survives the window (rc 124), so an earlier note that `KWIN_COMPOSE=X` "works" was a misreading of rc 0. The helper's new `x11` mode writes `run-plasma-x11.sh`, which clears the eight desktop-wide variables, exports `DISPLAY=:1`, `XDG_SESSION_TYPE=x11`, `XDG_CURRENT_DESKTOP=KDE` and `KDE_FULL_SESSION=true`, and execs `startplasma-x11` (`tools/sm750-headless.sh:374-389`; the unsets are `:381-382`). The workaround is now observed end to end: the root run of 2026-11-26 with the installed copy of that launcher (sha256 `bef39ba73cacdbcce93bc7319203689f98947a7556484d8cd51d06faf0591df7`, identical to `tools/sm750-headless.sh`) brought up a server on `/dev/dri/card0`, held `kwin_x11` at pid 1979033 with zero `crashing` lines, and left `card0-HDMI-A-1` `connected` and `enabled` with a content scanout window - so the conflict is contained, not removed: `/etc/environment` still selects the NVIDIA card for every login, and a session must still clear it | `docs/evidence/runtime/43-plasma-x11.txt`, [docs/PLASMA-X11.md](PLASMA-X11.md) |
-| A54 | S2 | The panel stays dark after the last client exits, and nothing repaints it. When the last client removes its framebuffer the DRM core disables the CRTC by design (`atomic_remove_fb`, upstream `drivers/gpu/drm/drm_framebuffer.c:1000-1093`): measured `PANEL_DISPLAY_CTRL` `0x0f010105` -> `0x0f012001`, `PANEL_CURRENT_LINE` frozen, `card0-HDMI-A-1/enabled` = `disabled`, `active_crtc` = `-1`, reproduced on X and on three clean `modetest` self-exits. The fbdev last-close restore then never issued a commit on about a dozen client exits, although the same function works when fbcon calls it (`fb_set_par`, upstream `drivers/gpu/drm/drm_fbdev_helper.c:1199-1228`); a manual `sudo -n /usr/local/sbin/sm750-console text 2` restored the pipe within 2 s. Independently the VT stayed in `KD_GRAPHICS`, so `drivers/tty/vt/vt.c` `do_con_write` drops console output before fbcon and the console does not repaint even with a live pipe. The stray-fd hypothesis for the missing last-close commit is UNPROVEN: a later `sm750-headless diagnose` showed module refcount 1 with no holder on card0 or renderD128. Open question: why the last-close restore never commits | diagnosed | no driver change; the symptom is worked around: `tools/sm750-headless.sh:359-362` (`vt_record()`) records the foreground VT and its mode before a client starts, `:366-420` (`vt_restore()`) switches to a text VT on teardown (measured 2026-11-26: `PANEL_DISPLAY_CTRL` back to `0x0f010105`, raster back within 2 s; mechanism comment `:336-346`), and the switch is refused when the run no longer owns the foreground VT | `docs/evidence/runtime/44-production-readiness-review.txt` (section 4) |
+| A54 | S2 | The panel stays dark after the last client exits, and nothing repaints it. When the last client removes its framebuffer the DRM core disables the CRTC by design (`atomic_remove_fb`, upstream `drivers/gpu/drm/drm_framebuffer.c:1000-1093`): measured `PANEL_DISPLAY_CTRL` `0x0f010105` -> `0x0f012001`, `PANEL_CURRENT_LINE` frozen, `card0-HDMI-A-1/enabled` = `disabled`, `active_crtc` = `-1`, reproduced on X and on three clean `modetest` self-exits. The fbdev last-close restore then never issued a commit on about a dozen client exits, although the same function works when fbcon calls it (`fb_set_par`, upstream `drivers/gpu/drm/drm_fbdev_helper.c:1199-1228`); a manual `sudo -n /usr/local/sbin/sm750-console text 2` restored the pipe within 2 s. Independently the VT stayed in `KD_GRAPHICS`, so `drivers/tty/vt/vt.c` `do_con_write` drops console output before fbcon and the console does not repaint even with a live pipe. The stray-fd hypothesis for the missing last-close commit is now PROVEN, on 2026-11-27 with `drm.debug=0x7` and the boot journal (286821 kernel lines): `drm_lastclose` appears zero times, and every client release prints `[drm:drm_release] open_count = 2` followed by `[drm:drm_file_free] comm="modetest", pid=507104, dev=0xe200, open_count=2` (reproduced by a controlled `modetest -M sm750hdmidrm -c`, releases 2 -> 4, same value). `dev->open_count` is per DRM device and shared across card0 and renderD128, and it never reaches zero: the in-kernel fbdev client opens a card0 file itself (upstream `drivers/gpu/drm/drm_fbdev_ttm.c:21`), and on this host chromium held two renderD128 files (`6818:chromium-browse renderD128`, `6825:chromium-browse renderD128`). `drm_lastclose()` therefore never runs, so `drm_client_funcs.restore` - the only generic last-close restore hook the core offers - is structurally unreachable: no driver-side implementation can fire, whatever the driver does | diagnosed; structural, no driver remedy | no driver change; the symptom is worked around: `tools/sm750-headless.sh:359-362` (`vt_record()`) records the foreground VT and its mode before a client starts, `:366-420` (`vt_restore()`) switches to a text VT on teardown (measured 2026-11-26: `PANEL_DISPLAY_CTRL` back to `0x0f010105`, raster back within 2 s; mechanism comment `:336-346`), and the switch is refused when the run no longer owns the foreground VT | `docs/evidence/runtime/44-production-readiness-review.txt` (section 4) |
 | A55 | S3 | The CRC reader reported a dead window as a valid one. After the last client exits the mode becomes 0x0, `sm750_crc_region_missing()` did not treat a zero mode as missing, and `sdev->scanout_pitch` survived `sm750_pipe_disable()`, so `sm750-crc dump` printed `scanout readback, 0x0 pitch 3840` - a 0x0 window with a stale pitch | fixed | `sm750_crc_region_missing()` rejects a zero mode before the pitch check (`src/sm750_drm.c:3188-3193`); `sm750_pipe_disable()` clears `scanout_pitch` and `scanout_frame_size` (`:4394-4395`); the shadow upload path refuses a zero-geometry upload instead of multiplying a cleared pitch (`:4305-4311`); the debugfs header prints `sm750hdmidrm scanout readback, no active mode` for a zero mode (`:4578-4589`). Guards: `tests/check-drm-policy.sh` assertions R3 (`:442`), R4 (`:452`) and R5 (`:462`), one property-removing planted control each (`plant_crc_zero_mode` `:524`, `plant_disable_geometry` `:533`, `plant_header_zero_mode` `:542`); gate count 13 assertions / 13 planted controls | `docs/evidence/runtime/44-production-readiness-review.txt` (section 5) |
 | A56 | S2 | A failed hardware enable was reported as a success, so the core armed vblank and the commit event for a panel that never came up. `sm750_pipe_enable()` ran to its end after a failed panel or SiI9024A step, `sm750_pipe_update()` armed the flip event and the pipe stayed `crtc->enabled`, which turns a dead raster into a silent commit timeout; the failure was also invisible to the next commit, which trusted the core's view that the pipe was running. The failure paths are the ones the hardware measurements already name: the SiI9024A enable (A42) and the panel power sequence | fixed; gate-verified | `struct sm750_drm_device` carries `enable_failed` (`src/sm750_drm.c:468`), cleared at the start of every enable (`:4096`) and set where the hardware steps fail (`:4267-4271`), with the four-register `enable-fail state` line first (`:4259-4262`) so the failure is visible in dmesg. `sm750_pipe_update()` retries the enable while the flag is set and no mode change is pending (`:4286-4291`), the vblank and commit-event arm is skipped while it is set (`:4343-4344`), and the flag clears on the next successful enable (`:4397`). Guard: `tests/check-drm-policy.sh` assertion A1 (`:387`) with planted control `enable_fail_reports_live_pipe` (`:579`) | `docs/evidence/review/01-production-readiness-architecture.txt` (findings register, A1) |
 | A57 | S2 | Every `sm750_connector_get_modes()` could spend 3 s asleep: `sm750_connector_read_edid()` retried the DDC read twice with `msleep(3000)` between attempts, under `mode_config.mutex` and `connection_mutex`, reached from the 10 s polled detect, so one slow or unplugged sink could stall every modeset in the system. The architecture review graded it major and made the removal its single most important change | fixed; gate-verified | one bounded DDC attempt per `get_modes`: `edid = kmalloc(256, GFP_KERNEL)`, one `sm750_sii902x_read_edid()` call under `sdev->mode_lock`, no retry loop and no `msleep(3000)` (`src/sm750_drm.c:1129-1149`); a sink still waking up gets its modes on a later poll, and the 256-byte limit and checksum repair are unchanged (`:1152-1167`). Guard: `tests/check-drm-policy.sh` assertion E1 (`:397`) with planted control `edid_sleep` (`:580`) | `docs/evidence/review/01-production-readiness-architecture.txt` (findings register, E1) |
@@ -149,6 +149,7 @@ after (working tree) form of every fixed item. All logs were produced unprivileg
 | A65 | S1 | A hot `modprobe -r sm750hdmidrm` with the fbcon vtconsole bound wedged in `Unloading` and never completed: `/proc/modules` showed `sm750hdmidrm 200704 -1 - Unloading 0xffffffffc0a3d000 (OE-)`, `modprobe -r` sat in `D` state for the rest of the boot, the vtconsole bind went `1 -> 0` and the console left the panel for good. Only a reboot cleared it, and the freshly installed 0.6.8 could not be loaded until then. No stack was captured (`kernel.dmesg_restrict=1`, no hung-task report in the boot journal), so the blocked function is NOT identified | open; no root cause | evidence only: `docs/evidence/runtime/47-hot-reload-hang.txt` (module state, the `D`-state `modprobe`, the last two kernel lines, the three candidate orderings in `sm750_pci_remove()` at `src/sm750_drm.c:5446-5457`). Closes with a controlled reproduction that captures a stack, or with `drm_dbg` lines at every step of the remove callback | `docs/evidence/runtime/47-hot-reload-hang.txt` |
 | A66 | S4 | The driver's system-sleep path has never executed on the reference board: the first armed devices-level `pm_test` cycle was refused before the SM750 was reached. Two neighbouring Tesla P100s (`0000:83:00.0` and `0000:84:00.0`) returned `-EIO` from `nv_pmops_suspend` while `PreserveVideoMemoryAllocations=1`, so writing `freeze` to `/sys/power/state` failed with `Input/output error` and the journal held zero driver `pm:` lines; `suspend_stats` recorded `fail=1`, `failed_suspend=1`, `last_failed_dev=0000:83:00.0`, `last_failed_errno=-5`, `last_failed_step=suspend`. The panel survived and `PANEL_CURRENT_LINE` advanced, so the driver was not disturbed, but neither `sm750_pm_suspend()` nor `sm750_pm_resume()` was ever called | fixed; measured on the host | the owner opened the route at his own level by adding `nvidia.NVreg_PreserveVideoMemoryAllocations=0` to the kernel command line; `sudo -n /usr/local/sbin/sm750-pmtest run devices` then ran the real devices-level cycle on kernel 7.3.5-100 with 0.6.9 loaded and logged all four edges (`pm: suspend entry`, `pm: suspend complete`, `pm: resume entry`, `pm: resume complete`), counted each once, left every `suspend_stats` error counter at zero with an empty `last_failed_dev`, and the panel came back scanning (raster `0x182 -> 0x122`, `sm750-smi` 1024x768 at 75 Hz, `crc32 0xa76f0aeb`); `PM: suspend debug: Waiting for 5 second(s).` proves the armed level really executed. Still not covered: no power was removed, this host has no S3, and VRAM preservation on the two P100s was deliberately disabled for the run | `docs/evidence/runtime/48-pmtest-devices-attempt.txt`, `docs/evidence/runtime/49-pmtest-devices-cycle.txt` |
 | A67 | S4 | The `pm_probe` helper reported `verdict: FAIL: no "pm probe:" result line in the log` on a cycle that had in fact succeeded: the driver reports a single command with the callback's own return code (`pm probe: suspend returned %d`) but reports `cycle` with one combined line (`pm probe: cycle suspend ok, resume ok`), and the helper's success patterns only knew the single-command form. Two more defects sat in the same block: `if ! printf ... >"$ATTR"; then rc=$?` stored 0 unconditionally, and the cycle depth check grepped for `pm probe: resume returned 0`, a line `cycle` never writes, so a passing verdict would have been overwritten by a second failure | fixed | `tools/sm750-pm-probe.sh` matches per command (suspend|resume on `returned 0`, cycle on the combined line), detects failure by `cycle suspend failed:`, `resume failed:` or `returned <n>`, and captures the write status from the write itself; `tests/check-pm-probe.sh` section k now pins the three driver result literals and the two failure fragments against `src/sm750_drm.c`, so a drift in either file fails the gate instead of turning a healthy run red at three in the morning. A pass is still not a system sleep: evidence 49 is the measurement that counts | `docs/evidence/runtime/50-pm-probe-cycle.txt` |
+| A68 | S4 | The static gate treated every newly installed kernel tree as new findings, so a green tree turned red without a code change. `tests/static/baseline/smatch.txt` keys each fingerprint on the kernel release (`<count> <release> <tool> <file> <function>`), and the gate compared one tree's counts against the whole baseline: after 7.3.5-100 was installed, `make CC=/usr/bin/gcc KDIR=/usr/src/kernels/7.3.5-100.fc43.x86_64 static` exited 2 with `static gate: FAIL` and `NEW smatch findings beyond the recorded baseline:` listing five `warn: shift has higher precedence than mask` warnings - `sii902x.c:843` in `sii902x_begin_control()` and `sm750_drm.c:1816`, `:1828`, `:1830`, `:1838` in `sm750_dma_init()` - that `docs/STATIC-ANALYSIS.md` ST-05..ST-09 already triage as `GENMASK_TYPE()` macro noise inside `DMA_BIT_MASK`, `GENMASK_ULL` and `GENMASK`. The documented cure `--update` was worse than the defect: it `cp`s the counts file over the baseline and drops every other tree, so the next kernel would re-open the same failure | fixed | `tests/check-static.sh` compares per tree: `tree_tools`/`is_tree_tool()` split the baseline by release, each tool is `comm -13`-ed against its own tree's counts (`:326-419`), a tree with no baseline line fails with `no baseline for kernel tree <version>: run ./tests/check-static.sh --update-kernel` (`:405`), and a genuine new finding still fails with `NEW <tool> findings beyond the recorded baseline for kernel tree <key>` (`:413`). The new `--update-kernel` merges only the analysed tree and prints the tree and the line count, while `--update` keeps its full-rewrite behaviour (`:59-66`); the baseline now carries 7.3.4-100 and 7.3.5-100 with counts 1 and 4 for the two files. Measured: `static gate: PASS` on 7.3.5-100 with `sparse[...]: exit 0, 0 warning(s)` and `smatch[...]: exit 0, 5 finding(s)`. Guards: the missing-baseline message fires only when the tree actually reports findings, and a copied tree with the 7.3.5 sii902x line removed fails while the identical 7.3.4 line is present, so one tree cannot mask another. Note `make` maps any failing recipe to exit 2, so `make static` can never return 1 - the gate script itself returns 1 | `docs/static/` baseline, `docs/STATIC-ANALYSIS.md` (baseline format, `### A new kernel tree`, ST-05..ST-09) |
 
 ## Deferred and accepted items in detail
 
@@ -1493,7 +1494,7 @@ variables are out of the session environment. The two files to name are
 The transcript is `docs/evidence/runtime/43-plasma-x11.txt` section 12; the
 walkthrough is `docs/PLASMA-X11.md`.
 
-### A54 - the panel stays dark when the last client exits (diagnosed)
+### A54 - the panel stays dark when the last client exits (diagnosed; structural root cause proven)
 
 Symptom, 2026-11-26: after the last client on card0 exits, the panel goes
 dark and stays dark. The disable itself is core behaviour; the defect is that
@@ -1515,10 +1516,30 @@ exits no commit reached the pipe, although the same function does restore the
 mode when fbcon calls it (`fb_set_par`, upstream
 `drivers/gpu/drm/drm_fbdev_helper.c:1199-1228`), and a manual
 `sudo -n /usr/local/sbin/sm750-console text 2` restored the pipe within 2 s.
-Why the last-close path stops before its commit is not established. The
-stray-fd hypothesis - that a process still holds a node, so
-`drm_lastclose()` never runs - is UNPROVEN: a later `sm750-headless diagnose`
-showed module refcount 1 with no holder on card0 or renderD128.
+Why the last-close path stops before its commit is now established, and it
+is not something the driver can change. With the DRM debug mask enabled
+(`echo 0x7 | sudo tee /sys/module/drm/parameters/debug`), the boot journal
+holds 286821 kernel lines and zero `drm_lastclose` entries, while every client
+release prints the same pair:
+
+```
+sm750hdmidrm 0000:01:00.0: [drm:drm_release] open_count = 2
+sm750hdmidrm 0000:01:00.0: [drm:drm_file_free] comm="modetest",
+        pid=507104, dev=0xe200, open_count=2
+```
+
+`dev->open_count` is per DRM device and is shared by every minor of that
+device, so card0 and renderD128 count into one number. It never reaches zero:
+the in-kernel fbdev client opens a card0 file itself (upstream
+`drivers/gpu/drm/drm_fbdev_ttm.c:21`), and `sudo -n /usr/local/sbin/sm750-vt
+show` listed two more holders, `6818:chromium-browse renderD128` and
+`6825:chromium-browse renderD128`. A test client takes the count to three and
+its release leaves two. `drm_lastclose()` is therefore never reached, and
+`drm_client_funcs.restore` - the only generic last-close restore hook - is
+structurally unreachable. The earlier stray-fd suspicion, recorded here as
+UNPROVEN, was right about the mechanism and wrong about its scope: it is not a
+stray process, it is the fbdev client plus any renderD128 holder, and it cannot
+be drained by the driver.
 
 There is a second, independent half. The VT stayed in `KD_GRAPHICS` after the
 client exited, so the kernel console drops output before fbcon
@@ -1535,13 +1556,17 @@ mechanism is in the comment at `:336-346`; the measured effect on 2026-11-26
 was `PANEL_DISPLAY_CTRL` back to `0x0f010105` and the raster advancing within
 2 s.
 
-Disposition: diagnosed, not fixed. The open question is why the last-close
-restore never commits; the workaround in the helper keeps the symptom away for
-every client the helper starts, and a bare `modetest` still leaves the panel
-dark until something switches to a text VT.
+Disposition: diagnosed with a proven, structural root cause, and not fixable
+in the driver: the restore hook the core would call is never called, so no
+implementation of it can run. The workaround in the helper keeps the symptom
+away for every client the helper starts, and a bare `modetest` still leaves the
+panel dark until something switches to a text VT. The limitation is stated in
+the README so it is not mistaken for a driver bug.
 
-Evidence: `docs/evidence/runtime/44-production-readiness-review.txt` section
-4, which records the measurements above and the helper lines.
+Evidence: `docs/evidence/runtime/51-lastclose-open-count.txt` (the proof:
+journal counts, the release pairs, the holder list, and what it does not
+claim), and `docs/evidence/runtime/44-production-readiness-review.txt` section
+4, which records the original measurements and the helper lines.
 
 ### A55 - the CRC reader reported a dead window as a valid one (fixed)
 
@@ -1696,6 +1721,43 @@ Disposition: open, no root cause. Recovery requires a reboot; there is no
 userspace remedy. Next step is a controlled reproduction with a stack, or
 `drm_dbg` at every step of the remove callback.
 
+#### Instrumentation for the next capture
+
+0.6.9 adds the default-off `a65_trace` parameter (`docs/PARAMETERS.md`). With
+`a65_trace=1`, `a65_mark()` prints one `A65: <step>` line through `pr_err`
+before and after each teardown step, so the last line in the journal names the
+step that was executing when the remove stopped. The marks are:
+
+- in `sm750_pci_remove()`: `remove enter`, `before poll_fini`,
+  `after poll_fini`, `before unplug`, `after unplug`,
+  `before test_pattern_cancel`, `after test_pattern_cancel`,
+  `before atomic_shutdown`, `after atomic_shutdown`, `before vblank_stop`,
+  `after vblank_stop`, `after sii902x_shutdown`, `remove exit`;
+- in `sm750_destroy_shadow_workqueue()`: `before async_quiesce`,
+  `after async_quiesce`, `after destroy_workqueue`.
+
+The marks say which step was running; they do not say where it blocked. For
+that, run the sampler from a second root shell before the remove:
+
+    pid=$(pgrep -f 'modprobe -r sm750hdmidrm' | head -n 1)
+    while :; do
+        grep sm750hdmidrm /proc/modules
+        [ -n "$pid" ] && cat "/proc/$pid/stack"
+        sleep 1
+    done
+
+The `cat /proc/<pid>/stack` line prints the kernel stack of a `D`-state task
+without needing a crash dump. If the task has not appeared yet, re-read `pid`
+inside the loop. A single global dump also works when `kernel.sysrq` is
+enabled: `echo t > /proc/sysrq-trigger` writes every task's stack to the
+journal, and `journalctl -k` reads it back.
+
+The absence of a hung-task warning or a lockdep report proves nothing here:
+`CONFIG_DETECT_HUNG_TASK`, `CONFIG_PROVE_LOCKING` and
+`CONFIG_DEBUG_MUTEXES` are NOT set on 7.3.4-100 or 7.3.5-100, so neither a
+`blocked for more than` line nor a lockdep splat can be produced on this
+host. The captured stack and the last `A65:` mark are the evidence.
+
 ### A66 - the sleep path was unmeasured because nvidia refuses the devices cycle (fixed)
 
 Observed 2026-11-27 11:55Z on kernel 7.3.4-100.fc43.x86_64 with 0.6.8 loaded.
@@ -1798,3 +1860,80 @@ restored, the device never enters D3hot, no power is removed. Evidence 49 is
 the measurement that counts for A66; this route only keeps the callback bodies
 exercisable when another device refuses the cycle, as in evidence 48.
 Evidence: `docs/evidence/runtime/50-pm-probe-cycle.txt`.
+
+### A68 - the static gate called every new kernel tree new findings (fixed)
+
+`make static` is the seventh opt-in verification target and the one that
+needs a baseline: smatch and sparse findings are compared against a recorded
+fingerprint list so that the gate fails only on findings nobody has triaged.
+On 2026-11-27, with a fourth kernel tree installed, that comparison failed
+without any code change:
+
+```
+$ make CC=/usr/bin/gcc KDIR=/usr/src/kernels/7.3.5-100.fc43.x86_64 static
+sparse[7.3.5-100.fc43.x86_64]: exit 0, 0 warning(s)
+smatch[7.3.5-100.fc43.x86_64]: exit 0, 5 finding(s)
+static gate: FAIL
+NEW smatch findings beyond the recorded baseline:
+  sii902x.c:843 sii902x_begin_control() warn: shift has higher precedence than mask
+  sm750_drm.c:1816 sm750_dma_init() warn: shift has higher precedence than mask
+  sm750_drm.c:1828 sm750_dma_init() warn: shift has higher precedence than mask
+  sm750_drm.c:1830 sm750_dma_init() warn: shift has higher precedence than mask
+  sm750_drm.c:1838 sm750_dma_init() warn: shift has higher precedence than mask
+```
+
+Every one of those five is already triaged as a false positive in
+`docs/STATIC-ANALYSIS.md` rows ST-05 to ST-09: the warning is the
+`GENMASK_TYPE()` macro expansion inside `DMA_BIT_MASK`, `GENMASK_ULL` and
+`GENMASK`, not a driver expression.
+
+The mechanism is the key format. A fingerprint is
+
+```
+<count> <release> <tool> <file> <function>
+```
+
+so the kernel release is part of the identity, and the gate compared one
+tree's counts against the whole file with `comm -13`. Installing 7.3.5-100
+therefore made every recorded 7.3.4-100 line invisible to the comparison and
+every 7.3.5-100 line look new. The documented remedy `--update` was worse:
+it `cp`s the counts file over the baseline, so it would have replaced the
+other trees' records with the current tree's and left the gate blind to them
+on the next run.
+
+Fix. The comparison is now per tree: `tree_tools()` lists the tools whose
+baseline entries belong to the release being analysed and `is_tree_tool()`
+decides membership, and each tool is `comm -13`-ed against its own tree's
+counts (`tests/check-static.sh:326-419`). A tree with no baseline line at all
+says so exactly:
+
+```
+no baseline for kernel tree 7.3.5-100.fc43.x86_64: run ./tests/check-static.sh --update-kernel
+```
+
+while a real new finding keeps the old wording and names its tree:
+
+```
+NEW smatch findings beyond the recorded baseline for kernel tree 7.3.5-100.fc43.x86_64
+```
+
+The new `--update-kernel` merges only the analysed tree and prints the tree
+and the number of lines it added; `--update` keeps its full-rewrite behaviour
+for the case where a baseline is being rebuilt from scratch
+(`tests/check-static.sh:59-66`). The baseline now carries 7.3.4-100 and
+7.3.5-100 with counts 1 and 4 for the two files, and the gate passes on the
+new tree.
+
+Guards and limits. The missing-baseline message fires only when the tree
+actually reports findings, so `--update-kernel` followed by a re-run passes
+(sparse legitimately records no 7.3.5-100 line). A copied tree with the
+7.3.5 sii902x line removed fails with the per-tree message while the
+identical 7.3.4-100 line is present, which proves one tree cannot mask
+another. One asymmetry stays and is worth knowing: GNU make maps any failing
+recipe to exit 2, so `make static` can never return 1 - the gate script
+itself returns 1, and a script that reads `$?` of make should not expect
+otherwise.
+
+Evidence: `tests/static/baseline/smatch.txt`,
+`docs/STATIC-ANALYSIS.md` (baseline format, `### A new kernel tree`,
+ST-05..ST-09), `tests/check-static.sh`.

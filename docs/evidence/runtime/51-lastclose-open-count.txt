@@ -1,0 +1,110 @@
+A54: why the last-close restore can never fire on this host
+==========================================================
+
+Captured 2026-11-27 on the reference host, kernel 7.3.5-100.fc43.x86_64,
+driver 0.6.9 (srcversion 67300D6D1C065017A0D1328), with the DRM debug mask
+enabled by the owner:
+
+    echo 0x7 | sudo tee /sys/module/drm/parameters/debug
+
+Purpose
+-------
+A54 says the panel stays dark after the last client exits. The documented
+suspicion was a stray open file keeping dev->open_count away from zero, so
+that drm_lastclose() never runs and the fbdev restore never commits. That
+suspicion was recorded as UNPROVEN. This transcript proves it, and it shows
+that no driver-side hook can change the outcome.
+
+Method
+------
+/sys/module/drm/parameters/debug is root-only and coder cannot even read it:
+
+    cat /sys/module/drm/parameters/debug
+    cat: /sys/module/drm/parameters/debug: Permission denied
+
+The dmesg ring is unusable at mask 0x7 on this host: the owner's NVIDIA
+Wayland session floods it, and no line attributed to 0000:01:00.0 survives
+for more than a few seconds. Measured on the ring:
+
+    grep -c 'drm_lastclose' /dev/stdin            -> 0
+    grep -cE 'sm750hdmidrm|0000:01:00\.0'        -> 0
+
+The durable source is the journal. It is readable only in one exact
+argument form, because the sudoers line matches the literal command:
+
+    sudo -n journalctl -k -b --no-pager > /mega/tmp/sm750/journal-boot.txt
+
+    wc -l /mega/tmp/sm750/journal-boot.txt
+    286821 /mega/tmp/sm750/journal-boot.txt
+
+(the same command with an added -n 15 is refused - sudo prints its
+password-required message in the host locale, transliterated here because this
+repository is ASCII-only: "sudo: a password is required" - because any extra
+argument stops matching the grant).
+
+Measurement 1: drm_lastclose never runs
+--------------------------------------
+    grep -c 'drm_lastclose' /mega/tmp/sm750/journal-boot.txt
+    0
+
+Across a whole boot with 286821 kernel lines, including a dozen client
+open/close cycles, the core last-close path never executed once.
+
+Measurement 2: open_count never reaches zero
+--------------------------------------------
+Both client releases in that boot print the same pair:
+
+    18:xx:xx sm750hdmidrm 0000:01:00.0: [drm:drm_release] open_count = 2
+    18:xx:xx sm750hdmidrm 0000:01:00.0: [drm:drm_file_free] comm="modetest",
+             pid=507104, dev=0xe200, open_count=2
+    18:xx:xx sm750hdmidrm 0000:01:00.0: [drm:drm_release] open_count = 2
+    18:xx:xx sm750hdmidrm 0000:01:00.0: [drm:drm_file_free] comm="python3",
+             pid=481209, dev=0xe200, open_count=2
+
+The value printed is the count after the release. A controlled re-run
+reproduced it exactly:
+
+    /usr/bin/modetest -M sm750hdmidrm -c        (rc 0, pid 617920)
+    ... [drm:drm_release] open_count = 2
+    ... [drm:drm_file_free] comm="modetest", pid=617920, open_count=2
+    (drm_release occurrences in the journal: 2 -> 4)
+
+Measurement 3: who holds the other files
+----------------------------------------
+    sudo -n /usr/local/sbin/sm750-vt show
+    bind now:   1
+    module:     version=0.6.9 srcversion=67300D6D1C065017A0D1328 refcnt=1
+    active tty: tty1
+    card:       /dev/dri/by-path/pci-0000:01:00.0-card -> /dev/dri/card0
+    render:     /dev/dri/by-path/pci-0000:01:00.0-render -> /dev/dri/renderD128
+    holders:    2
+      6818:chromium-browse renderD128
+      6825:chromium-browse renderD128
+
+dev->open_count is per DRM device and is shared by every minor of that
+device, so card0 and renderD128 count into the same number. Two chromium
+files on renderD128 plus the in-kernel fbdev client's own file on card0 make
+three; a test client makes four, and its release leaves two.
+
+The fbdev client's file is not a bug: the in-kernel client opens the node
+itself (upstream drivers/gpu/drm/drm_fbdev_ttm.c:21), so even with no
+userspace holder at all the count sits at one and never reaches zero.
+
+Conclusion
+----------
+drm_lastclose() is unreachable while the fbdev client is attached, therefore
+drm_client_funcs.restore - the only generic last-close restore hook the DRM
+core offers - is unreachable too. No driver-side implementation of .restore,
+fb_restore or a private hook can run, whatever the driver does: the hook is
+not called because the core never decides that the last close happened.
+
+This makes A54 a structural limitation of the fbdev-client model on a host
+that keeps the client attached, not a defect in sm750hdmidrm, and it explains
+why a text-VT switch brings the panel back: fbcon calls fb_set_par, which is
+a different path from the restore hook.
+
+What this does not claim
+------------------------
+No stack and no lock was involved; nothing here says anything about A65.
+Whether another driver would behave differently is out of scope: the
+mechanism is in the DRM core, not in this driver.

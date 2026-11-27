@@ -19,11 +19,11 @@
 #   tests/check-rpm-dkms.sh
 
 %global dkms_name     sm750hdmifb
-%global dkms_version  0.6.9
+%global dkms_version  0.6.10
 %global module_name   sm750hdmidrm
 
 Name:           sm750hdmifb
-Version:        0.6.9
+Version:        0.6.10
 Release:        1%{?dist}
 Summary:        DKMS source for the SM750G10 SiI9024A HDMI DRM-KMS driver
 License:        GPL-2.0-only
@@ -357,6 +357,18 @@ exit 0
 %doc README.md LICENSE docs/RELEASE-NOTES.md docs/TESTING.md packaging/copyright
 
 %changelog
+* Fri Nov 27 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.10-1
+- Release 0.6.10: a default-off teardown trace that makes the next hot-reload
+  capture possible. With `a65_trace=1` the remove path prints sixteen
+  bracketed marks through `pr_err` - before and after `drm_dev_unplug()`,
+  around the atomic shutdown, the framebuffer release, the client and work
+  teardown - so the wedge that leaves `modprobe -r` stuck in `Unloading`
+  can be located instead of guessed. The parameter is off by default, the
+  order of every call in the path is unchanged, and the marks are covered
+  by a source gate so they cannot drift.
+- Also in this release: the A54 last-close limitation is proven rather than
+  suspected, and the static gate compares each kernel tree against its own
+  baseline instead of against every tree at once.
 * Fri Nov 27 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.9-1
 - Release 0.6.9: a root-only pm_probe attribute beside the DRM device drives
   the suspend and resume callback bodies directly, because a devices-level

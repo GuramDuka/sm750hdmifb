@@ -4475,3 +4475,41 @@ the thing it is testing.
 Lesson: a result contract that has two sides and a test on neither side turns a healthy run red.
 The gate now compares the driver's literals with the reader's patterns, which is the only place a
 drift can be caught before an operator sees it.
+
+### 2026-11-27T18:40Z | orchestrator | A54 proven, A65 made observable, A68 static gate fixed, 0.6.10
+
+- A54 stopped being a suspicion and became a measurement. With `drm.debug=0x7` live, the boot
+  journal held **zero** `drm_lastclose` records across 286821 kernel lines, while every SM750
+  client release printed `[drm:drm_release] open_count = 2` (modetest pid 507104, a controlled
+  re-run at pid 617920, python3 pid 481209). `sm750-vt show` named the holders: two chromium
+  renderD128 files, plus the in-kernel fbdev client's own card0 file. One `dev->open_count` is
+  shared by card0 and renderD128, so it can never reach zero and the only generic last-close
+  restore hook is structurally unreachable. Verdict: `diagnosed; structural, no driver remedy`.
+  The `sm750-headless` vt handoff stays as the workaround.
+- A65 stays open but is no longer blind. The proposed reorder of `drm_dev_unplug()` and
+  `drm_atomic_helper_shutdown()` was refused: unplug-then-shutdown is the canonical in-tree order
+  and the claimed use-after-free cannot happen because the framebuffer stays referenced by the
+  CRTC state until the disabling commit. Instead the driver gained a default-off `a65_trace`
+  parameter that prints sixteen `A65: <mark>` records through `pr_err` along the teardown path,
+  with no lock, no sleep and no change to call order. Ranked causes: the remove thread parked in
+  `down_console_sem()` from `fbcon_fb_unbind()` or `fbcon_fb_unregistered()` while holding
+  `dev->clientlist_mutex`, then a `cancel_work_sync` blocked on a modeset lock. Both 7.3.4-100 and
+  7.3.5-100 have no hung-task detector, no lockdep and no pstore, so the previous silence proved
+  nothing.
+- A68: the static gate keyed its baseline fingerprints on the kernel release, so the freshly
+  installed 7.3.5-100 tree re-reported five already-triaged smatch macro findings as new. The gate
+  now compares each tree against its own baseline, explains the one action that fixes it
+  (`--update-kernel`), and refuses to let one tree mask another.
+- Version: 0.6.10, because module source changed. The eight consistency sites moved together and
+  both spec files got a changelog entry; the tools half moves with the module half so
+  `sm750-pkg` cannot refuse the pair with a release mismatch.
+- Evidence: `docs/evidence/runtime/51-lastclose-open-count.txt` (A54 proof). Defect ledger
+  66 -> 68 rows. README gained two limitation bullets, one for A54 and one for A65.
+- Host notes: `/sys/module/drm/parameters/debug` is `-rw------- root root`, so the mask cannot be
+  read back as an unprivileged user, and the dmesg ring is useless for this device while the
+  owner's NVIDIA Wayland session floods it - the journal, read with the exact-argument
+  `journalctl -k -b --no-pager` grant, is the capture source.
+
+Lesson: a hook that is unreachable by construction can never be fixed by adding another hook. The
+cheap discovery was to count the one thing the hook depends on - `drm_lastclose` - instead of
+reasoning about why it might not have run.

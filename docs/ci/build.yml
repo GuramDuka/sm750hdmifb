@@ -60,11 +60,11 @@ jobs:
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sm750hdmifb-0.6.9
+          name: sm750hdmifb-0.6.10
           path: |
-            dist/sm750hdmifb_0.6.9_all.deb
-            dist/sm750hdmifb-tools_0.6.9_amd64.deb
-            dist/sm750hdmifb-0.6.9-source.tar.gz
+            dist/sm750hdmifb_0.6.10_all.deb
+            dist/sm750hdmifb-tools_0.6.10_amd64.deb
+            dist/sm750hdmifb-0.6.10-source.tar.gz
             dist/SHA256SUMS
             dist/RELEASE-AUDIT.txt
 
@@ -77,8 +77,8 @@ jobs:
           test -n "$RELEASE_TAG"
           gh release view "$RELEASE_TAG"
           gh release upload "$RELEASE_TAG" --clobber \
-            dist/sm750hdmifb_0.6.9_all.deb \
-            dist/sm750hdmifb-tools_0.6.9_amd64.deb \
-            dist/sm750hdmifb-0.6.9-source.tar.gz \
+            dist/sm750hdmifb_0.6.10_all.deb \
+            dist/sm750hdmifb-tools_0.6.10_amd64.deb \
+            dist/sm750hdmifb-0.6.10-source.tar.gz \
             dist/SHA256SUMS \
             dist/RELEASE-AUDIT.txt

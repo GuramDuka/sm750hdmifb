@@ -182,6 +182,18 @@ Known limitations, each with an id in [docs/DEFECTS.md](docs/DEFECTS.md):
   emits; AC-3 tier 5 remains partial for that reason.
 - `smatch` reports one shift-versus-mask precedence warning that originates in
   `GENMASK_TYPE()` in the kernel headers, not in this driver (A28).
+- The panel keeps the last frame, or goes dark, after the last client exits:
+  the in-kernel fbdev client holds a card0 file and every `renderD128` user
+  holds another, and `dev->open_count` counts per device, so it never reaches
+  zero, `drm_lastclose()` never runs and the only generic restore hook is
+  unreachable. No driver-side fix exists (A54, proof in
+  `docs/evidence/runtime/51-lastclose-open-count.txt`); switch to a text VT or
+  run `sm750-headless` to get the console back.
+- Unloading the module while the framebuffer console is attached can leave
+  `modprobe -r` stuck in `Unloading` with a refcount of `-1`, recoverable only
+  by a reboot (A65). `sm750-vt off` detaches the console first, which is why
+  the helper's unload path is preferred, and `a65_trace=1` records the
+  teardown marks needed to locate the remaining cause.
 - A KWin Wayland session on a module older than 0.6.7 can start compositing and
   then freeze the scanout: kwin asks for a buffer modifier the plane never
   advertised and the kernel rejects every framebuffer with errno 22
