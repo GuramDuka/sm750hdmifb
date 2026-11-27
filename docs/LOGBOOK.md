@@ -4548,3 +4548,11 @@ reasoning about why it might not have run.
 Lesson: when a reload path is suspected of hanging, the cheapest control is the ordering of the
 teardown, not a trace of it. Detaching fbconsole first turned a wedge that cost a reboot into a
 sub-second operation, and that difference was measurable before any instrumentation existed.
+
+### 2026-11-27T19:30Z | orchestrator | the contributor contract named a kernel and a helper count that had both moved on
+
+- `AGENTS.md` said the host runs 7.3.4-100 and that three helpers cover the root needs. The host runs 7.3.5-100, and /usr/local/sbin holds twelve sm750 helpers: console, crc, crc-cycle, hang, headless, lspci, pkg, pm-probe, pmtest, regs, vbios-dump, vt. Both sentences are the first thing a new contributor reads, so being wrong there costs more than being wrong in a transcript.
+- The three that cover register dump, PCI config space and the VBIOS image are named explicitly now (sm750-regs, sm750-lspci, sm750-vbios-dump); the others are described by purpose rather than listed, because the list grows with every new host-side tool and a hard count ages badly.
+- Historical hits of 7.3.4-100 were left alone: it is still one of the four DKMS trees and it is the kernel that produced several transcripts.
+
+Lesson: a document that states the current environment will always drift. When the drift is a count, replace the count with a purpose; when it is a version, name it once and let the evidence files carry the history.

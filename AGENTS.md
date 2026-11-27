@@ -1,7 +1,9 @@
 # Contributor contract
 
 Repository: Linux DRM/KMS driver for the Silicon Motion SM750 (module
-`sm750hdmidrm`, package `sm750hdmifb`). Host: Fedora 43, kernel 7.3.4-100.
+`sm750hdmidrm`, package `sm750hdmifb`). Host: Fedora 43, running kernel
+7.3.5-100.fc43.x86_64; DKMS builds the module for 7.2.15-100, 7.3.3-100,
+7.3.4-100 and 7.3.5-100.
 
 ## Records
 
@@ -22,8 +24,11 @@ Repository: Linux DRM/KMS driver for the Silicon Motion SM750 (module
   evidence file supports is a gap, not a result.
 - Host root actions are recorded in `docs/ROOT-ACTIONS.md` with the exact
   command and the GAP row it closes. Read it before asking for a new privilege;
-  the sudoers allowlist and the three helpers in `/usr/local/sbin` already cover
-  the register dump, PCI config space and the VBIOS image.
+  the sudoers allowlist and the twelve `sm750*` helpers in `/usr/local/sbin`
+  already cover the common needs: `sm750-regs` reads the register file,
+  `sm750-lspci` reads PCI config space, `sm750-vbios-dump` saves the VBIOS
+  image, and the others cover console and VT control, CRC capture, packaging,
+  PM probing and module hang recovery.
 
 ## Rules
 
