@@ -4578,3 +4578,18 @@ Lesson: a capture taken on the safe path is still worth its file. It tells you t
 - Installed copy is still the older body (`26f9fb71...`) while the tree is `1cdb0902...`; the refresh command is in `docs/ROOT-ACTIONS.md` 3.12.
 
 Lesson: when a guard has to run before other guards, the gate must assert the ORDER of the two blocks, not just their presence. A control that removes the guard passes a presence check; a control that moves it below the first side effect is the one that catches a regression.
+
+### 2026-11-27T22:05Z | orchestrator | the hardened reload helper is on the host, digests matched
+
+The host owner installed `tools/sm750-vt.sh` over `/usr/local/sbin/sm750-vt` at
+2026-11-27T21:09Z and `sha256sum` printed `1cdb0902...` for both paths, so the
+body that refuses a wedged module is the one that runs. `show` printed
+`state: live`, `refcnt=0`, `bind now: 1`, `version=0.6.10
+srcversion=6DA22404EEA85B6D6535912`, `holders: 0`, and `card0` /
+`renderD128` through the by-path links. Nothing was exercised beyond `show`:
+the refusal path can only be reached by wedging the module (A65), which costs
+a reboot and which the owner declined, so it stays a source-level claim with a
+static gate. Recorded as evidence 55; docs/ROOT-ACTIONS.md 3.12 and table row
+11 moved from "must be refreshed" to current, and the gate counts in
+README.md and docs/DELIVERABLES.md were raised from the stale 13 assertions /
+10 controls to 18 / 16.

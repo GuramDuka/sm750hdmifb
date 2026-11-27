@@ -1,0 +1,91 @@
+Evidence 55: the hardened sm750-vt helper installed and read back
+=================================================================
+
+Date:   2026-11-27T21:09Z
+Host:   deneb, kernel 7.3.5-100.fc43.x86_64, module sm750hdmidrm 0.6.10
+Owner:  duka (root action), transcript pasted by the host owner verbatim
+Commit: f000dda21a8593a0ccc1bec45056562f4e7dd3fc (both remotes)
+
+1. Purpose
+----------
+
+Commit f000dda changed tools/sm750-vt.sh from 448 to 529 lines: the A65
+wedge pre-flight guard, the bounded refcount wait, the diagnosis on all three
+refusal paths, the fresh read before modprobe -r, and the show state line.
+This file records the owner installing that body on the host and reading it
+back, which is the only way to prove the installed copy is the tree copy -
+neither the digest nor the state line can be read as an unprivileged user.
+
+2. Install (owner, root, from the repository root)
+--------------------------------------------------
+
+    sudo install -m 0755 -o root -g root /home/coder/sm750hdmifb/tools/sm750-vt.sh /usr/local/sbin/sm750-vt
+
+Exit 0, no output.
+
+3. show after the install
+-------------------------
+
+    vtconsole:    /sys/class/vtconsole
+      vtcon0       bind=0 name=(S) VGA+
+      vtcon1       bind=1 name=(M) frame buffer device
+    target:       /sys/class/vtconsole/vtcon1
+    basis:        sole framebuffer vtconsole on the host, with the sole
+                  sm750hdmidrm card (0000:01:00.0); not by a hardcoded index
+                  or a node name
+      bind now:   1
+    driver dir:   /sys/bus/pci/drivers/sm750hdmidrm
+    module:       version=0.6.10 srcversion=6DA22404EEA85B6D6535912 refcnt=0
+    state:        live
+    active tty:   tty1
+    card:         /dev/dri/by-path/pci-0000:01:00.0-card -> /dev/dri/card0 inode 9:1590
+    render:       /dev/dri/by-path/pci-0000:01:00.0-render -> /dev/dri/renderD128 inode 9:1589
+    holders:      0 userspace processes hold the card
+
+Read off that output:
+
+- state: live, so the module is not wedged in Unloading (A65) and off would
+  proceed rather than refuse;
+- refcnt=0, so the transient reference of A52 is clear and a reload needs no
+  wait at all; holders: 0 corroborates it from the userspace side;
+- bind now: 1, so the console is attached and the panel is not dark;
+- card0 and renderD128 through the by-path links, which is the identity the
+  helper's holder scan matches on - the node names move between reloads and
+  are printed for display only;
+- version=0.6.10 with srcversion 6DA22404EEA85B6D6535912, the same pair
+  recorded for the live module in evidence 53.
+
+4. Digest comparison
+--------------------
+
+    $ sha256sum /usr/local/sbin/sm750-vt /home/coder/sm750hdmifb/tools/sm750-vt.sh
+    1cdb0902a235577847726d83b83a08f94665540b7e4ad7a2941edddecb2920fd  /usr/local/sbin/sm750-vt
+    1cdb0902a235577847726d83b83a08f94665540b7e4ad7a2941edddecb2920fd  /home/coder/sm750hdmifb/tools/sm750-vt.sh
+
+The pair matches, so the hardened body is on the host. The body installed
+before this run was 26f9fb7105ece6cf7a2d81d32d32b9f7a957e5d4d478e7940f8f9ad1fc0404f9
+(448 lines), which had no wedge guard and gave up on the first non-zero
+refcount sample.
+
+5. What this does not claim
+---------------------------
+
+- It does not exercise off. The guard and the bounded wait are read back as
+  source on the host (digest) and as behaviour only in the sense that show
+  runs; the refusal path itself has not been triggered since the install, and
+  triggering it deliberately means wedging the module (A65), which costs a
+  reboot and which the owner declined.
+- It does not prove the A65 cause. The guard prevents the helper from entering
+  the state by accident; it says nothing about why the 2026-11-26 unload
+  stalled.
+- The 2026-11-26T08:35Z reading of refcnt=1 with an empty holder scan stays
+  unexplained; refcnt=0 here is consistent with both explanations and
+  discriminates neither.
+
+6. Related records
+------------------
+
+- docs/ROOT-ACTIONS.md section 3.12 - the install command and the current state
+- docs/DEFECTS.md A52 (closed as an actionable item) and A65 (open)
+- docs/evidence/runtime/41-vt-hot-reload.txt - the first live reload
+- docs/evidence/runtime/54-a65-trace-mitigated-reload.txt - sixteen A65 marks

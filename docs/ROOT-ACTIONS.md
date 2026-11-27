@@ -51,7 +51,7 @@ is fixed and measured; its installed copy needs one refresh after the A67 fix
 | 8 | proposed | rebuild the module from the working tree, reload it, then run `tests/check-scanout-crc.sh` once as root and store the transcript (section 7) | GAP-B3 readback/CRC half; GAP-B8 if the `-110` recurs during the run |
 | 9 | 2026-11-21T10:28Z | install the console helper `/usr/local/sbin/sm750-console` (144-line source `tools/sm750-console.sh`, sha256 `6e7f5dc758ec6b8d7993466784ffa5b1ab379da4f7442a6228c620829f2b1338`; the installed copy is byte-identical) and add one NOPASSWD line for it (section 3.4) | the one-command `KD_TEXT` route for a panel that looks dead (A34); no GAP |
 | 10 | 2026-11-22T08:41Z | install `/usr/local/sbin/sm750-pkg` and one NOPASSWD line `/etc/sudoers.d/30-sm750-pkg` (section 3.8); source is 487 lines, sha256 `ca6e7b0a66fae43b6b332135ea8da62f61a917385accacc4d48f114e9149cf16`, but the installed body is stale, refresh required (11873 bytes, sha256 `e923a85a3389a13211869f32808b7b7cb77083355f90c5149b6c94cdaf9b976e`) | replaces the per-version `dnf install` allowlist entries; privileged install, remove, status and reload work for any version without the owner |
-| 11 | proposed | refresh `/usr/local/sbin/sm750-vt` from the tree (the installed body is the first version, which fails) and use the two NOPASSWD lines already in place for `/usr/local/sbin/sm750-vt off` and `/usr/local/sbin/sm750-vt on` (section 3.12), then run `sm750-vt off` to load the 0.6.7 module without a reboot | the reload blocker: a rebuilt module cannot be loaded while the vtconsole holds the framebuffer reference (`modprobe: FATAL: Module sm750hdmidrm is in use.`), and detaching the vtconsole alone does not release it (A51) |
+| 11 | done 2026-11-27T21:09Z | `/usr/local/sbin/sm750-vt` was refreshed from the tree and both digests match `1cdb0902...`; the two NOPASSWD lines for `off` and `on` are in place (section 3.12), and `sm750-vt off` loads a rebuilt module without a reboot | was: the reload blocker, a rebuilt module cannot be loaded while the vtconsole holds the framebuffer reference (`modprobe: FATAL: Module sm750hdmidrm is in use.`), and detaching the vtconsole alone does not release it (A51). Now only the deliberate A65 reproduction needs the owner (A65) |
 | 12 | proposed | reboot with `intel_iommu=on iommu=pt` (done: the host now reports 116 `iommu_groups` and `DMAR: IOMMU enabled`), then bind `0000:01:00.0` to `vfio-pci` for a guest (section 3.13) | no GAP and no P1: the guest runs its own copies of `sm750_pm_suspend()` / `sm750_pm_resume()`, the host's copies never execute, and the chip stays in D0 from the host's point of view |
 | 13 | 2026-11-27T16:12Z | install the PM test helper with `sudo install -m 0755 -o root -g root tools/sm750-pmtest.sh /usr/local/sbin/sm750-pmtest`, add `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-pmtest` (section 3.14), then run `sm750-pmtest run devices` | done: the owner set `nvidia.NVreg_PreserveVideoMemoryAllocations=0` and the armed `devices` cycle returned `verdict: PASS` on 2026-11-27 at 16:12 host clock (73 journal lines, all four `pm:` edges, `suspend_stats` unchanged); transcript `docs/evidence/runtime/49-pmtest-devices-cycle.txt` |
 | 14 | proposed | install the hang capture with `sudo install -m 0755 -o root -g root tools/sm750-hang.sh /usr/local/sbin/sm750-hang`, add `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-hang` (section 3.15), then run `sudo -n /usr/local/sbin/sm750-hang capture` after the next wedge | A65: the 2026-11-26 hot reload wedged the module in `Unloading` with no stack captured, so the blocked function is unknown; this helper exists before the next reproduction so `02-stacks.txt` finally closes it |
@@ -1208,26 +1208,29 @@ advanced. Measured vblank deltas and the defect history are recorded under A43
 in `docs/DEFECTS.md`; the five log directories are under
 `/mega/tmp/sm750/headless/`.
 
-### 3.12 `/usr/local/sbin/sm750-vt` (hot module reload without a reboot; allowlist present, installed body is the OLD one and must be refreshed)
+### 3.12 `/usr/local/sbin/sm750-vt` (hot module reload without a reboot; allowlist present, installed body is CURRENT)
 
 Source `tools/sm750-vt.sh`: 529 lines, 19964 bytes, sha256
 `1cdb0902a235577847726d83b83a08f94665540b7e4ad7a2941edddecb2920fd` as measured
 2026-11-27; static gate `tests/check-vt-helper.sh` (634 lines, sha256
 `a522082c9c7130cf5fc2b7a8099bdd048badd71cfe274824629313eeccc431a4`, part of
 `make check` through `tests/check-drm-policy.sh`, 18 assertions and 16 planted
-controls). The installed copy measured 2026-11-27 is still sha256
-`26f9fb7105ece6cf7a2d81d32d32b9f7a957e5d4d478e7940f8f9ad1fc0404f9`, the older
-body described below, so the refresh command is still pending. The holder scan matches the card and render nodes on their
+controls). The host owner refreshed the installed copy on 2026-11-27T21:09Z and
+both digests matched (`1cdb0902...` on `/usr/local/sbin/sm750-vt` and on the
+tree), so the installed body is the hardened one; the older body was
+`26f9fb7105ece6cf7a2d81d32d32b9f7a957e5d4d478e7940f8f9ad1fc0404f9`. `show`
+after the refresh printed `state: live`, `refcnt=0`, `bind now: 1`,
+`version=0.6.10 srcversion=6DA22404EEA85B6D6535912`, 0 userspace holders, and
+`card0` / `renderD128` through the by-path links. The holder scan matches the
+card and render nodes on their
 `dev:inode` identity through the by-path links, never on a node name: the node
 is `card0` before a reload and `card4` after it on this host, so a name glob
 reported no holder while the module was really held.
 
-**Installed copy must be refreshed with**, from the repository root. The two
-allowlist lines below are already present in `sudo -n -l`; the body that is
-installed is the first version, which does only the vtconsole detach and was
-measured to fail (defect A51: `modprobe: FATAL: Module sm750hdmidrm is in
-use.` after `fbcon detached, bind=0`). The refresh needs no new allowlist
-entry, because the helper performs the PCI unbind write itself as root:
+**The install command** (host owner, root, from the repository root). The two
+allowlist lines below are already present in `sudo -n -l`, and the refresh
+needs no new allowlist entry because the helper performs the PCI unbind write
+itself as root:
 
 ```sh
 sudo install -m 0755 -o root -g root tools/sm750-vt.sh /usr/local/sbin/sm750-vt
@@ -1368,16 +1371,17 @@ Status: the two allowlist lines are INSTALLED (verified read-only on
 2026-11-26 with `sudo -n -l | grep sm750-vt`, which prints
 `(root) NOPASSWD: /usr/local/sbin/sm750-vt off` and
 `(root) NOPASSWD: /usr/local/sbin/sm750-vt on`). The installed body is the
-FIRST version and is known to be wrong: its only live run detached the console
-and then failed with `modprobe: FATAL: Module sm750hdmidrm is in use.` because
-the vtconsole detach does not release the framebuffer reference. That failure
-is defect A51 in `docs/DEFECTS.md`, and the body in this tree adds the PCI
-unbind step and the restore of both resources. Refreshing the installed copy
-and running `sm750-vt off` are the owner's action; the reload is NOT YET
-OBSERVED at either version. The evidence file
+hardened one since 2026-11-27T21:09Z (`1cdb0902...`, digests matched). The
+FIRST version is no longer installed and its only live run, which detached the
+console and then failed with `modprobe: FATAL: Module sm750hdmidrm is in use.`,
+is defect A51 in `docs/DEFECTS.md`. The reload itself IS OBSERVED
+(0.6.5 -> 0.6.7 in section 10 of `docs/evidence/runtime/41-vt-hot-reload.txt`,
+and 0.6.10 -> 0.6.10 with sixteen A65 marks in
+`docs/evidence/runtime/54-a65-trace-mitigated-reload.txt`); the wedge it can no
+longer enter by accident is A65. The evidence file
 `docs/evidence/runtime/41-vt-hot-reload.txt` records the measured blocker, the
 sysfs paths, the failed first attempt in section 7 and an explicit NOT YET
-OBSERVED section.
+OBSERVED section written before either reload.
 
 **Refresh (host owner, root), from the repository root:**
 
