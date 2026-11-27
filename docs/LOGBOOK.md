@@ -4556,3 +4556,13 @@ sub-second operation, and that difference was measurable before any instrumentat
 - Historical hits of 7.3.4-100 were left alone: it is still one of the four DKMS trees and it is the kernel that produced several transcripts.
 
 Lesson: a document that states the current environment will always drift. When the drift is a count, replace the count with a purpose; when it is a version, name it once and let the evidence files carry the history.
+
+### 2026-11-27T20:10Z | orchestrator | A65 first capture: sixteen marks in one second on the mitigated path
+
+- The owner enabled `a65_trace` and set `drm.debug` to 1. The mask is readable only as root, so the value was confirmed by him rather than by me; the parameter file is mode `-rw-------` and an unprivileged read answers "Permission denied".
+- A controlled `sm750-vt off` reload then produced all sixteen teardown marks in order, all inside one second, and finished 0.6.10 -> 0.6.10 with the same srcversion. Nothing was missing and nothing was duplicated, which is what the gate asserts from source text and what only hardware can now confirm behaviourally.
+- This is not the A65 reproduction. The 2026-11-26 wedge happened with fbconsole attached during the unload; this run detached it first, by design of the helper. The capture therefore proves the instrumentation and the mitigated path, not the defect's cause.
+- The same slice produced the first observation of `dev->open_count` reaching zero on this driver: `[drm:drm_file_free] comm="sm750-vt", pid=1124727, dev=0xe200, open_count=0`, after the fbdev client's file closed during teardown. That closes the argument in A54 from both directions - while a session holds the card the count never reaches zero, and only a full unload gets it there.
+- Within the same second the owner's session re-probed the card on its own: `comm="kwin_wayland", pid=2402` opened `minor=128` and issued `DRM_IOCTL_VERSION` calls. Nothing in the helper had to ask it to.
+
+Lesson: a capture taken on the safe path is still worth its file. It tells you the instrumentation is complete and ordered, and it can hand you a fact you were arguing about for a defect you have not reproduced yet.

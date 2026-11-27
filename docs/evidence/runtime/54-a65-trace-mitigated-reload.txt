@@ -1,0 +1,169 @@
+A65 first capture: sixteen teardown marks in one second on the mitigated reload
+================================================================================
+
+Recorded:   2026-11-27, host clock 20:05
+Host:       Fedora 43, kernel 7.3.5-100.fc43.x86_64
+Device:     0000:01:00.0 Silicon Motion SM750 (126f:0750), driver sm750hdmidrm
+Module:     sm750hdmidrm 0.6.10, srcversion 6DA22404EEA85B6D6535912
+Helper:     /usr/local/sbin/sm750-vt
+Locale:     the host prints month names in Russian; every transcript below was
+            transliterated to English month names so the file stays ASCII
+
+--------------------------------------------------------------------------------
+1. Why this file exists
+--------------------------------------------------------------------------------
+
+A65 records a hot `modprobe -r` with the fbcon vtconsole bound that wedged in
+`Unloading` on 2026-11-26 and could only be cleared by a reboot (evidence 47).
+The defect row and its detail section in `docs/DEFECTS.md` state why no stack
+exists: `kernel.dmesg_restrict=1`, and neither 7.3.4-100 nor 7.3.5-100 enables
+the hung-task detector, lockdep or debug mutexes.
+
+0.6.10 added a default-off `a65_trace` bool and an `a65_mark()` helper that
+prints `A65: <step>` through `pr_err` when the parameter is on
+(`src/sm750_drm.c:306-310`, `:4845-4849`). Thirteen marks bracket the calls of
+`sm750_pci_remove()` (`src/sm750_drm.c:5565-5585`) and three bracket
+`sm750_destroy_shadow_workqueue()` (`src/sm750_drm.c:4855-4859`), sixteen in
+all, with no call order changed.
+
+What had never been observed on hardware is whether all sixteen print, in
+order, in one teardown. This file is that observation, taken on the path the
+helper drives when fbconsole is detached first.
+
+--------------------------------------------------------------------------------
+2. Conditions: trace on, debug mask read by the owner
+--------------------------------------------------------------------------------
+
+The owner enabled the instrumentation and lowered the DRM debug mask before
+the run:
+
+  * `a65_trace=Y` in `/sys/module/sm750hdmidrm/parameters/a65_trace`. The
+    parameter is mode 0644, and no allowlisted helper writes module
+    parameters, so the owner wrote it as root.
+  * `debug=1` in `/sys/module/drm/parameters/debug`. That file is mode
+    `-rw-------`, so an unprivileged read answers "Permission denied"; the
+    value was confirmed by the owner reading `1` as root rather than by this
+    transcript. The same access fact is recorded in evidence 51 and 53.
+
+--------------------------------------------------------------------------------
+3. The controlled reload, verbatim
+--------------------------------------------------------------------------------
+
+  $ sudo -n /usr/local/sbin/sm750-vt off
+
+  sm750-vt: target /sys/class/vtconsole/vtcon1 (basis: sole framebuffer vtconsole on the host, with the sole sm750hdmidrm card (0000:01:00.0); not by a hardcoded index or a node name)
+  sm750-vt: driver dir /sys/bus/pci/drivers/sm750hdmidrm
+  sm750-vt: refcnt before any change: 0
+  sm750-vt: detaching fbcon; there will be no text console until the reload ends
+  sm750-vt: fbcon detached, bind=0
+  sm750-vt: unbinding 0000:01:00.0 from sm750hdmidrm to release the framebuffer
+  sm750-vt: device unbound, refcnt after the unbind: 0
+  sm750-vt: module unloaded
+  sm750-vt: device re-bound, /sys/bus/pci/devices/0000:01:00.0/driver -> /sys/bus/pci/drivers/sm750hdmidrm
+  fbcon:        detached then re-bound to /sys/class/vtconsole/vtcon1, bind=1
+  device:       0000:01:00.0 unbound then re-bound to sm750hdmidrm
+  reloaded:     0.6.10 -> 0.6.10 (srcversion=6DA22404EEA85B6D6535912 refcnt=1)
+
+The version did not move: the module was already 0.6.10. The helper holds a
+module reference for the length of its own run, which is why it reports
+`refcnt=1` there while the sysfs file reads 0 afterwards.
+
+--------------------------------------------------------------------------------
+4. Journal volume for the run
+--------------------------------------------------------------------------------
+
+  $ sudo -n /usr/bin/journalctl -k -b --no-pager      -> 2155199 lines
+  (same command after the reload)                     -> 2252018 lines
+
+96819 kernel lines were written during the reload. Of those, 50 carry the
+SM750 device, and 16 are the A65 marks themselves. The remaining volume is the
+rest of the host at debug mask 1, which is why the count and the device filter
+are both recorded here rather than the whole slice.
+
+--------------------------------------------------------------------------------
+5. The sixteen marks, in order
+--------------------------------------------------------------------------------
+
+All sixteen carry the same timestamp, 20:05:07, and appear once each, in this
+order:
+
+  A65: remove enter
+  A65: before poll_fini
+  A65: after poll_fini
+  A65: before unplug
+  A65: after unplug
+  A65: before test_pattern_cancel
+  A65: after test_pattern_cancel
+  A65: before atomic_shutdown
+  A65: after atomic_shutdown
+  A65: before vblank_stop
+  A65: after vblank_stop
+  A65: after sii902x_shutdown
+  A65: remove exit
+  A65: before async_quiesce
+  A65: after async_quiesce
+  A65: after destroy_workqueue
+
+The last three come from the deferred `sm750_destroy_shadow_workqueue()`, so
+the remove callback returned and the driver unregistered before the marks were
+collected. Nothing is missing and nothing appears twice.
+
+--------------------------------------------------------------------------------
+6. The first observation of dev->open_count reaching zero
+--------------------------------------------------------------------------------
+
+The same slice holds this line, the only condition yet observed in which the
+count reaches zero on this driver:
+
+  sm750hdmidrm 0000:01:00.0: [drm:drm_file_free] comm="sm750-vt", pid=1124727, dev=0xe200, open_count=0
+
+It happens during teardown, after the fbdev client's file is closed, not while
+the machine is running. It corroborates A54 from the other side: while a
+session holds the card the count cannot reach zero, so the last-close restore
+hook stays unreachable; during a full unload it does reach zero. A54's
+argument now has both directions measured - the live case in evidence 51, the
+teardown case here.
+
+This is a count reading, not a restore. No `drm_lastclose` line is claimed in
+this slice, and the panel state after the reload came from the helper's own
+rebind plus the session's re-probe, not from the fbdev last-close path.
+
+--------------------------------------------------------------------------------
+7. The owner's session re-probed the card on its own
+--------------------------------------------------------------------------------
+
+Immediately after the device re-bind, `comm="kwin_wayland", pid=2402` opened
+`minor=128` and issued `DRM_IOCTL_VERSION` calls. The minor is the node's DRM
+number, not a bus address. Nothing in the helper asked the session to probe:
+the compositor noticed the device reappear and identified it through the
+ioctl, which is what makes the reload usable without bouncing the session.
+
+--------------------------------------------------------------------------------
+8. What this does not claim
+--------------------------------------------------------------------------------
+
+  * This is NOT a reproduction of A65. The wedge was observed on 2026-11-26
+    with fbconsole attached during the unload (evidence 47). This run detached
+    fbconsole first, because that ordering is the helper's design and the
+    mitigation A65 identifies. The file proves the instrumentation works and
+    the mitigated path completes; it says nothing about the mechanism of the
+    defect and does not claim the defect is understood.
+  * It does not identify the blocked function. No stack was captured, and this
+    host has no hung-task detector, lockdep or debug mutexes to produce one.
+  * It does not show the marks are complete on the wedged path. It shows the
+    marks are complete when the path finishes, which is the precondition for
+    reading the last printed mark as the stall point in a later reproduction.
+  * It does not claim `dev->open_count` zero means the restore hook ran, and it
+    does not claim a repaint was observed. Section 6 is a count reading.
+  * It does not claim the session re-probe was measured from inside the
+    compositor; it is read from the kernel's DRM ioctl lines.
+
+--------------------------------------------------------------------------------
+9. Measurement note: the journal is localized
+--------------------------------------------------------------------------------
+
+`journalctl` prints month names in Russian on this host, so a raw slice is not
+ASCII. Every transcript committed from this host must be normalized first: the
+month names are transliterated to English, and the rest of the line is kept as
+printed. The slices quoted above are already in that form. A capture that skips
+this step fails the ASCII gate on the file and cannot be committed.
