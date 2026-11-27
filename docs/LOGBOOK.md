@@ -4708,3 +4708,36 @@ quoted the same old counts; all three now state 19 and 23 and say why section
 
 Nothing here was executed against the card. The approval line is an owner
 action: install the helper, then run it only with him present.
+
+### 2026-11-27T19:58Z | gem-planner | strict-production plan written, replacing the three-limitation bar
+
+- Action: wrote a new plan of record for the owner decision of 2026-11-27
+  ("drive the driver to strict production in every respect"), which explicitly
+  rejects the earlier "usable today with three documented limitations" bar. The
+  new bar is fixed in advance: A65 root cause, a GAP-B8 recurrence analysis, and
+  a day-long soak, on top of the gates that already pass. Fourteen tasks in ten
+  waves, with the single granted reboot as one gated event.
+- Discovery corrections recorded in the plan rather than assumed: the A65 trace
+  is no longer unexercised (all sixteen marks are observed on the
+  helper-mitigated path, `docs/evidence/runtime/54-a65-trace-mitigated-reload.txt`),
+  so what remains unrun is the deliberate unmitigated unload at
+  `docs/ROOT-ACTIONS.md:1834-1846`; and GAP-B8 already names its stage from
+  0.6.10 on (`docs/evidence/EVIDENCE-GAPS.md:746-769`), so that gap is
+  observation plus counting, not instrumentation from zero.
+- Owner-blocked work, stated in the plan: T8 needs a root write of `a65_trace`
+  (or the one-time install of a trace helper), the owner present, and the single
+  granted reboot; T12 needs the host up and the monitor powered for 24-48 h.
+  Install, reload and unload are not owner-blocked: they go through the
+  allowlisted `sm750-pkg` and `sm750-vt`.
+- Version ladder decided: 0.6.10 -> 0.6.11 (trace marks and B8 counters) ->
+  0.6.12 (A65 remedy), so each privileged install keeps its own srcversion.
+- Files: `docs/plan/20261127-sm750-strict-production/plan.yaml` (557 lines),
+  `docs/LOGBOOK.md`.
+- Evidence: `docs/plan/20261127-sm750-strict-production/plan.yaml:1-46` (bar,
+  acceptance criteria, owner-blocked tasks), `:47-70` (decisions), task blocks
+  T1-T14 with per-task owner dependencies and evidence paths; the file was
+  parsed with `yaml.safe_load`, is 0 non-ASCII bytes, and every `depends_on`
+  resolves to an earlier wave.
+- Outcome: plan written and validated, not executed. The previous plan of record
+  `docs/plan/20261117-sm750-driver-prod/plan.yaml` is retained unchanged as the
+  history of stages 0-3; this entry names it rather than editing it.

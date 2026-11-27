@@ -1,0 +1,557 @@
+plan_id: "20261127-sm750-strict-production"
+objective: "Drive sm750hdmidrm to strict production in every respect: close A65 with a captured cause and a safe unload path, convert GAP-B8 into instrumented and soak-verified observation, deliver a 24-48 h soak with a machine-readable verdict, and issue an acceptance report written against the strict bar rather than the three-limitation bar the owner rejected."
+acceptance_criteria:
+  - "A65 carries either a captured stack naming the blocked function or an evidenced statement that no stack is obtainable with the exact error text, plus a named cause, plus a gate that fails when the driver-side remedy is removed."
+  - "The unload path terminates within 5 s in ten consecutive cycles with the fbcon vtconsole bound on the installed build, with no task in D state, refcount back at 0, and the console still live."
+  - "GAP-B8 reports attempt, retry, bus-recovery and final-failure counters readable by uid 1000 with no new privilege, and a written recurrence signature that a soak verdict can match."
+  - "A soak of at least 24 h produced a machine-readable verdict of PASS, with zero new WARN/BUG/oops lines, zero wedge, and a panel that never lost its mode for more than 60 s."
+  - "The acceptance report cites a file that exists under docs/evidence/ for every claim it makes, and gives a per-criterion verdict of PASS, GAP or OUT-OF-SCOPE with the reason."
+  - "Every task appended its own docs/LOGBOOK.md entry in the same session, and git ls-remote origin refs/heads/main equals git rev-parse HEAD at the end of the run."
+complexity: "HIGH"
+status: "pending"
+risk_signals:
+  - "A65 validation cannot include a repeated wedge: each wedge costs an unbudgeted reboot, so the remedy must be validated by refusal or completion semantics that never enter the wedged state."
+  - "The soak verdict depends on the monitor staying powered and on the host staying up for 24-48 h, which is an owner decision the plan cannot enforce."
+  - "The B8 trigger measured 1 in 206 attempts, so 48 h of counters may legitimately read zero final failures; the recurrence definition must be time plus count based or the soak cannot claim coverage."
+  - "Two privileged installs sit in this plan (0.6.11 then 0.6.12), so each install's srcversion must be recorded or the installed-code proof goes stale between waves."
+  - "The IGT binary is not on PATH as igt-gpu-tools; regression claims must resolve the real test binaries rather than assume a package name."
+  - "docs/evidence/runtime/54-a65-trace-mitigated-reload.txt already proves the sixteen marks on the mitigated path, so a reproduction that only repeats that path would not close A65."
+critical_path:
+  - "T1"
+  - "T4"
+  - "T7"
+  - "T8"
+  - "T9"
+  - "T10"
+  - "T12"
+  - "T13"
+  - "T14"
+owner_blocked_tasks:
+  - "T8 is owner-blocked: it needs a root write of a65_trace (or the one-time install of a trace helper), the owner present for the window, and the single granted reboot. Unblocked by the owner confirming the window, running the root command, and accepting a dark panel from the wedge until the reboot. A second reboot needs a fresh grant."
+  - "T12 needs owner cooperation, not root: the host must stay up and the monitor powered for the soak, and no compositor, VT change or reboot may happen during it. Unblocked by the owner naming the 24-48 h window."
+  - "T7, T11 and T9 are not owner-blocked: install, reload and unload all go through the existing allowlisted /usr/local/sbin/sm750-pkg and /usr/local/sbin/sm750-vt helpers."
+created_at: "2026-11-27T22:55:00Z"
+created_by: "gem-planner"
+revision: 1
+replan_count: 0
+planner_revision_used: true
+tldr: |
+  The owner rejected "usable today with three documented limitations" and asked for
+  strict production in every respect, with the bar fixed in advance: A65 root cause,
+  a GAP-B8 recurrence analysis, and a day-long soak, on top of the gates that already
+  pass. Discovery corrects two premises of the handoff. First, A65's instrumentation is
+  no longer unexercised: docs/evidence/runtime/54-a65-trace-mitigated-reload.txt records
+  all sixteen A65 marks in order on the helper-mitigated path, so what remains unrun is
+  the deliberate unmitigated unload of docs/ROOT-ACTIONS.md:1834-1846, and the trace is
+  already proven alive. Second, GAP-B8 already names its stage from 0.6.10 onward
+  (docs/evidence/EVIDENCE-GAPS.md:746-769), so the gap is observation plus counting,
+  not instrumentation design from zero.
+  Shape: read-only analysis first (T1-T3), then instrumentation and helper work on trees
+  that can be built and tested without the card (T4-T6), then one build and install
+  (T7), then the single owner-gated event: reproduce A65 under trace, capture the stack,
+  reboot exactly once, come back up (T8). Everything after the reboot is rootless and
+  reversible: the remedy and its gate (T9), the fixed build installed (T11), regression
+  breadth (T10), the soak (T12), the strict-bar report (T13), and the documentation and
+  publish pass (T14). The critical path runs T1 -> T4 -> T7 -> T8 -> T9 -> T11 -> T12 ->
+  T13 -> T14. A54 stays structural and is documented with its core-level proof; A53 stays
+  an owner file; neither is claimed as fixed.
+decisions:
+  - "Waves are ordered analysis, instrumentation, install, one gated reboot event, remedy, install, regression, soak, report, publish, because the only irreversible step is the reboot and everything that can be decided without it is decided before it."
+  - "T4 and T5 stay separate although both are gem-implementer work on src/sm750_drm.c, because T4 is S1 unload-path work and T5 is routine counter plumbing, and a merged retry would put the highest-risk change in the widest blast radius."
+  - "The remedy is first shaped so the wedged state becomes impossible rather than merely diagnosable, because the plan has one reboot and a validation that wedges cannot be repeated."
+  - "Version ladder 0.6.10 -> 0.6.11 (trace marks and counters) -> 0.6.12 (remedy), so each privileged install has its own srcversion and the installed-code proof is never inherited from a different build."
+  - "A54 is recorded as a structural limit with the core-level citation, not as a driver defect and not as something to fix here: drm_client_funcs.restore is unreachable when open_count never reaches zero, proven in docs/evidence/runtime/51-lastclose-open-count.txt."
+  - "A53 is an owner file under /etc/environment and is recorded as an owner action outside the driver's scope; no gate is written against it."
+  - "Counter and soak sampling use only sysfs, /proc, /sys/module and the existing allowlisted helpers; no new privilege is invented and no console-grabbing path is used."
+  - "Regression breadth is limited to what the host can actually do: make check, the release audit, the opt-in static gate, the KUnit DRM suites, five header trees and a rootless container build; every hardware-dependent claim is stated as out of scope with the missing hardware named."
+assumptions:
+  - "The owner either installs one new read-write trace helper through a ROOT-ACTIONS row or writes /sys/module/sm750hdmidrm/parameters/a65_trace himself before T8; both routes are acceptable and the plan does not depend on the first."
+  - "The 6.17.1-300 header tree at /mega/tmp/sm750/t5/k617 survives; if it does not, the proven koji fetch and rpm2cpio extraction is repeated under /mega/tmp/sm750/."
+  - "The monitor stays powered and the host stays up for the soak window, so hpd, rxsense and the raster samples are meaningful."
+  - "podman runs rootless on this host and can pull a Fedora image; if the pull fails, the container row degrades to a recorded gap rather than blocking the plan."
+  - "No compositor, VT switch or seat operation is needed anywhere in this plan; sm750-vt off and on detach and re-bind fbcon without touching the owner's VT."
+tasks:
+  - id: "T1"
+    title: "A65 teardown analysis: name the blocking point and the safe unload contract"
+    description: "Delivers a ranked, source-cited shortlist of the places where sm750_pci_remove's teardown can block forever, the observation that distinguishes them, and the ordering contract a safe unload must satisfy."
+    wave: 1
+    depends_on: []
+    agent: "gem-debugger"
+    status: "pending"
+    retries_used: 0
+    critical_path: true
+    acceptance_criteria:
+      - "Verify the analysis names at most three candidate blocking points, each with a file:line inside sm750_pci_remove() or sm750_destroy_shadow_workqueue(), when it is read."
+      - "Verify each candidate states the lock or wakeup that can block it and the one observation that tells it apart from the others."
+      - "Verify the candidate set is consistent with evidence 54's sixteen-mark sequence and with evidence 47's last kernel line, and states which mark a wedged run must print last."
+      - "Verify the analysis states the contract the unload path must satisfy: which teardown step must run before which, for the framebuffer vtconsole, the DRM clients and the shadow workqueue."
+      - "Verify the analysis names the instrumentation each remaining candidate would need, and marks which of those are already present in 0.6.10."
+    owner_dependencies:
+      - "None. Read-only, no root, no card access, no reboot."
+    evidence_paths:
+      - "docs/evidence/a65/01-teardown-analysis.txt"
+    handoff:
+      constraints:
+        - "ASCII only; every claim cites file:line or an evidence file; no new privilege and no code change."
+        - "Append one docs/LOGBOOK.md entry with UTC timestamp, actor, action, files, evidence path and outcome, then commit and push origin main in the same session and verify with git ls-remote."
+        - "Do not restate the rejected 'usable with limitations' bar; the deliverable is a cause, not a workaround list."
+      relevant_context:
+        - "src/sm750_drm.c:5565-5585"
+        - "src/sm750_drm.c:4845-4859"
+        - "docs/evidence/runtime/47-hot-reload-hang.txt"
+      high_risk_signals:
+        - "A wedge during any experiment costs the single reboot, so no experiment may be run from this task."
+      critic_signals:
+        - "A shortlist that cannot be falsified by one stack capture is a failed analysis."
+  - id: "T2"
+    title: "GAP-B8 counter design and recurrence signature"
+    description: "Delivers the counted-event design for SiI9024A and modeset retries with an unprivileged read path, plus the written shape of what a recurrence would look like to a soak."
+    wave: 1
+    depends_on: []
+    agent: "gem-researcher"
+    status: "pending"
+    retries_used: 0
+    critical_path: false
+    exploration_mode: "scan"
+    acceptance_criteria:
+      - "Verify the design names every counted event (attempts, retries, bus recoveries, final failures, per-stage failures) with the file:line of the path that would increment it."
+      - "Verify the design names the unprivileged read path for each counter and states the observed mode and owner that makes it readable by uid 1000 on this host."
+      - "Verify the design contains a recurrence signature block that names the counter movement and the kernel log text a soak verdict would match."
+      - "Verify the design states the expected counter values after 48 h with no recurrence and the semantics while stage instrumentation is idle."
+      - "Verify the design reuses the existing twelve-attribute sysfs group rather than proposing a new interface, or states why it cannot."
+    owner_dependencies:
+      - "None. Read-only."
+    evidence_paths:
+      - "docs/evidence/gap-b8/02-counter-design.txt"
+    handoff:
+      constraints:
+        - "ASCII only; no code change in this task; a counter that needs root to read is a design failure and must be reported as such."
+        - "Append the docs/LOGBOOK.md entry and push origin main in the same session."
+      relevant_context:
+        - "src/sii902x.c:307-347"
+        - "src/sm750_drm.c:4876-5069"
+        - "docs/evidence/EVIDENCE-GAPS.md:694-771"
+      high_risk_signals:
+        - "A design that only counts retries cannot distinguish a recovered transient from a preventive success."
+      critic_signals:
+        - "Counters that reset on reload without a stated rule make the soak verdict unfalsifiable."
+  - id: "T3"
+    title: "Strict-bar inventory: what the strict claim still lacks"
+    description: "Delivers an inventory of every unsupported or stale claim across the seven record documents and a met, unmet or out-of-scope verdict for each element of the owner's strict bar."
+    wave: 1
+    depends_on: []
+    agent: "gem-reviewer"
+    status: "pending"
+    retries_used: 0
+    critical_path: false
+    acceptance_criteria:
+      - "Verify the inventory lists every claim in docs/DEFECTS.md, docs/evidence/EVIDENCE-GAPS.md, docs/TEST-STRATEGY.md, docs/ROOT-ACTIONS.md, docs/PACKAGING-RPM.md, README.md and docs/ACCEPTANCE-REPORT.md that has no supporting evidence file, each with document:line."
+      - "Verify the inventory gives each element of the strict bar (A65 cause, B8 recurrence, 24-48 h soak, defect closure, gap closure, packaging, kernel coverage, documentation, out of scope) a verdict of met, unmet or out of scope with the evidence or the reason."
+      - "Verify the inventory lists every stale pre-0.6.10 version reference and every statement contradicted by evidence captured after it was written."
+      - "Verify the inventory separates owner-level items from driver-level items, naming A53 and A54 in the first group with their proofs."
+    owner_dependencies:
+      - "None. Read-only."
+    evidence_paths:
+      - "docs/evidence/strict/01-strict-bar-inventory.txt"
+    handoff:
+      constraints:
+        - "ASCII only; no document is edited in this task; the review assesses objective fit and scope adequacy and does not propose code."
+        - "Append the docs/LOGBOOK.md entry and push origin main in the same session."
+      relevant_context:
+        - "docs/ACCEPTANCE-REPORT.md:1-60"
+        - "docs/evidence/EVIDENCE-GAPS.md:775-790"
+        - "docs/DEFECTS.md:149-151"
+      high_risk_signals:
+        - "A report that repeats the already-accepted limitation list would satisfy the old bar and fail the new one."
+      critic_signals:
+        - "Any claim counted as met without an evidence file invalidates the whole strict verdict."
+  - id: "T4"
+    title: "A65 instrumentation and unload ordering"
+    description: "Delivers the extra teardown marks and the corrected teardown ordering in the remove path, with a gate that fails when either is reverted."
+    wave: 2
+    depends_on:
+      - "T1"
+    agent: "gem-implementer"
+    status: "pending"
+    retries_used: 0
+    critical_path: true
+    acceptance_criteria:
+      - "Verify tests/check-a65-trace.sh exits 1 when the pre-fix ordering is restored in a scratch copy and exits 0 on the working tree."
+      - "Verify each new mark has a distinct name, that the gate rejects a duplicated or missing mark through a planted control, and that the mark count is stated in the parameter documentation."
+      - "Verify the marks carry no lock and no sleeping call, and that the gate rejects a mark placed inside a spin-locked or mutex-held region."
+      - "Verify make check exits 0 with the recipe command count unchanged and git diff --check clean."
+      - "Verify the build is warning-free on 7.3.4-100 and 7.3.5-100 with CC=/usr/bin/gcc, with both logs recorded."
+    owner_dependencies:
+      - "None. Builds and gates run rootless."
+    evidence_paths:
+      - "docs/evidence/a65/02-mark-and-ordering-gate.txt"
+      - "docs/evidence/builds/29-a65-ordering-build.log"
+    handoff:
+      constraints:
+        - "ASCII only; never weaken a check to make a suite pass; a changed assertion needs a stated reason and an evidence path."
+        - "Do not add a make recipe command; the check target count is pinned by tests/check-drm-module.sh and docs/AUDIT.md A23."
+        - "Preserve the empirically validated workarounds in docs/HARDWARE.md; no ordering change may drop the fbcon detach that sm750-vt already relies on."
+        - "Append the docs/LOGBOOK.md entry and push origin main in the same session."
+      relevant_context:
+        - "src/sm750_drm.c:5565-5585"
+        - "src/sm750_drm.c:306-310"
+        - "tools/sm750-vt.sh:16-20"
+      high_risk_signals:
+        - "An ordering change that unbinds the console before the client teardown can blank the panel for the rest of the boot."
+      critic_signals:
+        - "A gate that passes on both the old and the new tree proves nothing about the change."
+  - id: "T5"
+    title: "GAP-B8 counters and their unprivileged read channel"
+    description: "Delivers the counted retry and failure instrumentation from T2 as readable attributes on the installed build's sysfs group, with a gate that rejects a sleeping or locking reader."
+    wave: 2
+    depends_on:
+      - "T2"
+    agent: "gem-implementer"
+    status: "pending"
+    retries_used: 0
+    critical_path: false
+    acceptance_criteria:
+      - "Verify each new counter attribute reads 0 before any event and is readable by uid 1000 without new privilege on the loaded build."
+      - "Verify tests/check-sysfs-attributes.sh exits 1 for a counter whose show function sleeps, takes a spin lock, or bypasses sysfs_emit, proven by three planted controls."
+      - "Verify a planted control that moves an increment off the retry path makes the counter gate exit 1."
+      - "Verify the counters advance on a real retry observed on the host, or the absence of a retry during the task window is recorded with the sample count that produced it."
+      - "Verify make check exits 0 and the recipe command count is unchanged."
+    owner_dependencies:
+      - "None. Reading the attributes needs no privilege; loading the counter build happens in T7."
+    evidence_paths:
+      - "docs/evidence/gap-b8/03-counter-observed.txt"
+    handoff:
+      constraints:
+        - "ASCII only; the show functions must not sleep, must not take the mode lock and must use dev_get_drvdata with a NULL guard, per the existing group conventions."
+        - "Do not add a make recipe command."
+        - "Append the docs/LOGBOOK.md entry and push origin main in the same session."
+      relevant_context:
+        - "src/sm750_drm.c:4876-5069"
+        - "src/sii902x.c:307-347"
+        - "tests/check-sysfs-attributes.sh"
+      high_risk_signals:
+        - "A counter incremented under a spin lock turns a timeout path into a lock-ordering path."
+      critic_signals:
+        - "Counters that no soak can distinguish from an idle build are decoration."
+  - id: "T6"
+    title: "Soak helper with a machine-readable verdict"
+    description: "Delivers an owner-installable soak helper that samples the panel, the counters, the refcount, memory, dmesg deltas and gate results for 24-48 h and writes a verdict a report can cite."
+    wave: 2
+    depends_on:
+      - "T2"
+    agent: "gem-devops"
+    status: "pending"
+    retries_used: 0
+    critical_path: false
+    acceptance_criteria:
+      - "Verify a 5-minute dry run writes a samples file, a machine-readable verdict and a summary, and exits 0 on a healthy host."
+      - "Verify the verdict becomes FAIL with a non-zero exit status when one sampled field is planted out of range, proven by a planted control."
+      - "Verify the helper contains no chvt, no VT_ACTIVATE, no unshare of /dev/input, no compositor launch and no signal to another uid, and that its gate rejects each of those five when planted."
+      - "Verify each sample records panel state, crc or an explicit unavailable reason, the vblank counter, the module refcount, VRAM in use, resident memory, dmesg delta counts and the last recorded gate results."
+      - "Verify the helper is POSIX sh, ASCII only, and its gate runs with no card and no root."
+    owner_dependencies:
+      - "None to build and dry-run. Installing it is one ROOT-ACTIONS row for the owner at T12; the dry run needs no installation."
+    evidence_paths:
+      - "docs/evidence/soak/01-dry-run.txt"
+    handoff:
+      constraints:
+        - "ASCII only; write only under /mega/tmp/sm750/ during a run and never into the project tree; no console grab and no VT or seat operation."
+        - "CRC sampling must use a read-only allowlisted path; if none exists the helper records an unavailable reason and the run stays valid."
+        - "Append the docs/LOGBOOK.md entry and push origin main in the same session."
+      relevant_context:
+        - "tools/sm750-vt.sh:47"
+        - "docs/ROOT-ACTIONS.md:1701-1766"
+        - "tests/check-drm-module.sh:30-75"
+      high_risk_signals:
+        - "A soak helper that opens the card, grabs a VT or launches a compositor would repeat the 2026-11-26 incident that cost the owner his keyboard."
+        - "A verdict derived from a threshold on a single sample cannot separate a transient from a failure."
+      critic_signals:
+        - "A helper whose PASS is reachable with the card removed is not measuring the card."
+  - id: "T7"
+    title: "Instrumented build 0.6.11 installed and loaded"
+    description: "Delivers the trace-and-counter build as a versioned, dkms-installed module on all four kernels, loaded and identified by srcversion, so the gated reproduction runs on known code."
+    wave: 3
+    depends_on:
+      - "T4"
+      - "T5"
+    agent: "gem-devops"
+    status: "pending"
+    retries_used: 0
+    critical_path: true
+    acceptance_criteria:
+      - "Verify modinfo reports 0.6.11 and its srcversion equals the installed module file's srcversion on all four kernels."
+      - "Verify dkms status lists 0.6.11 installed for 7.2.15-100, 7.3.3-100, 7.3.4-100 and 7.3.5-100 with no other version of this module registered."
+      - "Verify a65_trace reads N after load, every new counter attribute exists and reads 0, and /sys/module/sm750hdmidrm/version reads 0.6.11."
+      - "Verify the vtconsole is bound and the module refcount is 0 after the load, and the panel is scanning."
+      - "Verify tests/audit-release.sh and make check exit 0 on the exact tree that was packaged."
+    owner_dependencies:
+      - "None. Install and reload go through the allowlisted /usr/local/sbin/sm750-pkg and /usr/local/sbin/sm750-vt; the fbcon detach they perform is not a VT switch."
+    evidence_paths:
+      - "docs/evidence/builds/30-instrumented-install.log"
+      - "docs/evidence/runtime/57-instrumented-load.txt"
+    handoff:
+      constraints:
+        - "ASCII only; install only through the allowlisted helpers; never dnf install by bare name; rebuild from the tree rather than reusing a staged RPM whose payload may predate the change."
+        - "Record the srcversion of the running module and the sha256 of the installed file in the same transcript."
+        - "Append the docs/LOGBOOK.md entry and push origin main in the same session."
+      relevant_context:
+        - "tools/sm750-pkg.sh"
+        - "tools/sm750-vt.sh:16-20"
+        - "packaging/sm750hdmifb.spec:146-251"
+      high_risk_signals:
+        - "A stale staged RPM has silently shipped an older build before; the payload must be compared against the tree."
+      critic_signals:
+        - "A load that cannot be told apart from the previous build makes every later observation worthless."
+  - id: "T8"
+    title: "Gated A65 reproduction: trace, stack, one reboot"
+    description: "Delivers the one deliberate unmitigated unload under trace with the hang helper armed, the stack or the documented reason no stack exists, and the host back up on the same build."
+    wave: 4
+    depends_on:
+      - "T7"
+    agent: "gem-debugger"
+    status: "pending"
+    retries_used: 0
+    critical_path: true
+    acceptance_criteria:
+      - "Verify the capture directory holds a stacks file with a non-empty stack for the blocked task, or records the exact error text that prevented it."
+      - "Verify the transcript records the ordered mark sequence and the last mark printed before the block, and names the blocked function with file:line or states that the stack did not identify it."
+      - "Verify the reboot happened at most once and the post-reboot state is recorded with version, vtconsole bind and refcount."
+      - "Verify the run either names the lock or wakeup that never arrives, or names the external subsystem with the evidence that puts it there."
+      - "Verify the mitigation control (the helper-driven reload) was run first and its sixteen marks are in the same transcript."
+    owner_dependencies:
+      - "Owner: write 1 to /sys/module/sm750hdmidrm/parameters/a65_trace as root, or install the trace helper from its ROOT-ACTIONS row once."
+      - "Owner: be present for the window and accept that the panel shows nothing from the wedge until the reboot."
+      - "Owner: grant the single reboot. A second reboot is a new grant and is not part of this plan."
+    evidence_paths:
+      - "docs/evidence/a65/03-reproduction/00-summary.txt"
+      - "docs/evidence/a65/03-reproduction/02-stacks.txt"
+      - "docs/evidence/runtime/58-a65-reproduction.txt"
+    handoff:
+      constraints:
+        - "ASCII only; the hang helper is read-only and must not attempt to unwedge anything; no chvt, no VT switch, no compositor, no signal to another uid."
+        - "Capture from a second session while the unload blocks in the first; run the unload from one session only and expect that shell to stop for the rest of the boot."
+        - "One reboot. If the unload completes instead of wedging, do not force a wedge by repeating it in a loop."
+        - "Append the docs/LOGBOOK.md entry immediately after the capture and again after the post-reboot verification, and push origin main in the session that follows the reboot."
+      relevant_context:
+        - "docs/ROOT-ACTIONS.md:1767-1879"
+        - "tools/sm750-hang.sh"
+        - "src/sm750_drm.c:5565-5585"
+      high_risk_signals:
+        - "A wedge with no stack captured burns the only reboot and leaves A65 open; the helper must be proven armed before the unload starts."
+        - "The console does not return to the panel after the wedge; nothing in the driver can restore it before the reboot."
+      critic_signals:
+        - "An attribution made from the mark sequence alone, without a stack, is the same evidence that already failed to close A65."
+  - id: "T9"
+    title: "A65 remedy and the gate that fails without it"
+    description: "Delivers the driver-side change that makes the wedged unload state impossible, validated by ten reversible cycles rather than by repeating the wedge."
+    wave: 5
+    depends_on:
+      - "T8"
+    agent: "gem-implementer"
+    status: "pending"
+    retries_used: 0
+    critical_path: true
+    acceptance_criteria:
+      - "Verify the new gate exits 1 on the pre-fix tree and exits 0 on the fixed tree, proven by restoring the pre-fix form in a scratch copy."
+      - "Verify ten consecutive unload and load cycles with the fbcon vtconsole bound each terminate within 5 s with no task in D state, refcount 0 between cycles, the console still bound and the panel scanning."
+      - "Verify ten consecutive unload and load cycles with fbcon detached likewise terminate within 5 s with refcount 0 between cycles."
+      - "Verify make check exits 0 with the recipe command count unchanged, and the option ROM, restore-path and test-card gates still pass."
+      - "Verify the change states in source comments which teardown step must precede which, citing the captured stack."
+    owner_dependencies:
+      - "None. All cycles use the allowlisted reload and unload paths and stay reversible."
+    evidence_paths:
+      - "docs/evidence/a65/04-guard-validation.txt"
+      - "docs/evidence/a65/05-cycle-ten-by-ten.txt"
+    handoff:
+      constraints:
+        - "ASCII only; never weaken a check; if the cause is provably outside this driver, ship an upstream-quality report plus a driver-side guard that makes the state impossible, and say so in the logbook."
+        - "Validation must never leave a wedged module: stop and report if any cycle enters D state instead of retrying."
+        - "Append the docs/LOGBOOK.md entry and push origin main in the same session."
+      relevant_context:
+        - "src/sm750_drm.c:5565-5585"
+        - "docs/evidence/runtime/47-hot-reload-hang.txt"
+        - "tests/check-a65-trace.sh"
+      high_risk_signals:
+        - "A cycle loop that wedges after the granted reboot has no recovery; every iteration must be bounded by a timeout."
+        - "Preserve the A27 and A32 fail-path behaviour while reordering teardown; those fixes are empirically validated."
+      critic_signals:
+        - "A guard that only refuses the unload leaves a loaded module and an unbound console, which is a new symptom unless it is stated."
+  - id: "T10"
+    title: "Fixed build 0.6.12 installed and identified"
+    description: "Delivers the remedied build as a versioned dkms module on all four kernels, with the remedy observable in the running module."
+    wave: 6
+    depends_on:
+      - "T9"
+    agent: "gem-devops"
+    status: "pending"
+    retries_used: 0
+    critical_path: true
+    acceptance_criteria:
+      - "Verify modinfo and /sys/module/sm750hdmidrm/version report 0.6.12 with a srcversion matching the installed file on all four kernels."
+      - "Verify no 0.6.11 or earlier registration of this module remains in dkms status or in the dkms kernel links."
+      - "Verify an observation that only the fixed build can produce is recorded, not merely a version string."
+      - "Verify the vtconsole is bound, refcount 0, the panel scanning, and one unload and load cycle after the install leaves all three unchanged."
+    owner_dependencies:
+      - "None. Allowlisted helpers only."
+    evidence_paths:
+      - "docs/evidence/builds/31-fixed-install.log"
+      - "docs/evidence/runtime/59-fixed-load.txt"
+    handoff:
+      constraints:
+        - "ASCII only; rebuild from the tree and compare the payload against git show HEAD of the packaged files."
+        - "Keep the stale-registration and dangling-link purges intact; a downgrade path that skips them has failed twice before."
+        - "Append the docs/LOGBOOK.md entry and push origin main in the same session."
+      relevant_context:
+        - "packaging/sm750hdmifb.spec:146-251"
+        - "tools/sm750-pkg.sh"
+        - "docs/evidence/runtime/28-dangling-kernel-link.txt"
+      high_risk_signals:
+        - "A module loaded with no file on disk is a reboot hazard; never leave the host in that state between installs."
+      critic_signals:
+        - "A running module whose srcversion does not match the file makes every later soak sample unattributable."
+  - id: "T11"
+    title: "Regression breadth and the hardware-absent statement"
+    description: "Delivers a recorded pass or an honest gap for every check the host can run without disturbing the card, plus a named list of the claims that need hardware this host lacks."
+    wave: 7
+    depends_on:
+      - "T10"
+    agent: "gem-devops"
+    status: "pending"
+    retries_used: 0
+    critical_path: false
+    acceptance_criteria:
+      - "Verify make check, tests/audit-release.sh, git diff --check and the opt-in static gate each exit 0 on the final tree, with each exit status recorded."
+      - "Verify the module builds with zero warning and zero error lines on 7.2.15-100, 7.3.3-100, 7.3.4-100, 7.3.5-100 and the 6.17.1-300 tree, one record per kernel and per format."
+      - "Verify the KUnit DRM suites execute and their result is recorded, or the exact failing command and error text is recorded as a gap."
+      - "Verify a rootless container build reproduces the source tarball and the RPM, or the container step is recorded as a gap with the exact failure text."
+      - "Verify the report names every claim that needs hardware this host lacks, with the missing hardware and the consequence for the strict verdict."
+      - "Verify the card was left loaded, bound and scanning after the whole sweep, with refcount 0 recorded."
+    owner_dependencies:
+      - "None. Rootless; the card is present and is only read."
+    evidence_paths:
+      - "docs/evidence/strict/02-regression-matrix.txt"
+      - "docs/evidence/builds/32-kernel-matrix.log"
+    handoff:
+      constraints:
+        - "ASCII only; do not disturb the card or reload the module while any live probe runs; serialize builds and live probes in one session."
+        - "A skipped check is recorded with its reason and exit code; it is never reported as a pass."
+        - "Append the docs/LOGBOOK.md entry and push origin main in the same session."
+      relevant_context:
+        - "docs/TEST-STRATEGY.md:93-100"
+        - "tests/check-kunit-drm.sh"
+        - "tests/build-all-kernels.sh"
+      high_risk_signals:
+        - "Two make invocations in one worktree have raced before; the sweep must be serialized."
+      critic_signals:
+        - "A matrix that omits the 6.17 floor repeats A06; a matrix that reports a kernel the host does not have repeats the 6.18.13-200 error."
+  - id: "T12"
+    title: "24-48 h soak run with verdict"
+    description: "Delivers an unattended soak on the fixed build whose samples, verdict and evidence file a strict report can cite directly."
+    wave: 8
+    depends_on:
+      - "T10"
+      - "T11"
+    agent: "gem-devops"
+    status: "pending"
+    retries_used: 0
+    critical_path: true
+    acceptance_criteria:
+      - "Verify the run spans at least 24 h with at most one missing sample minute in any hour and records its start and end timestamps."
+      - "Verify the verdict is machine-readable and reports PASS only with zero new WARN, BUG or oops lines, zero wedge, and refcount 0 at every cycle boundary."
+      - "Verify no sample shows a cleared active mode or a raster that does not advance for more than 60 s."
+      - "Verify the B8 counters are read at start and end and either show zero final failures or a recurrence carrying the stage name."
+      - "Verify the run's own command log proves no compositor, no VT change and no console grab occurred, and that any reload during the run went through the allowlisted helper."
+      - "Verify the evidence file is cited by path from the report and is ASCII."
+    owner_dependencies:
+      - "Owner: name the 24-48 h window, keep the host up, keep the monitor powered, and run no compositor, VT change or reboot during it."
+      - "Owner: install the soak helper if the run needs it under root, through its ROOT-ACTIONS row; an unprivileged run needs no owner command."
+    evidence_paths:
+      - "docs/evidence/soak/02-run/samples.jsonl"
+      - "docs/evidence/soak/02-run/verdict.json"
+      - "docs/evidence/runtime/60-soak-verdict.txt"
+    handoff:
+      constraints:
+        - "ASCII only; no console grab, no VT switch, no seat or logind operation, no signal to another uid."
+        - "A 48 h ceiling with a 24 h floor: an earlier stop is a failed run and is recorded as one, not as a partial pass."
+        - "Append the docs/LOGBOOK.md entry at start and at verdict, and push origin main after the verdict."
+      relevant_context:
+        - "tools/sm750-soak.sh"
+        - "tools/sm750-vt.sh:47"
+        - "docs/evidence/runtime/40-headless-input-isolation.txt"
+      high_risk_signals:
+        - "Any compositor or VT touch during the window repeats the incident where the owner lost his input devices."
+        - "A reboot during the soak invalidates the run and consumes an ungranted reboot."
+      critic_signals:
+        - "A PASS whose thresholds were adjusted after the run is not a verdict."
+  - id: "T13"
+    title: "Strict-production acceptance report"
+    description: "Delivers the rewritten acceptance report that gives every criterion of the strict bar a verdict backed by an existing evidence file, and states what the claim still cannot cover."
+    wave: 9
+    depends_on:
+      - "T9"
+      - "T10"
+      - "T11"
+      - "T12"
+    agent: "gem-reviewer"
+    status: "pending"
+    retries_used: 0
+    critical_path: true
+    acceptance_criteria:
+      - "Verify every claim in the report cites a file that exists under docs/evidence/, checked mechanically, and the check's output is recorded."
+      - "Verify each element of the strict bar carries PASS, GAP or OUT-OF-SCOPE with the reason and the evidence path."
+      - "Verify A53, A54, A65 and GAP-B8 each appear with their disposition, and that A54 carries the core-level proof rather than an assertion."
+      - "Verify the report states the version drift from 0.6.10 to the installed version and that no claim rests on a build that is no longer installed."
+      - "Verify the report's verdict is not weaker than the evidence: a criterion with an open gap is reported as a gap, and the earlier six-PASS report is retained as history rather than edited."
+    owner_dependencies:
+      - "None. Read-only review."
+    evidence_paths:
+      - "docs/ACCEPTANCE-REPORT.md"
+      - "docs/evidence/strict/03-acceptance-evidence-index.txt"
+    handoff:
+      constraints:
+        - "ASCII only; do not weaken or restate the owner's bar; do not edit a past decision, add a new one and record it in the plan and the logbook."
+        - "The reviewer assesses objective fit, scope adequacy and risk honesty and does not implement."
+        - "Append the docs/LOGBOOK.md entry and push origin main in the same session."
+      relevant_context:
+        - "docs/ACCEPTANCE-REPORT.md:1-60"
+        - "docs/evidence/strict/01-strict-bar-inventory.txt"
+        - "docs/evidence/soak/02-run/verdict.json"
+      high_risk_signals:
+        - "A verdict that inherits the previous report's PASS without re-measuring is the failure mode the owner rejected."
+      critic_signals:
+        - "Any criterion marked PASS on a source gate alone, where hardware observation was required, is a false pass."
+  - id: "T14"
+    title: "Documentation actualization and publication"
+    description: "Delivers the corrected record set and the pushed history, so no document still describes 0.6.10 as the current state or leaves a closed gap open."
+    wave: 10
+    depends_on:
+      - "T13"
+    agent: "gem-documentation-writer"
+    status: "pending"
+    retries_used: 0
+    critical_path: true
+    acceptance_criteria:
+      - "Verify every document whose statement the run changed is corrected, and a grep for the stale 0.6.10-era claims returns only entries labelled as historical."
+      - "Verify docs/DEFECTS.md carries A65 with its final disposition and evidence path, and docs/evidence/EVIDENCE-GAPS.md carries GAP-B8 with its final status and the counter evidence."
+      - "Verify docs/ROOT-ACTIONS.md records every helper installed during the run with its sha256 and the row it closed, and every still-proposed row is marked proposed."
+      - "Verify docs/LOGBOOK.md has one entry per task with UTC timestamp, actor, action, files touched, evidence path and outcome, and that no earlier entry was rewritten."
+      - "Verify git ls-remote origin refs/heads/main equals git rev-parse HEAD and git status --short is clean after the push."
+      - "Verify the new plan file and this plan's decisions are committed and pushed, and the plan of record points at both plans."
+    owner_dependencies:
+      - "None. Publishing needs no privilege; the push goes through origin, which carries both remote URLs."
+    evidence_paths:
+      - "docs/LOGBOOK.md"
+      - "docs/evidence/strict/04-publish-verify.txt"
+    handoff:
+      constraints:
+        - "ASCII only; never rewrite, reorder or delete a logbook entry; a correction is a new entry that names the entry it corrects."
+        - "Commit only the paths the run owns and check the result with git show --stat; push origin main and verify with git ls-remote."
+        - "Do not document a stack, file or function that does not exist; cite file:line for every implementation claim."
+      relevant_context:
+        - "docs/LOGBOOK.md"
+        - "docs/DEFECTS.md:149-151"
+        - "docs/evidence/EVIDENCE-GAPS.md:775-790"
+      high_risk_signals:
+        - "An unpushed logbook entry is not a record; the push and the ls-remote check are part of the task."
+      critic_signals:
+        - "A document that keeps the old limitation list while the report claims strict production contradicts the report."
