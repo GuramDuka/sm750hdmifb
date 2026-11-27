@@ -99,6 +99,11 @@ appear as `/sys/class/drm/cardN/device/<name>`. They exist for
 an older module still works. Format is what `sysfs_emit()` writes, one value
 per file.
 
+Eleven more read-only attributes on the same node, the GAP-B8 retry and
+failure counters, are documented in "GAP-B8 retry and failure counters" below.
+They are additive: a module without them, such as the 0.6.10 load this
+document was last verified against, has no `b8_*` file at all.
+
 | Attribute | Format | Meaning |
 |---|---|---|
 | `mem_info_vram_total` | decimal bytes | Total VRAM. Same value as `vram_total_bytes`; the tool tries both names. |
@@ -118,6 +123,40 @@ per file.
 the bit-banged i2c bus: two register reads, roughly a millisecond. They never
 clear the latched event bits, so a monitoring read cannot consume a link event,
 but they are not suitable for a tight polling loop.
+
+### GAP-B8 retry and failure counters
+
+Eleven further read-only attributes witness the failure path GAP-B8 is about
+(`docs/evidence/gap-b8/02-counter-design.txt`). They are monotonic `atomic64_t`
+counters incremented on the path they count and never under a lock, so reading
+one cannot perturb a modeset, and they carry no state a read could consume.
+`b8_counters_epoch_s` is the module-probe time in seconds of
+`ktime_get_boottime_seconds()`: if it changes between two samples, the module
+was reloaded and every other value restarted from zero.
+
+| Attribute | Format | Meaning |
+|---|---|---|
+| `b8_mode_attempts` | decimal | Calls into the pipe enable, including the retry from `sm750_pipe_update()` and enables that fail before touching hardware. |
+| `b8_mode_failures` | decimal | Enables that reached the enable's fail branch and logged `failed to enable HDMI mode`. |
+| `b8_mode_retries` | decimal | Retries of a failed enable issued by `sm750_pipe_update()`; counted before the retry runs, so a hang still shows. |
+| `b8_stage_failures` | six lines, `<stage> <decimal>` | The same failures split by `enum sm750_mode_stage`, in `sm750_mode_stage_names[]` order. The one multi-line attribute. |
+| `b8_i2c_write_timeouts` | decimal | Register writes that returned `-ETIMEDOUT`, one per timed-out attempt, including ones a later attempt recovered. |
+| `b8_i2c_recoveries` | decimal | Event-driven bus clears: the write-retry loop, the DDC-grant retry and the EDID sequential-read failure. The per-modeset pre-clear and the shutdown clear are housekeeping, not events, and are not counted. |
+| `b8_ready_expired` | decimal | `sii902x_wait_receiver_ready()` exhausted its budget and the enable proceeded anyway. |
+| `b8_ddc_grant_timeouts` | decimal | DDC grant attempts that never saw the grant bit, one per attempt. |
+| `b8_edid_reads` | decimal | EDID reads that started on a powered-up transmitter (a powered-down part returns early and is not an attempt). |
+| `b8_edid_failures` | decimal | EDID sequential-read failures and failures to release the DDC bus. |
+| `b8_counters_epoch_s` | decimal seconds | `ktime_get_boottime_seconds()` at probe: the reload marker for the set above. |
+
+The counters exist because a recovered i2c transient returns success and prints
+nothing (defect A42), so the kernel log cannot witness it. Their invariants hold
+by construction: `b8_mode_attempts >= b8_mode_failures >= b8_mode_retries`, the
+six `b8_stage_failures` numbers sum to `b8_mode_failures`, and
+`b8_i2c_recoveries` never exceeds
+`b8_i2c_write_timeouts + b8_ddc_grant_timeouts + b8_edid_failures`.
+`tests/check-sysfs-attributes.sh` holds them to the same show-function rules as
+the monitoring attributes and rejects a counter whose increment is missing or
+off the retry path.
 
 ### pm_probe
 

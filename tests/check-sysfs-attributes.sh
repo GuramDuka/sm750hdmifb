@@ -17,8 +17,15 @@
 #     clear the SiI9024A's latched interrupt bits,
 #   - vblank_count to read DRM core's counter rather than keep a second one.
 #
-# Usage: tests/check-sysfs-attributes.sh [source file]
-#        tests/check-sysfs-attributes.sh --single [source file]  (no self-test)
+# GAP-B8 counters (docs/evidence/gap-b8/02-counter-design.txt section 8): the
+# eleven b8_* attributes are held to the same show-function shape, and each one
+# must have an increment site on the path it claims to count. A counter whose
+# attribute exists but whose increment is absent, or sits off the retry path,
+# is decoration: it reads zero forever and no soak can tell it from an idle
+# build. That is what the b8 control below plants.
+#
+# Usage: tests/check-sysfs-attributes.sh [source file [sii902x source file]]
+#        tests/check-sysfs-attributes.sh --single [source [sii902x]]  (no self-test)
 
 set -euo pipefail
 export TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}
@@ -31,6 +38,7 @@ if [ "${1:-}" = "--single" ]; then
 	shift
 fi
 source_file=${1:-$project_dir/src/sm750_drm.c}
+sii_source=${2:-$(dirname -- "$source_file")/sii902x.c}
 
 fail() {
 	echo "sysfs attributes: $1" >&2
@@ -38,10 +46,32 @@ fail() {
 }
 
 [ -f "$source_file" ] || fail "missing source file $source_file"
+[ -f "$sii_source" ] || fail "missing source file $sii_source"
 
 attributes="mem_info_vram_total vram_total_bytes vram_used_bytes active_mode \
 active_mode_refresh_hz active_mode_pixel_clock_khz hpd rxsense link_state \
 active_crtc vblank_count crc_supported"
+
+# GAP-B8 counters, one read-only attribute each, on the same marked group.
+counter_attributes="b8_mode_attempts b8_mode_failures b8_mode_retries \
+b8_stage_failures b8_i2c_write_timeouts b8_i2c_recoveries b8_ready_expired \
+b8_ddc_grant_timeouts b8_edid_reads b8_edid_failures b8_counters_epoch_s"
+
+all_attributes="$attributes $counter_attributes"
+
+# Each counter and the token its increment (or, for the epoch, its store) must
+# carry. The split is on ';' because the tokens contain spaces and '&'.
+counter_wiring="b8_mode_attempts;atomic64_inc(&sdev->b8_mode_attempts)
+b8_mode_failures;atomic64_inc(&sdev->b8_mode_failures)
+b8_mode_retries;atomic64_inc(&sdev->b8_mode_retries)
+b8_stage_failures;atomic64_inc(&sdev->b8_stage_failures[
+b8_i2c_write_timeouts;sii902x_b8_count_inc(SM750_SII902X_B8_I2C_WRITE_TIMEOUTS)
+b8_i2c_recoveries;sii902x_b8_count_inc(SM750_SII902X_B8_I2C_RECOVERIES)
+b8_ready_expired;sii902x_b8_count_inc(SM750_SII902X_B8_READY_EXPIRED)
+b8_ddc_grant_timeouts;sii902x_b8_count_inc(SM750_SII902X_B8_DDC_GRANT_TIMEOUTS)
+b8_edid_reads;sii902x_b8_count_inc(SM750_SII902X_B8_EDID_READS)
+b8_edid_failures;sii902x_b8_count_inc(SM750_SII902X_B8_EDID_FAILURES)
+b8_counters_epoch_s;ktime_get_boottime_seconds()"
 
 begin_marker='BEGIN sysfs monitoring attributes'
 end_marker='END sysfs monitoring attributes'
@@ -57,6 +87,27 @@ show_body() {
 		in_fn && /^}/ { exit }' "$file"
 }
 
+# Print the body of the top-level function whose definition line starts with
+# the given prefix.
+fn_body() {
+	local file=$1 head=$2
+
+	awk -v head="$head" '
+		index($0, head) == 1 { in_fn = 1 }
+		in_fn { print }
+		in_fn && /^}/ { exit }' "$file"
+}
+
+# Print the fail branch of sm750_pipe_enable(), from the label to the closing
+# brace of the function.
+fail_block() {
+	awk '
+		/^static void sm750_pipe_enable\(/ { in_fn = 1 }
+		in_fn && /^fail:/ { in_fail = 1 }
+		in_fail { print }
+		in_fail && /^}/ { exit }' "$1"
+}
+
 # Print the block between the two marker comments.
 marked_region() {
 	awk -v begin="$begin_marker" -v end="$end_marker" '
@@ -68,7 +119,7 @@ marked_region() {
 check_names() {
 	local file=$1 name
 
-	for name in $attributes; do
+	for name in $all_attributes; do
 		grep -F "DEVICE_ATTR_RO(${name});" "$file" >/dev/null ||
 			fail "$file does not declare DEVICE_ATTR_RO(${name}); sm750-smi cannot find it"
 		grep -F "&dev_attr_${name}.attr," "$file" >/dev/null ||
@@ -87,16 +138,17 @@ check_group() {
 		"$file" >/dev/null ||
 		fail "$file does not define sm750_attr_group"
 
-	# Twelve monitoring attributes plus the write-only pm_probe diagnostic
-	# (defect A66), which is deliberately not one of the names above: it is
-	# not read by sm750-smi and must never be read-only.
+	# Twelve monitoring attributes, the eleven GAP-B8 counters and the
+	# write-only pm_probe diagnostic (defect A66), which is deliberately not
+	# one of the names above: it is not read by sm750-smi and must never be
+	# read-only.
 	count=$(grep -F '&dev_attr_' <<<"$region" | wc -l)
-	[ "$count" -eq 13 ] ||
-		fail "sm750_attr_group lists $count attributes, expected 12 monitoring attributes plus pm_probe"
+	[ "$count" -eq 24 ] ||
+		fail "sm750_attr_group lists $count attributes, expected 12 monitoring attributes plus 11 GAP-B8 counters plus pm_probe"
 	extra=$(grep -oE '&dev_attr_[a-z0-9_]+\.attr,' <<<"$region" |
 		sed 's/^&dev_attr_//; s/\.attr,$//' |
 		while IFS= read -r name; do
-			case " $attributes " in
+			case " $all_attributes " in
 			*" $name "*) ;;
 			*) printf '%s\n' "$name" ;;
 			esac
@@ -125,7 +177,7 @@ check_group() {
 check_show_functions() {
 	local file=$1 name body locks unlocks
 
-	for name in $attributes; do
+	for name in $all_attributes; do
 		body=$(show_body "$file" "$name")
 		[ -n "$body" ] || fail "no ${name}_show() in $file"
 
@@ -133,7 +185,9 @@ check_show_functions() {
 			fail "${name}_show() does not take its device state from dev_get_drvdata(dev)"
 		grep -F 'if (!sdev)' <<<"$body" >/dev/null ||
 			fail "${name}_show() has no NULL guard on the driver data"
-		grep -F 'sysfs_emit(' <<<"$body" >/dev/null ||
+		# sysfs_emit_at() is the same bounds-checked emitter, for the one
+		# multi-line attribute (b8_stage_failures).
+		grep -Eq 'sysfs_emit(_at)?\(' <<<"$body" >/dev/null ||
 			fail "${name}_show() does not emit through sysfs_emit()"
 
 		if grep -Eq '(msleep|ssleep|usleep_range|usleep|mdelay|udelay)\(' \
@@ -206,11 +260,98 @@ check_counters() {
 		fail "SM750_CRC_SUPPORTED has no 0 fallback for kernels without the CRC callbacks"
 }
 
+# The GAP-B8 counters must be on the path they claim to count, in both files:
+# a b8_* attribute with no increment is a constant zero, and the one counter
+# that witnesses a silently recovered timeout must count inside the attempt
+# loop, after the write already failed.
+check_counter_paths() {
+	local file=$1 wiring name token body for_line guard_line inc_line close_line
+	local enable failpart update probe prog_line attempts_line fail_line
+	local stage_line retry_line call_line guard_line2 epoch_line
+
+	for wiring in $counter_wiring; do
+		name=${wiring%%;*}
+		token=${wiring#*;}
+		grep -F -- "$token" "$file" "$sii_source" >/dev/null ||
+			fail "counter $name has no increment site ($token): the attribute would read zero on every build"
+	done
+
+	for name in $counter_attributes; do
+		body=$(show_body "$file" "$name")
+		if grep -Eq 'atomic64_inc|sii902x_b8_count_inc' <<<"$body"; then
+			fail "${name}_show() increments a counter; a sysfs read must never change what it reports"
+		fi
+	done
+
+	body=$(show_body "$file" b8_stage_failures)
+	grep -F 'sm750_mode_stage_names[' <<<"$body" >/dev/null ||
+		fail "b8_stage_failures_show() does not print the stage names in enum order"
+
+	enable=$(fn_body "$file" 'static void sm750_pipe_enable(')
+	[ -n "$enable" ] || fail "$file has no sm750_pipe_enable()"
+	attempts_line=$(grep -nF 'atomic64_inc(&sdev->b8_mode_attempts);' <<<"$enable" |
+		head -n 1 | cut -d: -f1)
+	prog_line=$(grep -nF 'sm750_program_mode(sdev, &crtc_state->adjusted_mode,' \
+		<<<"$enable" | head -n 1 | cut -d: -f1)
+	[ -n "$attempts_line" ] && [ -n "$prog_line" ] &&
+		[ "$attempts_line" -lt "$prog_line" ] ||
+		fail "b8_mode_attempts is not incremented at the top of sm750_pipe_enable(), before the mode is programmed"
+
+	failpart=$(fail_block "$file")
+	[ -n "$failpart" ] || fail "$file has no fail branch in sm750_pipe_enable()"
+	fail_line=$(grep -nF 'atomic64_inc(&sdev->b8_mode_failures);' <<<"$failpart" |
+		head -n 1 | cut -d: -f1)
+	stage_line=$(grep -nF 'atomic64_inc(&sdev->b8_stage_failures[' <<<"$failpart" |
+		head -n 1 | cut -d: -f1)
+	[ -n "$fail_line" ] && [ -n "$stage_line" ] ||
+		fail "the enable fail branch does not count b8_mode_failures and b8_stage_failures"
+	grep -F 'ARRAY_SIZE(sdev->b8_stage_failures)' <<<"$failpart" >/dev/null ||
+		fail "the b8_stage_failures index is not bounded by the array size"
+
+	update=$(fn_body "$file" 'static void sm750_pipe_update(')
+	[ -n "$update" ] || fail "$file has no sm750_pipe_update()"
+	guard_line2=$(grep -nF 'if (sdev->enable_failed && !pipe->crtc.state->mode_changed)' \
+		<<<"$update" | head -n 1 | cut -d: -f1)
+	retry_line=$(grep -nF 'atomic64_inc(&sdev->b8_mode_retries);' <<<"$update" |
+		head -n 1 | cut -d: -f1)
+	call_line=$(grep -nF 'sm750_pipe_enable(pipe, pipe->crtc.state, state);' \
+		<<<"$update" | head -n 1 | cut -d: -f1)
+	[ -n "$guard_line2" ] && [ -n "$retry_line" ] && [ -n "$call_line" ] &&
+		[ "$guard_line2" -lt "$retry_line" ] && [ "$retry_line" -lt "$call_line" ] ||
+		fail "b8_mode_retries is not incremented inside the enable-failed retry, before the recursive enable"
+
+	probe=$(fn_body "$file" 'static int sm750_pci_probe(')
+	[ -n "$probe" ] || fail "$file has no sm750_pci_probe()"
+	epoch_line=$(grep -cF 'atomic64_set(&sdev->b8_counters_epoch_s, ktime_get_boottime_seconds());' \
+		<<<"$probe" || true)
+	[ "$epoch_line" -eq 1 ] ||
+		fail "the counters epoch is not set exactly once in sm750_pci_probe(); a reload must be detectable"
+
+	body=$(fn_body "$sii_source" 'static int sii902x_write_block_retrying(')
+	[ -n "$body" ] ||
+		fail "$sii_source has no sii902x_write_block_retrying(); GAP-B8 counts that retry path"
+	for_line=$(grep -nF 'for (attempt = 0; attempt < SII902X_WRITE_ATTEMPTS; attempt++)' \
+		<<<"$body" | head -n 1 | cut -d: -f1)
+	guard_line=$(grep -nF 'if (ret != -ETIMEDOUT)' <<<"$body" |
+		head -n 1 | cut -d: -f1)
+	inc_line=$(grep -nF 'sii902x_b8_count_inc(SM750_SII902X_B8_I2C_WRITE_TIMEOUTS);' \
+		<<<"$body" | head -n 1 | cut -d: -f1)
+	close_line=$(awk '/^\t\}$/ { print NR; exit }' <<<"$body")
+	[ -n "$for_line" ] && [ -n "$guard_line" ] && [ -n "$inc_line" ] &&
+		[ -n "$close_line" ] ||
+		fail "sii902x_write_block_retrying() no longer has the attempt loop the timeout counter counts"
+	[ "$inc_line" -gt "$guard_line" ] ||
+		fail "the b8_i2c_write_timeouts increment runs before the -ETIMEDOUT test, so a successful write counts as a timeout"
+	[ "$inc_line" -lt "$close_line" ] ||
+		fail "the b8_i2c_write_timeouts increment is outside the attempt loop: a retried transient would not be counted"
+}
+
 check_names "$source_file"
 check_group "$source_file"
 check_show_functions "$source_file"
 check_link_status "$source_file"
 check_counters "$source_file"
+check_counter_paths "$source_file"
 echo "Sysfs attribute checks passed: $source_file"
 
 if [ "$mode" = single ]; then
@@ -260,25 +401,89 @@ plant_spin_lock_in_show() {
 	mv "$1.tmp" "$1"
 }
 
-# Every planted defect must be caught, otherwise the gate is decorative.
+# (f) A counter read that bypasses sysfs_emit(), so the kernel's buffer size
+# is no longer enforced for it.
+plant_counter_bypass() {
+	awk '
+		index($0, "static ssize_t b8_mode_failures_show(") == 1 { in_fn = 1 }
+		in_fn && /sysfs_emit\(/ {
+			sub(/sysfs_emit\(buf, /, "scnprintf(buf, PAGE_SIZE, ")
+		}
+		{ print }
+		in_fn && /^}/ { in_fn = 0 }' "$1" >"$1.tmp"
+	mv "$1.tmp" "$1"
+}
+# (g) A counter read that sleeps.
+plant_counter_show_sleeps() {
+	awk '
+		index($0, "static ssize_t b8_ready_expired_show(") == 1 { in_fn = 1 }
+		in_fn && index($0, "return sysfs_emit(") && !done {
+			print "\tusleep_range(1000, 2000);"
+			done = 1
+		}
+		{ print }
+		in_fn && /^}/ { in_fn = 0 }' "$1" >"$1.tmp"
+	mv "$1.tmp" "$1"
+}
+# (h) A counter read that takes a spin lock.
+plant_counter_spin_lock() {
+	awk '
+		index($0, "static ssize_t b8_i2c_recoveries_show(") == 1 { in_fn = 1 }
+		in_fn && index($0, "return sysfs_emit(") && !done {
+			print "\tspin_lock(&sdev->vblank_lock);"
+			done = 1
+		}
+		{ print }
+		in_fn && /^}/ { in_fn = 0 }' "$1" >"$1.tmp"
+	mv "$1.tmp" "$1"
+}
+# (i) The timeout increment moved off the retry path: it now counts once per
+# call instead of once per timed-out attempt, so a retried transient vanishes.
+plant_moved_increment() {
+	awk '
+		index($0, "static int sii902x_write_block_retrying(") == 1 { in_fn = 1 }
+		in_fn && index($0, "sii902x_b8_count_inc(SM750_SII902X_B8_I2C_WRITE_TIMEOUTS);") {
+			saved = $0
+			next
+		}
+		{ print }
+		in_fn && /^\t\}$/ && saved != "" {
+			print "\t" saved
+			saved = ""
+		}
+		in_fn && /^}/ { in_fn = 0 }' "$2" >"$2.tmp"
+	mv "$2.tmp" "$2"
+}
+
+# Every planted defect must be caught, for the stated reason, otherwise the
+# gate is decorative.
 control() {
 	local name=$1
+	local expect=$2
 	local planted=$scratch/sm750_drm.c
+	local planted_sii=$scratch/sii902x.c
 	local err=$scratch/stderr
 
 	cp "$source_file" "$planted"
-	shift
-	"$@" "$planted"
-	if "$0" --single "$planted" >/dev/null 2>"$err"; then
+	cp "$sii_source" "$planted_sii"
+	shift 2
+	"$@" "$planted" "$planted_sii"
+	if "$0" --single "$planted" "$planted_sii" >/dev/null 2>"$err"; then
 		fail "negative control $name was not rejected"
 	fi
+	grep -F -- "$expect" "$err" >/dev/null ||
+		fail "negative control $name was rejected for the wrong reason: $(head -n 1 "$err")"
 	echo "negative control $name: rejected (exit 1): $(head -n 1 "$err")"
 }
 
-control renamed_attribute plant_renamed_attribute
-control clear_events_true plant_clear_events
-control msleep_in_show plant_msleep_in_show
-control group_on_drm_device plant_group_on_drm_device
-control spin_lock_in_show plant_spin_lock_in_show
+control renamed_attribute "does not declare DEVICE_ATTR_RO(active_mode)" plant_renamed_attribute
+control clear_events_true "does not pass clear_events = false" plant_clear_events
+control msleep_in_show "vram_total_bytes_show() sleeps" plant_msleep_in_show
+control group_on_drm_device "is not registered on &pdev->dev" plant_group_on_drm_device
+control spin_lock_in_show "takes a spin or rtnl lock" plant_spin_lock_in_show
+control counter_bypasses_sysfs_emit "b8_mode_failures_show() does not emit through sysfs_emit()" plant_counter_bypass
+control counter_show_sleeps "b8_ready_expired_show() sleeps" plant_counter_show_sleeps
+control counter_show_spin_lock "b8_i2c_recoveries_show() takes a spin or rtnl lock" plant_counter_spin_lock
+control increment_off_retry_path "outside the attempt loop" plant_moved_increment
 
-echo "Sysfs attribute checks passed (12 attributes, 5 planted controls)"
+echo "Sysfs attribute checks passed (12 monitoring attributes, 11 GAP-B8 counters, 9 planted controls)"

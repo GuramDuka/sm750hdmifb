@@ -1,0 +1,168 @@
+GAP-B8 counter exposure, T5, 2026-11-27
+
+Plan: docs/plan/20261127-sm750-strict-production/plan.yaml, task T5 (wave 2).
+Host: Linux 7.3.5-100.fc43.x86_64, module sm750hdmidrm 0.6.10 loaded (3184 s
+before the first sample here). Reader: uid 1005(coder), gid 1006(coder),
+supplementary groups 39(video) and 1007(vtune).
+No module was loaded, unloaded or reconfigured; no root action beyond
+`sudo -n dmesg`, no card access, no VT, seat or compositor operation was
+performed. Every command below is a read.
+
+Contents
+  1. What this file can and cannot establish
+  2. The attribute set as it reaches the loaded build
+  3. Unprivileged readability evidence
+  4. Retry absence in the task window, with its sample count
+  5. What the sample count does not prove
+  6. Evidence that the gate can fail (planted controls)
+
+1. What this file can and cannot establish
+
+T5 added eleven b8_* attributes to the existing sysfs group in
+src/sm750_drm.c plus the counters they read. The build on this host is
+0.6.10, loaded at 2026-11-27T22:24:21+03:00, and it predates that change: the
+attributes do not exist in it. So the acceptance criterion "every counter
+reads 0 before any event, readable without privilege, on the loaded build"
+cannot be evaluated on 0.6.10 at all. Sections 2 and 3 record exactly what the
+loaded build answers; section 4 records the retry observation that stands in
+for a live counter read, with the sample count and the limit of that evidence.
+
+2. The attribute set as it reaches the loaded build
+
+Read as uid 1005, 2026-11-27T21:25:30Z, under /sys/class/drm/card0/device/:
+
+  attribute                 result
+  b8_mode_attempts          cat: No such file or directory, exit 1
+  b8_mode_failures          cat: No such file or directory, exit 1
+  b8_mode_retries           cat: No such file or directory, exit 1
+  b8_stage_failures         cat: No such file or directory, exit 1
+  b8_i2c_write_timeouts     cat: No such file or directory, exit 1
+  b8_i2c_recoveries         cat: No such file or directory, exit 1
+  b8_ready_expired          cat: No such file or directory, exit 1
+  b8_ddc_grant_timeouts     cat: No such file or directory, exit 1
+  b8_edid_reads             cat: No such file or directory, exit 1
+  b8_edid_failures          cat: No such file or directory, exit 1
+  b8_counters_epoch_s       cat: No such file or directory, exit 1
+
+Exit 1 with ENOENT is the honest result for the loaded build: the counter
+values it would show are not observable here, and no number is claimed for
+them.
+
+3. Unprivileged readability evidence
+
+The mechanism the new attributes use is the one the sibling monitoring
+attributes already use: DEVICE_ATTR_RO (mode 0444) collected in
+sm750_attr_group and registered with devm_device_add_group(&pdev->dev, ...).
+
+  $ ls -l /sys/class/drm/card0/device/vram_total_bytes
+  -r--r--r-- 1 root root 4096 Nov 28 00:25 .../vram_total_bytes
+  $ cat /sys/class/drm/card0/device/vram_total_bytes
+  16777216
+  (uid 1005, no sudo, exit 0)
+
+  $ ls -l /sys/class/drm/card0/device/pm_probe
+  --w------- 1 root root 4096 Nov 28 00:25 .../pm_probe
+
+So a 0444 attribute in that group is readable by uid 1005 with no privilege,
+and the write-only diagnostic is the only member that is not. tests/
+check-sysfs-attributes.sh holds every b8_* attribute to that same shape
+(DEVICE_ATTR_RO, listed in sm750_attrs[], show function with dev_get_drvdata,
+NULL guard and sysfs_emit only), so the first load of a build that carries the
+change is the remaining step, and it is a reload: a VT/console action that
+this task does not take.
+
+4. Retry absence in the task window, with its sample count
+
+The loaded build has no counters, so the only witness available for the whole
+task window is the driver's own log. Observation window: from the module load
+at 2026-11-27T22:24:21+03:00 (19:24:21Z) to the last sample at
+2026-11-27T21:27:05Z, that is 2 h 02 min. Four ring snapshots were taken 20 s
+apart (/mega/tmp/sm750/t5/samples.txt):
+
+  sample  at (UTC)              ring lines  driver lines  retry markers
+  1       2026-11-27T21:26:05Z  1790        15            0
+  2       2026-11-27T21:26:25Z  1790        15            0
+  3       2026-11-27T21:26:45Z  1790        15            0
+  4       2026-11-27T21:27:05Z  1790        15            0
+
+"driver lines" counts dmesg lines matching "sm750|SiI9024" (15, all from the
+load and the first modeset). "retry markers" counts the lines the retry path
+prints when it does not recover silently: "transient I2C timeout",
+"SiI9024A ... timed out", "DDC grant timeout", "EDID sequential transaction
+failed", "failed to enable HDMI mode", "not ready after". Zero in all four
+snapshots, and zero in the full ring for the 2 h 02 min window.
+
+Sample count: 4 ring snapshots over 80 s, covering the 2 h 02 min since load,
+15 driver log lines, 0 retry markers. No counter advanced on this host during
+the task window because no counter exists in the loaded build; the retry
+absence recorded here is a log-visible absence.
+
+5. What the sample count does not prove
+
+A recovered i2c timeout returns 0 upward and prints nothing (defect A42,
+src/sii902x.c sii902x_write_recovering). Zero retry markers is therefore
+compatible with any number of silently recovered retries inside the window,
+including hundreds: the log cannot separate "the retry path never ran" from
+"it ran and hid its work". The 15 driver lines bound what was printed, not
+what happened, and the 4 snapshots bound the ring state at 4 instants, not
+the traffic between them. This is exactly the gap the counters close:
+b8_i2c_write_timeouts moves by one per timed-out attempt and
+b8_i2c_recoveries by one per event-driven bus clear, so after the next load a
+soak can distinguish a recurrence from an idle build by reading eleven
+numbers instead of reasoning about absent log lines.
+
+6. Evidence that the gate can fail (planted controls)
+
+tests/check-sysfs-attributes.sh run against the working tree, 2026-11-27:
+
+  Sysfs attribute checks passed: /home/coder/sm750hdmifb/src/sm750_drm.c
+  negative control renamed_attribute: rejected (exit 1): ... does not declare DEVICE_ATTR_RO(active_mode); sm750-smi cannot find it
+  negative control clear_events_true: rejected (exit 1): the sysfs link-status read does not pass clear_events = false; ...
+  negative control msleep_in_show: rejected (exit 1): vram_total_bytes_show() sleeps; a sysfs read must not block on a delay
+  negative control group_on_drm_device: rejected (exit 1): sm750_attr_group is not registered on &pdev->dev; ...
+  negative control spin_lock_in_show: rejected (exit 1): vram_total_bytes_show() takes a spin or rtnl lock
+  negative control counter_bypasses_sysfs_emit: rejected (exit 1): b8_mode_failures_show() does not emit through sysfs_emit()
+  negative control counter_show_sleeps: rejected (exit 1): b8_ready_expired_show() sleeps; a sysfs read must not block on a delay
+  negative control counter_show_spin_lock: rejected (exit 1): b8_i2c_recoveries_show() takes a spin or rtnl lock
+  negative control increment_off_retry_path: rejected (exit 1): the b8_i2c_write_timeouts increment is outside the attempt loop: a retried transient would not be counted
+  Sysfs attribute checks passed (12 monitoring attributes, 11 GAP-B8 counters, 9 planted controls)
+
+The last three controls and the moved-increment control are new in T5; each
+is rejected with the message that names its defect, not merely with a non-zero
+exit, so a gate that stopped catching one of them cannot pass on a wrong
+reason.
+
+7. Final verbatim gate run and make check
+
+Same tree, same day, after the documentation edits. The transcript below is
+the complete stdout plus stderr of tests/check-sysfs-attributes.sh:
+
+  Sysfs attribute checks passed: /home/coder/sm750hdmifb/src/sm750_drm.c
+  negative control renamed_attribute: rejected (exit 1): sysfs attributes: /mega/tmp/bloomery/tmp/sm750-sysfs-attr.uayjO0/sm750_drm.c does not declare DEVICE_ATTR_RO(active_mode); sm750-smi cannot find it
+  negative control clear_events_true: rejected (exit 1): sysfs attributes: the sysfs link-status read does not pass clear_events = false; a monitoring read would clear latched interrupt bits
+  negative control msleep_in_show: rejected (exit 1): sysfs attributes: vram_total_bytes_show() sleeps; a sysfs read must not block on a delay
+  negative control group_on_drm_device: rejected (exit 1): sysfs attributes: sm750_attr_group is not registered on &pdev->dev; /sys/class/drm/cardN/device would carry no attributes
+  negative control spin_lock_in_show: rejected (exit 1): sysfs attributes: vram_total_bytes_show() takes a spin or rtnl lock
+  negative control counter_bypasses_sysfs_emit: rejected (exit 1): sysfs attributes: b8_mode_failures_show() does not emit through sysfs_emit()
+  negative control counter_show_sleeps: rejected (exit 1): sysfs attributes: b8_ready_expired_show() sleeps; a sysfs read must not block on a delay
+  negative control counter_show_spin_lock: rejected (exit 1): sysfs attributes: b8_i2c_recoveries_show() takes a spin or rtnl lock
+  negative control increment_off_retry_path: rejected (exit 1): sysfs attributes: the b8_i2c_write_timeouts increment is outside the attempt loop: a retried transient would not be counted
+  Sysfs attribute checks passed (12 monitoring attributes, 11 GAP-B8 counters, 9 planted controls)
+
+exit status 0.
+
+make check in the same tree, with the rootless libdrm recipe of
+docs/ENVIRONMENT.md section 3:
+
+  PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig \
+  PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm make check
+
+exit status 0. The recipes' own last lines: sm750-smi checks passed (27
+fields, 11 fixtures, 5 planted controls); the DRM mode policy checks carry
+their 16 runtime-guard assertions and 16 planted controls. The check
+recipe still holds 18 command lines: T5 added no recipe command, it
+extended the gate that tests/check-drm-policy.sh already invokes.
+
+All of the above is source-level. Nothing here was read from a loaded
+module that carries the counters: that read needs the owner's VT and
+module reload, which this task did not perform.

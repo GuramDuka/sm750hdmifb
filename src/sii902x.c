@@ -5,11 +5,33 @@
 #include <linux/fb.h>
 #include <linux/delay.h>
 #include <linux/hdmi.h>
+#include <linux/atomic.h>
 
 #include "ddk750_swi2c.h"
 #include "ddk750_hwi2c.h"
 #include "ddk750_chip.h"
 #include "sii902x.h"
+
+/*
+ * GAP-B8 bus-side counters: storage private to this file, never touched under
+ * a lock, incremented on a path the caller has already taken. Published to
+ * userspace only by the read helpers below (src/sm750_drm.c, b8_* attributes).
+ */
+static atomic64_t sii902x_b8_counters[SM750_SII902X_B8_COUNTER_COUNT];
+
+void sii902x_b8_count_inc(enum sii902x_b8_counter which)
+{
+	if ((unsigned int)which >= SM750_SII902X_B8_COUNTER_COUNT)
+		return;
+	atomic64_inc(&sii902x_b8_counters[which]);
+}
+
+u64 sii902x_b8_count(enum sii902x_b8_counter which)
+{
+	if ((unsigned int)which >= SM750_SII902X_B8_COUNTER_COUNT)
+		return 0;
+	return atomic64_read(&sii902x_b8_counters[which]);
+}
 
 #define SII902X_I2C_ADDR_WRITE		0x72
 #define SII902X_TPI_VIDEO_DATA		0x00
@@ -316,10 +338,17 @@ static int sii902x_write_block_retrying(unsigned char reg,
 		ret = sii902x_write_block(reg, data, length);
 		if (ret != -ETIMEDOUT)
 			break;
+		/*
+		 * GAP-B8: count the loss before the retry that may hide it. A
+		 * retried transient returns 0 upward and prints nothing (A42).
+		 */
+		sii902x_b8_count_inc(SM750_SII902X_B8_I2C_WRITE_TIMEOUTS);
 		if (attempt + 1 == SII902X_WRITE_ATTEMPTS)
 			break;
-		if (!sii902x_use_hardware_i2c)
+		if (!sii902x_use_hardware_i2c) {
+			sii902x_b8_count_inc(SM750_SII902X_B8_I2C_RECOVERIES);
 			sm750_sw_i2c_recover_bus();
+		}
 		usleep_range(SII902X_RECOVER_DELAY_US,
 			     SII902X_RECOVER_DELAY_US + 5000);
 	}
@@ -671,12 +700,15 @@ static int sii902x_wait_receiver_ready(struct device *dev,
 			 elapsed + SII902X_READY_POLL_MS,
 			 !!(value & SII902X_PLUGGED_STATUS),
 			 !!(value & SII902X_RX_SENSE_STATUS), value);
-	else
+	else {
+		/* GAP-B8: the budget expired and the enable proceeded anyway. */
+		sii902x_b8_count_inc(SM750_SII902X_B8_READY_EXPIRED);
 		dev_warn(dev,
 			 "SiI9024A receiver not ready after %u ms: HPD=%u RSEN=%u status=%02x; enabling for compatibility\n",
 			 elapsed,
 			 !!(value & SII902X_PLUGGED_STATUS),
 			 !!(value & SII902X_RX_SENSE_STATUS), value);
+	}
 
 	return 0;
 }
@@ -1125,6 +1157,8 @@ int sm750_sii902x_read_edid(struct device *dev, unsigned char *edid,
 			saved);
 		return -ENODATA;
 	}
+	/* GAP-B8: a powered-down part is not an EDID attempt; count from here. */
+	sii902x_b8_count_inc(SM750_SII902X_B8_EDID_READS);
 	sii902x_read(0x3d, &int_status);
 	dev_dbg(dev, "DDC request: system-control=%02x interrupt-status=%02x\n",
 		 saved, int_status);
@@ -1151,6 +1185,8 @@ int sm750_sii902x_read_edid(struct device *dev, unsigned char *edid,
 		}
 		if (!ret && (value & SII902X_SYS_CTRL_DDC_GRANT))
 			break;
+		/* GAP-B8: one per grant attempt that never saw the DDC bit. */
+		sii902x_b8_count_inc(SM750_SII902X_B8_DDC_GRANT_TIMEOUTS);
 		dev_err(dev,
 			"DDC grant timeout: last-read=%d system-control=%02x\n",
 			last_read_ret, value);
@@ -1161,6 +1197,7 @@ int sm750_sii902x_read_edid(struct device *dev, unsigned char *edid,
 		dev_warn(dev,
 			 "SiI9024A DDC grant timed out (attempt %u of %u); clearing the bus and retrying\n",
 			 attempt, SII902X_DDC_GRANT_ATTEMPTS);
+		sii902x_b8_count_inc(SM750_SII902X_B8_I2C_RECOVERIES);
 		sm750_sw_i2c_recover_bus();
 	}
 	if (ret)
@@ -1182,7 +1219,9 @@ int sm750_sii902x_read_edid(struct device *dev, unsigned char *edid,
 				      length >= EDID_MAX_SIZE ?
 				      EDID_MAX_SIZE : EDID_BLOCK_SIZE);
 	if (ret) {
+		sii902x_b8_count_inc(SM750_SII902X_B8_EDID_FAILURES);
 		dev_err(dev, "EDID sequential transaction failed: %d\n", ret);
+		sii902x_b8_count_inc(SM750_SII902X_B8_I2C_RECOVERIES);
 		if (sm750_sw_i2c_recover_bus())
 			dev_err(dev, "DDC lines remained busy after bus clear\n");
 	}
@@ -1209,6 +1248,7 @@ release:
 		msleep(1);
 	}
 	if (release_ret) {
+		sii902x_b8_count_inc(SM750_SII902X_B8_EDID_FAILURES);
 		dev_err(dev, "failed to release SiI9024A DDC bus\n");
 		return release_ret;
 	}

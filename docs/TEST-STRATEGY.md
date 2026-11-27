@@ -97,7 +97,7 @@ exports `TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}`), never to `/tmp`.
 | S13 | In-repo `tests/check-rpm-dkms.sh` (outside `make check`) | Evidence-hygiene gate on the packaging transcripts: every captured command runs under `LC_ALL=C LANG=C`, and after the last transcript is written the run fails on any non-ASCII byte in `docs/evidence/packaging/0[1-6]-*.log`, printing the file and its line numbers | PASS; `plant_localized_evidence` (one injected Russian `rpmbuild` line) rejected. 01-06 regenerated ASCII-clean at 0.6.2; the frozen `0.5.9/` archive predates the fix and is not covered |
 | S14 | In-repo `tests/check-sii902x-recovery.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level A42 gate: the readiness wait accumulates the plugged bit (and accepts a stable powered receiver) inside a 500 ms budget, a timed-out TPI write is retried after a software bus clear with only `-ETIMEDOUT` recoverable, the retrying write covers the option-ROM step, the initialization register, the video block, the AVI InfoFrame and the HPD workaround but never a read, a final timeout warns with the stage name and does not fail the enable, and the EDID read is skipped while the transmitter is powered down | PASS (source gate); nine planted defects rejected (readiness keyed on `RX_SENSE`, retry on `-ENXIO`, retry with no bus clear, the helper used on the EDID read, the wrapper returning the timeout, a literal DDC poll interval, a raised grant budget, a third grant attempt, no per-mode-set bus clear). T53 added the DDC grant budget (200 ms poll, 2000 ms budget, one retry after a bus clear) and the per-mode-set software bus clear. Post-fix power-cycle behaviour is not yet observed on hardware |
 | S15 | In-repo `tests/check-sm750-smi.sh` (via `make check`) | Fixture-driven gate for the `sm750-smi` monitoring tool: all 27 fields resolved from synthetic sysfs/DRM trees, eleven fixture shapes, `--strict` exit codes, CSV and JSON parsed by `python3`, five planted controls rejected; no GPU and no root needed | PASS (2026-11-25) |
-| S16 | In-repo `tests/check-sysfs-attributes.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the twelve monitoring attributes `sm750-smi` reads from `/sys/class/drm/cardN/device/`: one `DEVICE_ATTR_RO()` and one array entry per name, the group registered on `&pdev->dev` before `drm_dev_register()`, every show function using `dev_get_drvdata()` with a NULL guard and `sysfs_emit()` and neither sleeping nor taking a lock other than the mode lock, `clear_events = false` on the link-status read, and `vblank_count` reading DRM core's counter | PASS (2026-11-22); five planted defects rejected (renamed attribute, `clear_events` true, `msleep` in a show function, group on the DRM class device, spin lock in a show function) |
+| S16 | In-repo `tests/check-sysfs-attributes.sh` (via `make check`, called by `tests/check-drm-policy.sh`) | Source-level gate for the twelve monitoring attributes `sm750-smi` reads from `/sys/class/drm/cardN/device/` and the eleven GAP-B8 counters: one `DEVICE_ATTR_RO()` and one array entry per name, the group registered on `&pdev->dev` before `drm_dev_register()`, every show function using `dev_get_drvdata()` with a NULL guard and `sysfs_emit()` and neither sleeping nor taking a lock other than the mode lock, `clear_events = false` on the link-status read, `vblank_count` reading DRM core's counter, and every counter holding an increment site on the path it counts (`b8_i2c_write_timeouts` inside the write-retry loop after the `-ETIMEDOUT` test, `b8_mode_retries` between the enable-failed guard and the recursive enable) | PASS (2026-11-22); nine planted defects rejected (renamed attribute, `clear_events` true, `msleep` in a show function, group on the DRM class device, spin lock in a show function, counter show bypassing `sysfs_emit()`, counter show sleeping, counter show taking a spin lock, timeout increment moved off the retry path), re-run 2026-11-27 with the counters |
 | S17 | In-repo `tests/check-sm750-pkg.sh` (`make check-pkg`, opt-in) | Self-tests for the sudo package helper: newest-pair selection, version agreement, symlink refusal, argv refusal, the unprivileged status path, the root requirement, a single `dkms` invocation, missing-tools reporting, and the ownership/mode policy. dnf, dkms, rpm, modprobe and lsmod are stubbed through a temporary PATH, so no package is installed, removed or loaded and no root is needed | PASS (nine groups); added a `check-pkg` make target on 2026-11-22 |
 
 | S18 | In-repo `tests/check-kunit-drm.sh` (`make check-kunit`, opt-in) | DRM KUnit sweep: discovers the DRM KUnit suites under `/lib/modules/$(uname -r)/internal/drivers/gpu/drm/tests/` (floor of 8 so an empty directory fails), modprobes each (KUnit autorun runs it at load), parses the TAP output (`# Subtest:`, `ok N - name`, `not ok N - name`, `# Totals: pass:N fail:N skip:N`) from the kernel log via `DMESG_CMD`, fails naming the suite and subtest, and unloads every module in an EXIT trap. Needs root, or the allowlisted loader of `docs/ROOT-ACTIONS.md` section 3.9 (`MODPROBE_CMD='sudo -n /usr/bin/modprobe'`); without either an unprivileged run exits 77 with one SKIP line. Four planted parser defects rejected plus two negative controls in `--self-test` | Live on 2026-11-22 through the installed per-module allowlist: 23 modules discovered, 21 suites loaded and unloaded, all 21 printed only `kunit: disabled` because `# CONFIG_KUNIT_DEFAULT_ENABLED is not set` on this kernel, so the gate skips with exit 77 naming that prerequisite (`docs/ROOT-ACTIONS.md` section 3.10) instead of passing; self-test PASS; the suites' real pass/fail census is NOT YET OBSERVED |
@@ -571,13 +571,15 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   source file and needs neither the card nor root. Scratch trees go under
   `${TMPDIR:-/mega/tmp/sm750/tmp}`.
 - Holds: for each of the twelve names `sm750-smi` reads there is one
-  `DEVICE_ATTR_RO()` and one `&dev_attr_*.attr` array entry; the block between
+  `DEVICE_ATTR_RO()` and one `&dev_attr_*.attr` array entry, and the same holds
+  for each of the eleven `b8_*` counters; the block between
   the `BEGIN sysfs monitoring attributes` and `END sysfs monitoring attributes`
-  markers lists exactly twelve attributes; `device_add_group()` appears once and
-  is `devm_device_add_group(&pdev->dev, ...)` before
+  markers lists exactly twenty-three attributes; `device_add_group()` appears
+  once and is `devm_device_add_group(&pdev->dev, ...)` before
   `drm_dev_register()`; every `<name>_show()` takes its state from
   `dev_get_drvdata(dev)` behind an `if (!sdev)` guard, emits through
-  `sysfs_emit()`, contains no sleep helper, and takes no lock other than
+  `sysfs_emit()` (or `sysfs_emit_at()` for the one multi-line counter),
+  contains no sleep helper, and takes no lock other than
   `&sdev->mode_lock` with matched unlock count; the link-status call passes
   `clear_events = false` and `link_state_show()` carries all four state
   strings; `vblank_count_show()` reads `drm_crtc_vblank_count()` and the source
@@ -588,10 +590,17 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
 - Planted controls: an attribute renamed so the tool cannot find it, the
   link-status call flipped to `clear_events = true`, `msleep()` inserted into a
   show function, the group registered on `&sdev->drm.dev` instead of
-  `&pdev->dev`, and a spin lock taken in a show function. Each mutates a
-  temporary copy and must exit non-zero naming the defect.
-- Status: PASS, `Sysfs attribute checks passed (12 attributes, 5 planted
-  controls)`. The gate is source-level and no capture of the live attribute
+  `&pdev->dev`, a spin lock taken in a show function, a counter show function
+  that bypasses `sysfs_emit()`, a counter show function that sleeps, a counter
+  show function that takes a spin lock, and the `b8_i2c_write_timeouts`
+  increment moved out of the write-attempt loop. Each mutates a temporary copy
+  of both sources and must exit non-zero naming the defect.
+- Status: PASS, `Sysfs attribute checks passed (12 monitoring attributes, 11
+  GAP-B8 counters, 9 planted controls)`, re-run 2026-11-27 with the counters.
+  The eleven counters are source-level only on this host: the loaded 0.6.10
+  module predates them, so `docs/evidence/gap-b8/03-counter-observed.txt`
+  records the `ENOENT` for each name as uid 1005 and the absent retry over four
+  ring samples. The gate is source-level and no capture of the live attribute
   values exists in this tree: there is no `docs/evidence/runtime/31-*` file (the
   `31-` slot is unused; the sequence runs `30-sii9024a-readiness-and-timeout.txt`
   then `32-sii9024a-ddc-grant.txt`). Two individual values are captured, not the

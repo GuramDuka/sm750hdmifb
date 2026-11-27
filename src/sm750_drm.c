@@ -500,6 +500,12 @@ struct sm750_drm_device {
 	struct mutex crc_mutex;
 	enum sm750_mode_stage mode_stage;
 	bool enable_failed;
+	/* GAP-B8 failure witnesses: monotonic, atomic, read-only for users. */
+	atomic64_t b8_mode_attempts;
+	atomic64_t b8_mode_failures;
+	atomic64_t b8_mode_retries;
+	atomic64_t b8_stage_failures[ARRAY_SIZE(sm750_mode_stage_names)];
+	atomic64_t b8_counters_epoch_s;
 	bool phase_falling;
 	bool shadow_scanout;
 	bool rgb565;
@@ -4224,6 +4230,13 @@ static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 
 	sdev->mode_stage = SM750_MODE_STAGE_NONE;
 	sdev->enable_failed = false;
+	/*
+	 * GAP-B8: every enable, including the retry from sm750_pipe_update(),
+	 * is an attempt, and one that fails before a hardware touch still
+	 * produces a failure. Split counters let a soak separate "asked twice,
+	 * succeeded" from "asked once, failed".
+	 */
+	atomic64_inc(&sdev->b8_mode_attempts);
 	if (sdev->shadow_scanout) {
 		sm750_async_quiesce(sdev);
 		sdev->backbuffer_ready = false;
@@ -4386,6 +4399,14 @@ fail:
 	sdev->backbuffer_ready = false;
 	sdev->backbuffer_mirror = false;
 	sdev->shadow_upload_offset = 0;
+	/*
+	 * GAP-B8: one failure, and one stage tick, per failed enable. The stage
+	 * index is bounded because mode_stage is an enum a future edit could
+	 * extend past the names table.
+	 */
+	atomic64_inc(&sdev->b8_mode_failures);
+	atomic64_inc(&sdev->b8_stage_failures[
+		min_t(int, sdev->mode_stage, ARRAY_SIZE(sdev->b8_stage_failures) - 1)]);
 	drm_err(&sdev->drm,
 		"failed to enable HDMI mode: %d at stage %s (pipe left down; commit event not armed)\n",
 		ret, sm750_mode_stage_name(sdev->mode_stage));
@@ -4428,8 +4449,11 @@ static void sm750_pipe_update(struct drm_simple_display_pipe *pipe,
 	 * believes the pipe is on. A later commit retries the enable here;
 	 * a modeset commit re-runs it through the core anyway.
 	 */
-	if (sdev->enable_failed && !pipe->crtc.state->mode_changed)
+	if (sdev->enable_failed && !pipe->crtc.state->mode_changed) {
+		/* GAP-B8: a retry, counted before it runs so a hang still shows. */
+		atomic64_inc(&sdev->b8_mode_retries);
 		sm750_pipe_enable(pipe, pipe->crtc.state, state);
+	}
 
 	/*
 	 * A real client frame is arriving: stop the test-card rotation before
@@ -5263,6 +5287,160 @@ static ssize_t crc_supported_show(struct device *dev,
 static DEVICE_ATTR_RO(crc_supported);
 
 /*
+ * GAP-B8 failure witnesses. Each increment sits on the path it counts and is
+ * never taken under a lock, so these reads carry no more risk than the
+ * monitoring attributes above. After defect A42 a recovered SiI9022 i2c
+ * transient prints nothing at all: the only record it happened is
+ * b8_i2c_write_timeouts (or b8_i2c_recoveries) moving.
+ */
+static ssize_t b8_mode_attempts_show(struct device *dev,
+				     struct device_attribute *attr, char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+
+	if (!sdev)
+		return -ENODEV;
+	return sysfs_emit(buf, "%llu\n",
+			  (unsigned long long)atomic64_read(&sdev->b8_mode_attempts));
+}
+static DEVICE_ATTR_RO(b8_mode_attempts);
+
+static ssize_t b8_mode_failures_show(struct device *dev,
+				     struct device_attribute *attr, char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+
+	if (!sdev)
+		return -ENODEV;
+	return sysfs_emit(buf, "%llu\n",
+			  (unsigned long long)atomic64_read(&sdev->b8_mode_failures));
+}
+static DEVICE_ATTR_RO(b8_mode_failures);
+
+static ssize_t b8_mode_retries_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+
+	if (!sdev)
+		return -ENODEV;
+	return sysfs_emit(buf, "%llu\n",
+			  (unsigned long long)atomic64_read(&sdev->b8_mode_retries));
+}
+static DEVICE_ATTR_RO(b8_mode_retries);
+
+/*
+ * One line per mode stage, in sm750_mode_stage_names[] order. The one
+ * exception to one-value-per-file: a stage label with its own file would
+ * invite a reader to sum attributes and miss the stage that is growing.
+ */
+static ssize_t b8_stage_failures_show(struct device *dev,
+				      struct device_attribute *attr, char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+	ssize_t len = 0;
+	int i;
+
+	if (!sdev)
+		return -ENODEV;
+	for (i = 0; i < ARRAY_SIZE(sdev->b8_stage_failures); i++)
+		len += sysfs_emit_at(buf, len, "%s %llu\n",
+				     sm750_mode_stage_names[i],
+				     (unsigned long long)atomic64_read(&sdev->b8_stage_failures[i]));
+	return len;
+}
+static DEVICE_ATTR_RO(b8_stage_failures);
+
+static ssize_t b8_i2c_write_timeouts_show(struct device *dev,
+					  struct device_attribute *attr,
+					  char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+
+	if (!sdev)
+		return -ENODEV;
+	return sysfs_emit(buf, "%llu\n",
+			  (unsigned long long)sii902x_b8_count(SM750_SII902X_B8_I2C_WRITE_TIMEOUTS));
+}
+static DEVICE_ATTR_RO(b8_i2c_write_timeouts);
+
+static ssize_t b8_i2c_recoveries_show(struct device *dev,
+				      struct device_attribute *attr, char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+
+	if (!sdev)
+		return -ENODEV;
+	return sysfs_emit(buf, "%llu\n",
+			  (unsigned long long)sii902x_b8_count(SM750_SII902X_B8_I2C_RECOVERIES));
+}
+static DEVICE_ATTR_RO(b8_i2c_recoveries);
+
+static ssize_t b8_ready_expired_show(struct device *dev,
+				     struct device_attribute *attr, char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+
+	if (!sdev)
+		return -ENODEV;
+	return sysfs_emit(buf, "%llu\n",
+			  (unsigned long long)sii902x_b8_count(SM750_SII902X_B8_READY_EXPIRED));
+}
+static DEVICE_ATTR_RO(b8_ready_expired);
+
+static ssize_t b8_ddc_grant_timeouts_show(struct device *dev,
+					  struct device_attribute *attr,
+					  char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+
+	if (!sdev)
+		return -ENODEV;
+	return sysfs_emit(buf, "%llu\n",
+			  (unsigned long long)sii902x_b8_count(SM750_SII902X_B8_DDC_GRANT_TIMEOUTS));
+}
+static DEVICE_ATTR_RO(b8_ddc_grant_timeouts);
+
+static ssize_t b8_edid_reads_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+
+	if (!sdev)
+		return -ENODEV;
+	return sysfs_emit(buf, "%llu\n",
+			  (unsigned long long)sii902x_b8_count(SM750_SII902X_B8_EDID_READS));
+}
+static DEVICE_ATTR_RO(b8_edid_reads);
+
+static ssize_t b8_edid_failures_show(struct device *dev,
+				     struct device_attribute *attr, char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+
+	if (!sdev)
+		return -ENODEV;
+	return sysfs_emit(buf, "%llu\n",
+			  (unsigned long long)sii902x_b8_count(SM750_SII902X_B8_EDID_FAILURES));
+}
+static DEVICE_ATTR_RO(b8_edid_failures);
+
+/* Boot-time epoch of the counter set: a change means the module was reloaded. */
+static ssize_t b8_counters_epoch_s_show(struct device *dev,
+					struct device_attribute *attr,
+					char *buf)
+{
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+
+	if (!sdev)
+		return -ENODEV;
+	return sysfs_emit(buf, "%llu\n",
+			  (unsigned long long)atomic64_read(&sdev->b8_counters_epoch_s));
+}
+static DEVICE_ATTR_RO(b8_counters_epoch_s);
+
+
+/*
  * pm_probe drives the two system-PM callbacks directly. System sleep cannot
  * be reached on the reference host (two neighbouring Tesla P100s return -EIO
  * from their .suspend), so sm750_pm_suspend() and sm750_pm_resume() have
@@ -5372,6 +5550,17 @@ static struct attribute *sm750_attrs[] = {
 	&dev_attr_active_crtc.attr,
 	&dev_attr_vblank_count.attr,
 	&dev_attr_crc_supported.attr,
+	&dev_attr_b8_mode_attempts.attr,
+	&dev_attr_b8_mode_failures.attr,
+	&dev_attr_b8_mode_retries.attr,
+	&dev_attr_b8_stage_failures.attr,
+	&dev_attr_b8_i2c_write_timeouts.attr,
+	&dev_attr_b8_i2c_recoveries.attr,
+	&dev_attr_b8_ready_expired.attr,
+	&dev_attr_b8_ddc_grant_timeouts.attr,
+	&dev_attr_b8_edid_reads.attr,
+	&dev_attr_b8_edid_failures.attr,
+	&dev_attr_b8_counters_epoch_s.attr,
 	&dev_attr_pm_probe.attr,
 	NULL,
 };
@@ -5655,6 +5844,8 @@ static int sm750_pci_probe(struct pci_dev *pdev,
 		return ret;
 
 	pci_set_drvdata(pdev, sdev);
+	/* GAP-B8: one epoch per module load, so a reload is visible in a soak. */
+	atomic64_set(&sdev->b8_counters_epoch_s, ktime_get_boottime_seconds());
 	/*
 	 * pdev->dev is the /sys/class/drm/cardN/device node, which is where
 	 * tools/sm750-smi looks; the group must not go on the DRM class device.

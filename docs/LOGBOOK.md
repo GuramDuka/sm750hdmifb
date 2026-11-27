@@ -4995,3 +4995,40 @@ support, three of them blocking. This entry records the correction pass.
   Recorded here rather than silently dropped.
 - Left open: docs/DECK.md:55 and docs/deck/index.html:326 still quote the
   pre-0.6.8 failure suffix and the line numbers that went with it.
+
+### 2026-11-28T00:55Z | orchestrator | T5: the GAP-B8 counters exist, and the gate bites on their wiring
+
+- T5 landed as eleven named counters on the existing `sm750_attr_group`: five
+  mode-path counters (`b8_mode_attempts`, `b8_mode_failures`, `b8_mode_retries`,
+  `b8_stage_failures` as a multi-line per-stage array, `b8_counters_epoch_s`) and
+  six SiI902x bus counters (write timeouts, write-loop recoveries, ready
+  expiries, EDID read failures, DDC grant timeouts, DDC grant recoveries).
+  Twelve monitoring attributes now, twenty-three in total; all 0444.
+- Read chanel and increment channel are separate helpers by design
+  (`sii902x_b8_count_inc()`, `sii902x_b8_count()`), because one accessor cannot
+  be both without handing the private counter array to callers, and the gate has
+  to distinguish reads from increments inside show bodies.
+- Counting scope is stated as a lower bound: only the three event-driven bus
+  clears count as recoveries. The error-driven recover in
+  `sm750_sii902x_prepare()`, the per-modeset pre-clear and the shutdown clear are
+  housekeeping and are documented as uncounted.
+- `tests/check-sysfs-attributes.sh` grew into a counter gate: 12 monitoring
+  attributes, 11 counters, 9 planted controls, a no-increment-in-show test, and a
+  new `check_counter_paths()` that asserts each increment site and its position
+  relative to the retry, enable and fail lines. Verbatim rejects include
+  `the b8_i2c_write_timeouts increment is outside the attempt loop: a retried
+  transient would not be counted` and `b8_i2c_recoveries_show() takes a spin or
+  rtnl lock`.
+- Acceptance criteria 1 and 4 are source-level only and that is recorded, not
+  hidden: the loaded module is 0.6.10 and predates the attributes, and a reload is
+  an owner console action. `docs/evidence/gap-b8/03-counter-observed.txt` records
+  eleven ENOENT reads at uid 1005, the 0444 readability proof from the sibling
+  attribute, and a 2 h 02 min retry window sampled four times (ring 1790 lines,
+  15 driver lines, 0 retry markers) with the explicit limit that log absence
+  cannot separate "path never ran" from "ran and printed nothing".
+- Correction owed to `docs/LOGBOOK.md:3101`, which reports twelve monitoring
+  attributes as the T52 endpoint: that number is now twenty-three in total and
+  twelve of them are monitoring attributes; the earlier entry stays as written.
+- Re-verified the deck after the counter insertions: `src/sm750_drm.c:4410-4412`
+  still holds the `drm_err` statement quoted at `docs/DECK.md:55` and
+  `docs/deck/index.html:326`, so that citation is correct at this commit.
