@@ -110,10 +110,12 @@ code type x86, indicator 0x80; VBE 2.0 block at 0x7f; version 1.00.59-, build
 05/14/19 16:25, banner "Silicon Motion SM750 VGA BIOS (CRT)". Transcript:
 `docs/evidence/baseline/18-vbios-dump.txt`.
 
-Residual limit, not a gap in the capture: the helper's `EXPECT` constant should
-become 49152, so that a good capture stops exiting 2. Changing it needs the
-host owner, because the helper is a root-owned host path and the sudo grant is
-on the path. That edit is out of scope for T12.
+Resolved, and not a residual limit: the `EXPECT` constant was the stale part. The
+v3 helper body, recorded at `docs/ROOT-ACTIONS.md:365-373`, was installed at
+`/usr/local/sbin/sm750-vbios-dump` on 2026-11-18T12:07Z with `EXPECT=49152`, and
+it exits 2 on a size mismatch and 3 on a bad `55aa` signature, so a good capture
+no longer warns. The exit-2 transcript above was produced by the v2 body and
+stays as it was recorded.
 
 Status: `CLOSED`. The image is captured, verified and documented.
 
@@ -750,23 +752,32 @@ the last one succeeds; the failure path in `sm750_pipe_enable()` reports it, so
 the next occurrence prints
 
 ```
-failed to enable HDMI mode: -110 at stage <name> (commit finished, event consumed)
+failed to enable HDMI mode: -110 at stage <name> (pipe left down; commit event not armed)
 ```
 
 where `<name>` is one of `sii902x_begin_mode`, `ddk750_set_display_control`,
 `ddk750_set_mode_timing`, `ddk750_set_logical_disp_out`, `sii902x_enable`, or
 `none` when the failure predates the first call. The names are the names of the
 functions the stage precedes, in source order, so a dmesg line maps to one call
-in `src/sm750_drm.c`. Plain `drm_err` is used, not `drm_dbg`, so no dynamic
+in `src/sm750_drm.c`. The format string is at `src/sm750_drm.c:4366` and its
+suffix has read `(pipe left down; commit event not armed)` since 0.6.8; an
+earlier revision of this paragraph quoted `(commit finished, event consumed)`,
+which is the suffix the 0.6.0-era build printed (the logbook entry of
+2026-11-19). Plain `drm_err` is used, not `drm_dbg`, so no dynamic
 debug is needed and no root-only switch exists to miss. There is deliberately no
 retry: a retry of a half-progressed modeset can corrupt state, and this branch
 identifies, it does not recover. `tests/check-drm-policy.sh` asserts that every
 stage has a name and an assignment on the modeset path.
 
-The observation itself has not happened: the module carrying the change has not
-been loaded (loading needs root) and the 1-in-206 trigger has not been re-raised,
-so this row stays `GAP`. The instrumentation is recorded in
-`docs/evidence/gap-b8/01-stage-instrumentation.txt`.
+The instrumentation has been loaded. Module 0.6.10, which carries the
+stage-name format, is installed and live on this host
+(`srcversion 6DA22404EEA85B6D6535912`), and the guarded unload path was
+exercised sixteen times in one second on the mitigated reload
+(`docs/evidence/runtime/54-a65-trace-mitigated-reload.txt`). What has not
+happened is the `-110` itself: the trigger has not been re-raised since the
+instrumentation went in, so no `at stage <name>` line has been produced and this
+row stays `GAP` for the trigger, not for the instrumentation. The instrumentation
+record is `docs/evidence/gap-b8/01-stage-instrumentation.txt`.
 
 Status: `GAP`.
 
@@ -778,12 +789,12 @@ Status: `GAP`.
 | --- | --- | --- | --- |
 | B1 | VBIOS ROM (48 KiB) | rom node `0600 root`; captured via allowlisted `sm750-vbios-dump` (T12) | `CLOSED` |
 | B2 | kernel log excerpt | `dmesg` EPERM unprivileged; allowlisted `sudo -n /usr/bin/dmesg` works (T13) | `CLOSED` |
-| B3 | modeset / IGT / kmscube | `/dev/dri/card0` `0660 root:video` + ACL; modeset, kmscube and IGT now captured on both builds (T10, T11); readback and CRC have no path on this host at any privilege level - no `/dev/fb*`, no writeback connector, and at the time no `get_crc_sources` in the driver (T26 added one and T27 removed the `/dev/fb*` dependency from the test, but reading the result still needs `/sys/kernel/debug`, which is 0700 root-only; see `docs/evidence/scanout/03-readback.txt`) | `PARTIAL` |
+| B3 | modeset / IGT / kmscube | `/dev/dri/card0` `0660 root:video` + ACL; modeset, kmscube and IGT now captured on both builds (T10, T11); the CRC half is `CLOSED` (see the CRC section above, Update T46 of 2026-11-21): the driver registers `sm750_crtc_get_crc_sources` (`src/sm750_drm.c:3499`, `.get_crc_sources` at `:4578`), so `crtc-0/crc/data` is readable through the allowlisted `sm750-crc-cycle` and the scanout CRC gate runs green. What stays `PARTIAL` is proof of the pixels leaving the connector: no `/dev/fb*`, no writeback connector, no external capture (`docs/evidence/scanout/03-readback.txt`) | `PARTIAL` |
 | B4 | MMIO register dumps | strict devmem, BAR1 `0600`, debugfs `0700`; `regs` facility (T5) read via allowlisted `sm750-regs` before/during/after a modeset (T11) | `CLOSED` |
 | B5 | config space > 0x40 | `Capabilities: <access denied>` unprivileged; allowlisted `sudo -n /usr/local/sbin/sm750-lspci` returns the full space (T14) | `CLOSED` |
 | B6 | EDID checksum detail | none | `CLOSED` |
 | B7 | RPM install/erase, DKMS hooks | `dkms install` needs root; `rpm -i --root=` cannot chroot; install, `%preun` erase and reinstall all executed as root (T11) | `CLOSED` |
-| B8 | which `sm750_program_mode` call returns `-110` | that path had zero `dev_dbg`/`drm_dbg`, and dynamic debug is root-only; T27 instruments the five calls instead (the next occurrence prints `failed to enable HDMI mode: -110 at stage <name>`, see `docs/evidence/gap-b8/01-stage-instrumentation.txt`), but the instrumented build has not been loaded and the trigger itself reproduced only 1/206 | `GAP` |
+| B8 | which `sm750_program_mode` call returns `-110` | that path had zero `dev_dbg`/`drm_dbg`, and dynamic debug is root-only; T27 instruments the five calls instead (the next occurrence prints `failed to enable HDMI mode: -110 at stage <name>`, see `docs/evidence/gap-b8/01-stage-instrumentation.txt`); the instrumented build is loaded and live (0.6.10, `srcversion 6DA22404EEA85B6D6535912`, `docs/evidence/runtime/54-a65-trace-mitigated-reload.txt`), but the trigger itself reproduced only 1/206 and has not been re-raised | `GAP` |
 
 One further fact, recorded rather than resolved: the handoff anticipated a
 `journalctl -k -b` substitute for `dmesg`. It exits 0 on this host but yields

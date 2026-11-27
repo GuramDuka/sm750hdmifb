@@ -6,10 +6,11 @@ ultrawide desktop, with bandwidth-saving colour conversion and update
 optimisations for smoother performance.**
 
 Linux display driver for the single-HDMI `SE-DP750A-HDMI` PCIe card. Current
-release **0.6.9**: atomic KMS, dithered 16-bit scanout, hardware cursor, DMA and
+release **0.6.10**: atomic KMS, dithered 16-bit scanout, hardware cursor, DMA and
 polling upload paths, sysfs monitoring attributes, a test-card fallback so a
 panel with no client is never dead-black, DKMS packages for `.deb` and `.rpm`,
-and an acceptance audit of 6 PASS / 0 FAIL / 1 GAP run against the 0.6.0 tree
+and the graded 0.6.0 acceptance report (6 PASS / 0 FAIL / 1 GAP), which the
+strict-bar status block below supersedes
 and re-verified since. The devices-level sleep cycle was measured and passed on
 2026-11-27 (`docs/evidence/runtime/49-pmtest-devices-cycle.txt`).
 
@@ -26,7 +27,7 @@ read and archived, the option ROM was reconstructed from the image, the driver
 was brought to feature-complete state, every check was written down and turned
 into a gate, and the result was packaged for DKMS on RPM and Debian.
 
-`release 0.6.9` `kernel 6.17 and newer` `x86_64` `GPL-2.0-only` `DKMS`
+`release 0.6.10` `kernel 6.17 and newer` `x86_64` `GPL-2.0-only` `DKMS`
 `no firmware blobs` `no closed libraries`
 
 The signal path this driver owns ends at the transmitter:
@@ -142,14 +143,15 @@ transmitter, or different GPIO wiring and are not currently supported.
 
 ## Status
 
-Release 0.6.9. The driver is feature-complete for this board and meets the
-project's production criteria except for one item that needs a person at the
-panel; see the [acceptance report](docs/ACCEPTANCE-REPORT.md).
+Release 0.6.10. The driver is feature-complete for this board. It does not meet
+the strict production bar: the status block below names the six of nine open
+elements and the two out-of-scope platform items, and the graded criteria are in
+the [acceptance report](docs/ACCEPTANCE-REPORT.md).
 
 | Area | Verified state |
 |---|---|
-| Module | `sm750hdmidrm` 0.6.9, built by DKMS from one source tree |
-| Runtime | 0.6.9 loaded and exercised on kernel 7.3.5-100 (Fedora 43); DKMS built and installed it from this tree for 7.2.15-100, 7.3.3-100, 7.3.4-100 and 7.3.5-100; the version-free `sm750-pkg` helper performs install and rollback (`docs/ROOT-ACTIONS.md` 3.8) |
+| Module | `sm750hdmidrm` 0.6.10, built by DKMS from one source tree |
+| Runtime | 0.6.10 loaded and exercised on kernel 7.3.5-100 (Fedora 43); DKMS built and installed it from this tree for 7.2.15-100, 7.3.3-100, 7.3.4-100 and 7.3.5-100; the version-free `sm750-pkg` helper performs install and rollback (`docs/ROOT-ACTIONS.md` 3.8) |
 | Sleep path | devices-level `pm_test` cycle PASS 2026-11-27: all four `pm:` edges once, `suspend_stats` unchanged, panel back at 1024x768 and 75 Hz, CRC `0xa76f0aeb` (`docs/evidence/runtime/49-pmtest-devices-cycle.txt`); a `pm_probe` pass is not a system sleep |
 | Test card | seen on the panel; the disc animates and the scanout CRC gate stays green while it runs (`docs/evidence/runtime/26-test-card-crc-fix.txt`) |
 | Build matrix | 9 kernel and scanout-format combinations, 6.17.1 through the 7.4 daily headers |
@@ -161,12 +163,41 @@ panel; see the [acceptance report](docs/ACCEPTANCE-REPORT.md).
 | Specifications | datasheet and product brief archived with hashes; every MMIO register the source uses is cross-referenced |
 | Static analysis | sparse clean (four findings fixed); smatch, cppcheck, coccinelle and pahole triaged |
 
-Acceptance verdict: **6 PASS, 0 FAIL, 1 GAP**. The gap is AC-3, pixel-level
-proof at the panel, which needs a human looking at the monitor or capture
-hardware, neither of which exists on the reference host. Everything up to the
-panel is evidenced.
+Strict-bar status, not a verdict. The bar is the objective in
+[docs/plan/20261127-sm750-strict-production/plan.yaml](docs/plan/20261127-sm750-strict-production/plan.yaml),
+and every claim in this file is audited against it, with `document:line` for
+each, in
+[docs/evidence/strict/01-strict-bar-inventory.txt](docs/evidence/strict/01-strict-bar-inventory.txt).
+Six of its nine elements are open today:
 
-Known limitations, each with an id in [docs/DEFECTS.md](docs/DEFECTS.md):
+- A65 cause: the unload wedge is survived and its teardown traced, but the
+  blocked function is not named (`docs/DEFECTS.md:149`).
+- GAP-B8 counters: no attempt, retry, bus-recovery or final-failure counter
+  exists in the source, so a `-110` recurrence cannot be counted.
+- Soak: no 24-48 h run with a machine-readable verdict exists; there is no
+  `docs/evidence/soak/`.
+- Defect closure: 67 rows in [docs/DEFECTS.md](docs/DEFECTS.md), with A65 still
+  S1 open.
+- Kernel coverage: runtime evidence covers 7.3.4-100 and 7.3.5-100; the other
+  two DKMS kernels are built, not booted.
+- Documentation: this pass.
+
+Two platform items are out of scope, each with a committed proof that no driver
+change can close it, and neither is a limitation of this driver:
+
+- A53: the host's desktop-wide environment in `/etc/environment` points
+  `KWIN_DRM_DEVICES` and the GLX vendor variables at the NVIDIA card, so a
+  Plasma X11 session on the SM750 crash-loops before it draws; the workaround is
+  per session (`docs/evidence/runtime/43-plasma-x11.txt`,
+  [Plasma over X11](docs/PLASMA-X11.md)).
+- A54: after the last client exits `dev->open_count` never reaches zero on this
+  host, so `drm_lastclose()` never runs and the only generic restore hook the
+  DRM core offers is structurally unreachable; switch to a text VT or run
+  `sm750-headless` to get the console back
+  (`docs/evidence/runtime/51-lastclose-open-count.txt`).
+
+Still open, and this driver's own, each with an id in
+[docs/DEFECTS.md](docs/DEFECTS.md):
 
 - A failed modeset no longer becomes a kernel WARNING plus stalled commits, but
   the underlying `-110` bridge timeout is survived rather than prevented
@@ -182,13 +213,6 @@ Known limitations, each with an id in [docs/DEFECTS.md](docs/DEFECTS.md):
   emits; AC-3 tier 5 remains partial for that reason.
 - `smatch` reports one shift-versus-mask precedence warning that originates in
   `GENMASK_TYPE()` in the kernel headers, not in this driver (A28).
-- The panel keeps the last frame, or goes dark, after the last client exits:
-  the in-kernel fbdev client holds a card0 file and every `renderD128` user
-  holds another, and `dev->open_count` counts per device, so it never reaches
-  zero, `drm_lastclose()` never runs and the only generic restore hook is
-  unreachable. No driver-side fix exists (A54, proof in
-  `docs/evidence/runtime/51-lastclose-open-count.txt`); switch to a text VT or
-  run `sm750-headless` to get the console back.
 - Unloading the module while the framebuffer console is attached can leave
   `modprobe -r` stuck in `Unloading` with a refcount of `-1`, recoverable only
   by a reboot (A65). `sm750-vt off` detaches the console first, which is why
@@ -216,7 +240,7 @@ git clone https://github.com/GuramDuka/sm750hdmifb.git
 cd sm750hdmifb
 make check
 ./build-package.sh
-sudo apt install ./dist/sm750hdmifb_0.6.9_all.deb ./dist/sm750hdmifb-tools_0.6.9_*.deb
+sudo apt install ./dist/sm750hdmifb_0.6.10_all.deb ./dist/sm750hdmifb-tools_0.6.10_*.deb
 sudo reboot
 ```
 
@@ -248,13 +272,13 @@ mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS}
 . ./packaging/source-excludes.sh
 mapfile -t skip < <(sm750_dev_only_pathspecs)
 git ls-files -z -- . "${skip[@]}" >"$work/tracked"
-tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.9-source.tar.gz" \
-    --transform='s|^|sm750hdmifb-0.6.9/|' --null -T "$work/tracked"
+tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.10-source.tar.gz" \
+    --transform='s|^|sm750hdmifb-0.6.10/|' --null -T "$work/tracked"
 
 rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb.spec
 rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb-tools.spec
-sudo dnf install -y "$topdir"/RPMS/noarch/sm750hdmifb-0.6.9-1.fc43.noarch.rpm \
-    "$topdir"/RPMS/x86_64/sm750hdmifb-tools-0.6.9-1.fc43.x86_64.rpm
+sudo dnf install -y "$topdir"/RPMS/noarch/sm750hdmifb-0.6.10-1.fc43.noarch.rpm \
+    "$topdir"/RPMS/x86_64/sm750hdmifb-tools-0.6.10-1.fc43.x86_64.rpm
 sm750-smi
 sudo reboot
 ```
@@ -296,7 +320,7 @@ module is `sm750hdmidrm.ko` so it cannot be confused with `sm750fb.ko`.
 
 ### Kernel compatibility
 
-**Built on 6.17 through 7.4, runtime-validated on 7.3.5.** Release 0.6.9 is
+**Built on 6.17 through 7.4, runtime-validated on 7.3.5.** Release 0.6.10 is
 installed by DKMS for the Fedora 43 kernels 7.2.15-100, 7.3.3-100, 7.3.4-100 and
 7.3.5-100, and was loaded and exercised on 7.3.5-100, the reference host kernel,
 including the devices-level `pm_test` cycle. The earlier trees are built and
@@ -848,10 +872,18 @@ sudo sm750-headless kmscube 15          # kmscube, 15 s
 
 `weston` and `cage` run inside a private mount namespace whose `/dev/input` is
 an empty tmpfs, so neither can open or grab the owner's keyboard and mouse;
-`kmscube` opens only the card and is not isolated. The run prints
+`kmscube` opens only the card and is not isolated. That is what the source
+does: `tools/sm750-headless.sh:599-607` (`isolate()`, `/usr/bin/unshare
+--mount`) starts the compositor with an empty tmpfs over `/dev/input`
+(`:601`), and the run prints
 `sm750-headless: input devices are isolated in a private mount namespace (empty /dev/input)`
-and records the same line, with the `unshare` and `mount` commands used, in
-`00-plan.txt`. Defect A49 in `docs/DEFECTS.md` records why a namespace is the
+(`:126`) and records the same line, with the `unshare` and `mount` commands
+used, in `00-plan.txt`. The copy installed as
+`/usr/local/sbin/sm750-headless` is byte-identical to that source: 28930 bytes,
+sha256 `da71bc311d224f7d9bc8e8717d39956181c5444d417ce7f71de4df1d424ed799`; how
+that copy is refreshed, and the digests earlier revisions carried, are recorded
+in `docs/ROOT-ACTIONS.md` section 3.11. Defect A49 in `docs/DEFECTS.md` records
+why a namespace is the
 only guard: weston's DRM backend offers no `--no-input` (that option is x11
 only) and cage has no input option at all.
 

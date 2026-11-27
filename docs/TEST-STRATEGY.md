@@ -114,14 +114,17 @@ exports `TMPDIR=${TMPDIR:-/mega/tmp/sm750/tmp}`), never to `/tmp`.
 ### S1: in-repo `make check`
 
 - Package/version: the repository itself at 0.5.9; no external package. The
-  `check` target is `Makefile:30-48` and contains 17 command lines.
+  `check` target is `Makefile:30-49` and contains 18 command lines today; the
+  archived 0.5.9 run below executed 17, before `./tests/check-sm750-smi.sh` was
+  appended at `Makefile:49` (2026-11-22).
 - Command (exactly as archived in `01-make-check.log:5`):
 
 ```sh
 make check KDIR=/lib/modules/7.3.3-100.fc43.x86_64/build CC=/usr/bin/gcc
 ```
 
-- Pass criterion: exit 0, all 17 recipe commands execute, and no command
+- Pass criterion: exit 0, all 18 recipe commands execute (17 in the archived
+  run below, which predates `Makefile:49`), and no command
   reports an error. The live vblank probe inside
   `tests/check-drm-module.sh:290-301` is allowed to print `SKIP` only because
   `/dev/dri/card0` was denied at the time of that run (before the T10 udev ACL);
@@ -364,9 +367,9 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
 ### S9: source-level blank-console diagnostic
 
 - Command: `./tests/check-console-blank.sh` (also run by
-  `tests/check-drm-policy.sh`, which is the 17th command of `make check`, so
-  the recipe stays at 17). Takes an optional source path, defaulting to
-  `src/sm750_drm.c`.
+  `tests/check-drm-policy.sh`, which is the 17th of the 18 recipe commands of
+  `make check`, so calling it adds no command of its own). Takes an optional
+  source path, defaulting to `src/sm750_drm.c`.
 - Holds: `sm750_shadow_frame_is_blank()` exists and samples the shadow source
   on a coarse 16-row/16-pixel grid with a NULL-map bail-out and no allocation;
   the exact text `console framebuffer is blank` is emitted inside
@@ -406,9 +409,9 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
 ### S11: source-level restore-path invariants
 
 - Command: `./tests/check-restore-path.sh` (also run by
-  `tests/check-drm-policy.sh`, which is the 17th command of `make check`, so
-  the recipe stays at 17). Takes an optional source directory and a
-  `--single` mode the negative controls use.
+  `tests/check-drm-policy.sh`, which is the 17th of the 18 recipe commands of
+  `make check`, so calling it adds no command of its own). Takes an optional
+  source directory and a `--single` mode the negative controls use.
 - Holds, against `src/ddk750_display.c`, `src/ddk750_mode.c` and
   `src/sm750_drm.c`, four properties that the A32 RCA needs: the display
   transition wait takes a mask, compares `(last & mask) == (value & mask)`,
@@ -457,7 +460,8 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
 ### S12: source-level test-card invariants
 
 - Command: `./tests/check-test-pattern.sh` (also run by
-  `tests/check-drm-policy.sh`, so `make check` stays at 17 commands). Takes an
+  `tests/check-drm-policy.sh`, which is the 17th of the 18 recipe commands of
+  `make check`, so calling it adds no command of its own). Takes an
   optional source file and a `--single` mode the negative controls use.
 - Holds, against `src/sm750_drm.c`, the T37 fallback contract: `test_pattern`
   defaults to `auto`, `test_pattern_period_ms` to `5000` and
@@ -587,8 +591,13 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   `&pdev->dev`, and a spin lock taken in a show function. Each mutates a
   temporary copy and must exit non-zero naming the defect.
 - Status: PASS, `Sysfs attribute checks passed (12 attributes, 5 planted
-  controls)`. The live attribute values are in
-  `docs/evidence/runtime/31-sysfs-attributes.txt`.
+  controls)`. The gate is source-level and no capture of the live attribute
+  values exists in this tree: there is no `docs/evidence/runtime/31-*` file (the
+  `31-` slot is unused; the sequence runs `30-sii9024a-readiness-and-timeout.txt`
+  then `32-sii9024a-ddc-grant.txt`). Two individual values are captured, not the
+  set: `active_mode_refresh_hz` in
+  `docs/evidence/runtime/34-vblank-idle-freeze.txt:23,101-108` and `active_crtc`
+  in `docs/evidence/runtime/39-smi-inactive-crtc.txt`.
 
 ### S20: headless helper gate
 
@@ -1078,8 +1087,9 @@ What proves it:
 - A build exits 0 for each kernel tree and each of the three formats
   (`rgb565-bbdither`, `xrgb8888`, `rgb565`), with the format macro verified in
   the object command line (`tests/build-all-kernels.sh:41-54`).
-- The `rgb565-bbdither` build of each tree runs the full 17-command `check`
-  suite (`tests/build-all-kernels.sh:33-34`), not only the metadata checks.
+- The `rgb565-bbdither` build of each tree runs the full `check` suite
+  (`tests/build-all-kernels.sh:33-34`), all 18 recipe commands, not only the
+  metadata checks.
 - The warning scan attributes no warning or error to `src/*.c` or `src/*.h`
   (`11-warnings-scan.log`).
 - The declared floor 6.17 is built, not merely declared.
@@ -1263,7 +1273,7 @@ evidence wins. The conflicts resolved here:
 
 | Conflict | Resolution |
 | --- | --- |
-| Task text says an "18-check" `make check`; `ENVIRONMENT.md` section 6 and `13-make-check-count.txt` say 17 | 17. The `check` recipe has 17 command lines (`Makefile:32-48`). A naive tab-line count over `Makefile:30-48` returns 18 because the prerequisite list at `Makefile:30-31` continues on a tab-indented second line; that line is not a recipe command. `01-make-check.log:8` records 17. |
+| Task text says an "18-check" `make check`; `ENVIRONMENT.md` section 6 and `13-make-check-count.txt` say 17 | 17 was right for the recipe before 2026-11-22 and 18 is right now. The `check` recipe is `Makefile:32-49` with 18 command lines; `./tests/check-sm750-smi.sh` (`Makefile:49`) was appended after `python3 tests/test-staging-results.py`, and `01-make-check.log:8` and `13-make-check-count.txt` record the 17-command recipe that produced them, so both captures stay as they were written. `Makefile:30-31` is the prerequisite list, not a recipe line. |
 | `ENVIRONMENT.md` section 6 cited `Makefile:16-32` for the recipe | That range is pre-T5. After T5's edits the recipe is `Makefile:30-48`; the count is unchanged. T7 refreshed `ENVIRONMENT.md` section 6 to the current line numbers. |
 | `ENVIRONMENT.md` section 2 listed 7.2.13-100 as a usable tree | 7.2.13 no longer has a `build` link on 2026-11-18. The recorded matrix is 7.2.15/7.3.3/7.3.4 plus the extracted 6.17.1, matching `02`-`06`. T7 refreshed the table. |
 | `ENVIRONMENT.md` section 1 recorded kernel 7.3.3 | The host now runs 7.3.4. T5 logs record 7.3.4 as the running kernel, and R1 still builds against the 7.3.3 `KDIR` explicitly. T7 refreshed the value and kept the T3 capture as the historical record. |

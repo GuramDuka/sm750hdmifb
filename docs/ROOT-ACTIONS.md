@@ -123,19 +123,25 @@ deliberately NOT granted - a grant to `cat` on that path would be a grant to
 read every future allowlist, and `visudo` on the live file is not needed once
 the staged file is verified. Verification is by `sudo -n -l` content only.
 
-### The 76 NOPASSWD entries
+### The 78 NOPASSWD entries
 
-`sudo -n -l` lists 76 distinct NOPASSWD command lines, measured 2026-11-25:
-73 for this work plus three that predate it (`/usr/bin/dmidecode`,
-`/usr/local/cuda/bin/ncu`, `/usr/local/cuda/bin/nvprof`). Of the 73, 45 are
-`modprobe` lines - 22 loads and 23 `-r` removals, covering the 21 DRM KUnit
-suites in section 3.9 above plus `kunit` and `sm750hdmidrm` - and 28 are the
-helper, `dkms`, log and RPM lines. `/usr/bin/nice` is no longer granted: the
-host owner removed it, because a general utility that can run an arbitrary
-program as root is precisely the hole this allowlist exists to avoid. The 76,
-copied verbatim from that measurement:
+`sudo -n -l` lists 78 NOPASSWD lines, captured 2026-11-27T20:36:14Z on kernel
+7.3.5-100.fc43.x86_64 and stored at
+`docs/evidence/environment/01-sudo-allowlist.txt`: 75 for this work plus three
+that predate it (`/usr/bin/dmidecode`, `/usr/local/cuda/bin/ncu`,
+`/usr/local/cuda/bin/nvprof`). Of the 75, 45 are `modprobe` lines - 22 loads and
+23 `-r` removals, covering the 21 DRM KUnit suites in section 3.9 above plus
+`kunit` and `sm750hdmidrm` - 14 are helper lines (eleven helpers once each and
+`sm750-vt` with `off`, `on` and `show`), and 16 are the remaining `dkms`, log,
+`cat` and RPM lines: `dkms` is granted for `build`, `install`, `uninstall` and
+`remove` at 0.6.0 and 0.6.1 plus a bare `dkms status`, and the package install
+runs through the version-free `sm750-pkg` helper, so no `dnf install` line
+exists. `/usr/bin/nice` is not granted: a general utility that can run an
+arbitrary program as root is the hole this allowlist exists to avoid. The 78,
+copied from that capture:
 
 ```text
+/usr/bin/cat
 /usr/bin/depmod -a
 /usr/bin/dkms build -m sm750hdmifb -v 0.6.0
 /usr/bin/dkms build -m sm750hdmifb -v 0.6.1
@@ -148,11 +154,6 @@ copied verbatim from that measurement:
 /usr/bin/dkms uninstall -m sm750hdmifb -v 0.6.1
 /usr/bin/dmesg
 /usr/bin/dmidecode
-/usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.0-1.fc43.noarch.rpm
-/usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.1-1.fc43.noarch.rpm
-/usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-1.fc43.noarch.rpm
-/usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-2.fc43.noarch.rpm
-/usr/bin/dnf install -y /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.2-3.fc43.noarch.rpm
 /usr/bin/dnf remove -y sm750hdmifb
 /usr/bin/journalctl -k -b --no-pager
 /usr/bin/journalctl -k -b -q --no-pager
@@ -207,11 +208,17 @@ copied verbatim from that measurement:
 /usr/local/sbin/sm750-console
 /usr/local/sbin/sm750-crc
 /usr/local/sbin/sm750-crc-cycle
+/usr/local/sbin/sm750-hang
 /usr/local/sbin/sm750-headless
 /usr/local/sbin/sm750-lspci
 /usr/local/sbin/sm750-pkg
+/usr/local/sbin/sm750-pm-probe
+/usr/local/sbin/sm750-pmtest
 /usr/local/sbin/sm750-regs
 /usr/local/sbin/sm750-vbios-dump
+/usr/local/sbin/sm750-vt off
+/usr/local/sbin/sm750-vt on
+/usr/local/sbin/sm750-vt show
 ```
 
 Deliberately not granted: `/bin/sh`, `/bin/bash`, `tee`, `cp`, `mv`, `chmod`,
@@ -271,7 +278,11 @@ with a broken allowlist and no tested recovery path.
 
 ## 3. Helpers in /usr/local/sbin
 
-All three are `0755 root:root`, `#!/bin/sh`, `set -eu`, ASCII only. They exist
+Twelve helpers are installed, every one `0755 root:root`, `#!/bin/sh`, `set -eu`,
+ASCII only: `sm750-console`, `sm750-crc`, `sm750-crc-cycle`, `sm750-hang`,
+`sm750-headless`, `sm750-lspci`, `sm750-pkg`, `sm750-pm-probe`, `sm750-pmtest`,
+`sm750-regs`, `sm750-vbios-dump` and `sm750-vt`. All twelve are granted in the
+allowlist of section 1 (`sm750-vt` with `off`, `on` and `show`). They exist
 because a sudoers command line must not contain a colon (section 1).
 
 Install command shape, for any of them:
@@ -680,11 +691,13 @@ Historical: the commands below name the 0.6.2-2 and earlier artifacts. The build
 now in the tree is 0.6.2-3, whose path is not allowlisted yet; section 3.7 has
 the current recovery.
 
-The allowlist names four `dnf install` paths, one per released package
-(0.6.0, 0.6.1, 0.6.2-1), plus `/usr/local/sbin/sm750-console`. The 0.6.2-2
-build needs **one more line** - the 0.6.2-1 path is granted, the 0.6.2-2 path
-is not yet. Everything else the install does (`dkms build`, `dkms install` for
-0.6.2, `depmod`) runs inside the scriptlets and needs no separate grant.
+The 2026-11-27 capture of the allowlist
+(`docs/evidence/environment/01-sudo-allowlist.txt`) contains no `dnf install`
+line: the per-version entries were replaced by the single
+`/usr/local/sbin/sm750-pkg` grant (section 3.8), which picks the version and the
+file names from the local build tree. The 0.6.2-2 build therefore needs no new
+sudoers line, and the commands below are kept as history. Everything the
+install does (`dkms build`, `dkms install` for 0.6.2, `depmod`) runs inside the
 
 Install (host owner, root), in this order, so the resident module is unloaded
 only after the new tree is on disk:
@@ -822,11 +835,11 @@ Nothing in this section has been run on this host.
 
 Source `tools/sm750-pkg.sh`: 14584 bytes, 487 lines, sha256
 `ca6e7b0a66fae43b6b332135ea8da62f61a917385accacc4d48f114e9149cf16`; self-test
-`tests/check-sm750-pkg.sh`. It replaces the
-per-version `dnf install` allowlist entries (section 1 names
-`.../sm750hdmifb-0.6.0-...` and `.../sm750hdmifb-0.6.2-...`): one allowlisted
-command, four subcommands, and the version and the file names are chosen by the
-helper from the local build tree, never by the caller.
+`tests/check-sm750-pkg.sh`. It replaced the per-version `dnf install` allowlist
+entries, which the 2026-11-27 capture
+(`docs/evidence/environment/01-sudo-allowlist.txt`) no longer contains: one
+allowlisted command, four subcommands, and the version and the file names are
+chosen by the helper from the local build tree, never by the caller.
 
 The installed copy is stale. `/usr/local/sbin/sm750-pkg` is `0755 root:root`,
 11873 bytes, sha256
@@ -961,15 +974,15 @@ options kunit enable=1
 
 2. Boot-time: add `kunit.enable=1` to the kernel command line (GRUB).
 
-Two residual grants make the sweep fully self-cleaning; neither is in the
-allowlist yet:
+One residual grant makes the sweep fully self-cleaning, and it has been in the
+allowlist since 2026-11-22 and is in the 2026-11-27 capture:
 
 ```text
 /usr/bin/modprobe -r kunit
 ```
 
-and, if per-suite reverse lines are not enough after option 1 is installed,
-nothing else is needed. Note `/sys/module/kunit/parameters/*` exists only
+Nothing else is needed: per-suite reverse lines are not required once option 1
+is installed. Note `/sys/module/kunit/parameters/*` exists only
 while `kunit` is loaded, is mode 0600 root-only, and has no `enable` file on
 this kernel (the runtime knob is the module parameter, not a sysfs file), so
 writing sysfs is not an alternative.
@@ -985,25 +998,29 @@ suites ran for real, 0 failures, in 8.7 s wall clock
 KUNIT ENABLED"). The earlier SKIP for disabled KUnit recorded in that file
 is superseded by that census.
 
-### 3.11 `/usr/local/sbin/sm750-headless` (installed copy stale since 2026-11-26)
+### 3.11 `/usr/local/sbin/sm750-headless`
 
-Source `tools/sm750-headless.sh`: 12020 bytes, 336 lines, sha256
-`bc1d3a06fdf59bb25f9b0f572c2be6085731332109a4231a80e3d2076308922f` as measured
-2026-11-26; static
+Source `tools/sm750-headless.sh`: 28930 bytes, 745 lines, sha256
+`da71bc311d224f7d9bc8e8717d39956181c5444d417ce7f71de4df1d424ed799` as measured
+2026-11-27; static
 gate `tests/check-headless-helper.sh` (part of `make check` through
 `tests/check-drm-policy.sh`).
 
-**Installed copy must be refreshed.** The host still carries the previous
-9223-byte revision, which has no input isolation. Refresh it from the
-repository root with exactly:
+**Installed copy matches the source.** `/usr/local/sbin/sm750-headless` is
+`0755 root:root`, 28930 bytes, sha256 `da71bc31...` - the same bytes as
+`tools/sm750-headless.sh`, verified 2026-11-27. The 9223-byte revision the host
+carried from 2026-11-25T14:26Z to 2026-11-26 is history. To re-apply the same
+bytes after an edit of the source, from the repository root run exactly:
 
 ```sh
 sudo install -m 0755 -o root -g root tools/sm750-headless.sh /usr/local/sbin/sm750-headless
 ```
 
-The 12020-byte revision isolates input: both compositor arms run inside a
-private mount namespace with an empty `/dev/input` (`isolate()`,
-`tools/sm750-headless.sh:244-253`), so no compositor can open the owner's
+The current revision isolates input: both compositor arms run inside a
+private mount namespace with an empty `/dev/input` (the isolation string is
+printed at `tools/sm750-headless.sh:126`, the tmpfs is mounted at `:131` and by
+`isolate()` at `:599-607` with the mount at the call site `:601`), so no
+compositor can open the owner's
 keyboard or mouse. Defect A49 in `docs/DEFECTS.md` records the
 2026-11-26T06:32:48 incident that made this necessary.
 
@@ -1121,31 +1138,29 @@ Exit codes: 0 the run completed and every expectation held, 1 environment
 problem (not root, wrong driver, program missing), 2 usage, 3 the compositor
 started but an expectation failed, 4 nothing could take master.
 
-Installed state, measured 2026-11-25T13:49Z and unchanged on the host on
-2026-11-26:
+Installed state, measured 2026-11-27:
 
 ```text
--rwxr-xr-x 1 root root 9223 2026-11-25 17:26 /usr/local/sbin/sm750-headless
-sha256 137c665b7f60c17a95a6bdcd7948fb7064239eb62a6a108932e60315ce80913c
+-rwxr-xr-x 1 root root 28930 /usr/local/sbin/sm750-headless
+sha256 da71bc311d224f7d9bc8e8717d39956181c5444d417ce7f71de4df1d424ed799
 ```
 
-Source in the tree, measured 2026-11-26:
+Source in the tree, measured 2026-11-27:
 
 ```text
-12020 bytes, 336 lines
-sha256 bc1d3a06fdf59bb25f9b0f572c2be6085731332109a4231a80e3d2076308922f
+28930 bytes, 745 lines
+sha256 da71bc311d224f7d9bc8e8717d39956181c5444d417ce7f71de4df1d424ed799
 ```
 
-Status: **INSTALLED, STALE.** The allowlist line is present (`sudo -n -l` lists
-`(root) NOPASSWD: /usr/local/sbin/sm750-headless`), but the installed body is
-the previous revision and **has no input isolation**. Until it is refreshed,
-`/usr/local/sbin/sm750-headless weston` and `... cage` can still take the
-owner's keyboard and mouse - the A49 incident. The installed copy must be
-refreshed with
+Status: **INSTALLED, MATCHES THE SOURCE.** The allowlist line is present
+(`sudo -n -l` lists `(root) NOPASSWD: /usr/local/sbin/sm750-headless`) and the
+installed body is byte-identical to `tools/sm750-headless.sh`, so
+`/usr/local/sbin/sm750-headless weston` and `... cage` run the isolated code.
+After any edit of the source, re-apply it with
 `sudo install -m 0755 -o root -g root tools/sm750-headless.sh /usr/local/sbin/sm750-headless`
 from the repository root, after which `sha256sum /usr/local/sbin/sm750-headless`
-must print `bc1d3a06fdf59bb25f9b0f572c2be6085731332109a4231a80e3d2076308922f`
-and `stat -c %s` must print 12020. Re-run that pair after every edit of the
+must print `da71bc311d224f7d9bc8e8717d39956181c5444d417ce7f71de4df1d424ed799`
+and `stat -c %s` must print 28930. Re-run that pair after every edit of the
 source: the static gate validates the tree, and it cannot see
 `/usr/local/sbin`.
 
@@ -1169,22 +1184,25 @@ sha256sum /usr/local/sbin/sm750-headless
 stat -c '%s bytes, %n' /usr/local/sbin/sm750-headless
 ```
 
-Expected after the refresh: 12020 bytes, 336 lines,
-`bc1d3a06fdf59bb25f9b0f572c2be6085731332109a4231a80e3d2076308922f`. The
-9223-byte / `137c665b...` value the host carried from 2026-11-25T14:26Z is the
-superseded revision and must not be the result. The static gate
+Expected after a refresh: 28930 bytes,
+`da71bc311d224f7d9bc8e8717d39956181c5444d417ce7f71de4df1d424ed799`. The
+9223-byte / `137c665b...` value the host carried from 2026-11-25T14:26Z and the
+12020-byte / `bc1d3a06...` revision of 2026-11-26 are superseded and must not be
+the result. The static gate
 `tests/check-headless-helper.sh` validates the source in the tree; it cannot see
 the installed copy, so the hash pair is the only evidence that the refresh
 happened. This section is the place that records the expected value; update it
 when the source changes.
 
-After the refresh, the first isolated run writes `00-plan.txt` naming
+The first isolated run writes `00-plan.txt` naming
 `/usr/bin/unshare --mount --propagation private` and the tmpfs mount over
 `/dev/input`, and prints
 `sm750-headless: input devices are isolated in a private mount namespace (empty /dev/input)`.
-That run has **not** been executed yet: it is the owner's action, and the
-evidence file records it as NOT YET OBSERVED
-(`docs/evidence/runtime/40-headless-input-isolation.txt`).
+That run has still not been recorded as executed: the evidence file records it
+as NOT YET OBSERVED
+(`docs/evidence/runtime/40-headless-input-isolation.txt`), captured while the
+host carried the 9223-byte revision. The code path is in the installed copy; the
+observation is not.
 
 Every mode has been exercised through the installed helper. The runs of
 2026-11-25T13:41Z used the then-installed 8759-byte revision: probe PASS,
@@ -2031,7 +2049,7 @@ sudo udevadm control --reload-rules
 
 Scope: read/write on one device node for one user. No group membership change,
 no node mode change, no `tty1..tty63` change, no sudoers entry, no shell. The
-19-entry allowlist in section 1 is unchanged by this action.
+78-line allowlist in section 1 is unchanged by this action.
 
 What it unblocks: the five IGT binaries that aborted at
 `kmstest_set_vt_graphics_mode` with `errno 13` while the node was root-only -
