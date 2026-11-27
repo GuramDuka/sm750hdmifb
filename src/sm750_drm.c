@@ -34,12 +34,14 @@
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_blend.h>
+#include <drm/drm_client.h>
 #include <drm/drm_connector.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_damage_helper.h>
 #include <drm/drm_debugfs_crc.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
+#include <drm/drm_fb_helper.h>
 #include <drm/drm_fbdev_shmem.h>
 #include <drm/drm_fbdev_ttm.h>
 #include <drm/drm_fourcc.h>
@@ -307,7 +309,7 @@ MODULE_PARM_DESC(crc_window_bytes,
 static bool a65_trace;
 module_param(a65_trace, bool, 0644);
 MODULE_PARM_DESC(a65_trace,
-	"Print A65: <step> marks while the driver tears down (defect A65)");
+	"Print A65: <step> marks while the driver tears down (defect A65, 19 marks)");
 module_param(test_pattern, charp, 0644);
 module_param(test_pattern_period_ms, uint, 0644);
 module_param(test_pattern_anim_ms, uint, 0644);
@@ -317,6 +319,14 @@ MODULE_PARM_DESC(test_pattern_period_ms,
 	"Milliseconds between test-card palette rotations, 0 keeps it static (default 5000, clamped to 500-600000)");
 MODULE_PARM_DESC(test_pattern_anim_ms,
 	"Milliseconds between test-card animation ticks, 0 disables it (default 40, clamped to 10-1000)");
+
+/* Defect A65: a hot remove wedges in Unloading with fbcon bound and no
+ * stack exists.  The marks record which teardown step was executing. */
+static void a65_mark(const char *what)
+{
+	if (a65_trace)
+		pr_err("A65: %s\n", what);
+}
 
 /*
  * Stages of sm750_program_mode(), in call order. mode_stage holds the last
@@ -397,6 +407,23 @@ struct sm750_drm_device {
 	struct work_struct shadow_work;
 	struct hrtimer vblank_timer;
 	spinlock_t vblank_lock;
+	/*
+	 * Candidate C1: register programming deferred away from the commit
+	 * tail that fbcon drives under console_sem.  The spinlock guards the
+	 * request slot; the work item takes mode_lock from system_wq, which is
+	 * never console_sem context.
+	 */
+	struct work_struct mode_defer_work;
+	spinlock_t mode_defer_lock;
+	struct drm_display_mode mode_defer_mode;
+	u32 mode_defer_gen;
+	u32 mode_defer_pitch;
+	u32 mode_defer_offset;
+	u8 mode_defer_cpp;
+	bool mode_defer_disable;
+	bool mode_defer_valid;
+	/* Bumped by every commit tail so a stale deferral can be dropped. */
+	atomic_t mode_gen;
 	struct drm_vblank_work crc_work;
 	void __iomem *regs;
 	void __iomem *vram;
@@ -2690,6 +2717,8 @@ static void sm750_async_shadow_work(struct work_struct *work)
 	unsigned int i;
 	bool staged;
 
+	/* Candidate C2b: proves the worker ran, before any lock is taken. */
+	a65_mark("shadow worker enter");
 	for (;;) {
 		mutex_lock(&sdev->async_lock);
 		if (sdev->async_stopping || !sdev->async_source_valid ||
@@ -4085,6 +4114,100 @@ static bool sm750_test_pattern_should_paint(struct sm750_drm_device *sdev,
 	return !READ_ONCE(sdev->drm.master) && blank;
 }
 
+/*
+ * Candidate C1 (docs/evidence/a65/01-teardown-analysis.txt): the commit tail
+ * that fbcon drives runs under console_sem, so it must never wait for
+ * mode_lock: a task holding mode_lock that then needs console_sem would
+ * deadlock against it.  Take the lock without waiting and, when it is busy,
+ * hand the register programming to a work item that runs on system_wq, which
+ * is never console_sem context.
+ *
+ * Residual races, accepted and recorded rather than hidden:
+ *  - on contention the atomic commit completes before the registers catch
+ *    up, so the panel follows by one work item (a delay, not a hang);
+ *  - a request that arrives while the work item is finishing its final check
+ *    is applied by the next commit instead of by this one;
+ *  - a deferred panel-off can lag its commit by one work item.
+ * No driver state is lost either way: only the register write is postponed,
+ * and the bookkeeping the commit paths do stays synchronous.
+ */
+static void sm750_mode_defer_worker(struct work_struct *work)
+{
+	struct sm750_drm_device *sdev = container_of(work,
+			struct sm750_drm_device, mode_defer_work);
+	struct drm_display_mode mode;
+	unsigned long flags;
+	u32 gen;
+	u32 pitch;
+	u32 offset;
+	u8 cpp;
+	bool disable;
+	int ret;
+
+	for (;;) {
+		spin_lock_irqsave(&sdev->mode_defer_lock, flags);
+		if (!sdev->mode_defer_valid) {
+			spin_unlock_irqrestore(&sdev->mode_defer_lock, flags);
+			return;
+		}
+		mode = sdev->mode_defer_mode;
+		gen = sdev->mode_defer_gen;
+		pitch = sdev->mode_defer_pitch;
+		offset = sdev->mode_defer_offset;
+		cpp = sdev->mode_defer_cpp;
+		disable = sdev->mode_defer_disable;
+		sdev->mode_defer_valid = false;
+		spin_unlock_irqrestore(&sdev->mode_defer_lock, flags);
+
+		mutex_lock(&sdev->mode_lock);
+		/*
+		 * A commit that ran while this request waited programmed the
+		 * registers itself; applying the older request now would undo
+		 * it.
+		 */
+		if (gen != atomic_read(&sdev->mode_gen)) {
+			mutex_unlock(&sdev->mode_lock);
+			continue;
+		}
+		if (disable) {
+			sm750_sii902x_disable_link();
+			ret = ddk750_set_display_control(SM750_DRM_CONTROLLER,
+							 false);
+			if (ret)
+				drm_warn(&sdev->drm,
+					 "panel did not acknowledge display-off: %d (PANEL_DISPLAY_CTRL=%#08x)\n",
+					 ret, peek32(PANEL_DISPLAY_CTRL));
+		} else {
+			ret = sm750_program_mode(sdev, &mode, pitch, offset,
+						 cpp);
+			if (ret)
+				drm_err(&sdev->drm,
+					"deferred mode program failed: %d\n",
+					ret);
+		}
+		mutex_unlock(&sdev->mode_lock);
+	}
+}
+
+static void sm750_mode_defer(struct sm750_drm_device *sdev, bool disable,
+			     const struct drm_display_mode *mode,
+			     u32 pitch, u32 offset, u8 cpp)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&sdev->mode_defer_lock, flags);
+	if (mode)
+		sdev->mode_defer_mode = *mode;
+	sdev->mode_defer_gen = atomic_read(&sdev->mode_gen);
+	sdev->mode_defer_pitch = pitch;
+	sdev->mode_defer_offset = offset;
+	sdev->mode_defer_cpp = cpp;
+	sdev->mode_defer_disable = disable;
+	sdev->mode_defer_valid = true;
+	queue_work(system_wq, &sdev->mode_defer_work);
+	spin_unlock_irqrestore(&sdev->mode_defer_lock, flags);
+}
+
 static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 			      struct drm_crtc_state *crtc_state,
 			      struct drm_plane_state *plane_state)
@@ -4179,10 +4302,21 @@ static void sm750_pipe_enable(struct drm_simple_display_pipe *pipe,
 		sdev->scanout_pitch = pitch;
 		sdev->scanout_frame_size = frame_size;
 	}
-	mutex_lock(&sdev->mode_lock);
+	/* Candidate C1: fbcon reaches this tail under console_sem, so it must
+	 * not wait for mode_lock (see sm750_mode_defer_worker()).  The commit
+	 * itself completes either way; only the register write moves.
+	 */
+	atomic_inc(&sdev->mode_gen);
+	if (!mutex_trylock(&sdev->mode_lock)) {
+		sm750_mode_defer(sdev, false, &crtc_state->adjusted_mode,
+				 pitch, offset, cpp);
+		ret = 0;
+		goto programmed;
+	}
 	ret = sm750_program_mode(sdev, &crtc_state->adjusted_mode,
 				 pitch, offset, cpp);
 	mutex_unlock(&sdev->mode_lock);
+programmed:
 	if (!ret) {
 		bool blank = false;
 		unsigned int period;
@@ -4366,7 +4500,15 @@ static void sm750_pipe_disable(struct drm_simple_display_pipe *pipe)
 		sm750_cursor_disable_locked(sdev);
 		mutex_unlock(&sdev->cursor_lock);
 	}
-	mutex_lock(&sdev->mode_lock);
+	/*
+	 * Candidate C1: fbcon reaches this tail under console_sem, so it must
+	 * not wait for mode_lock (see sm750_mode_defer_worker()).  The commit
+	 * itself completes either way; only the register write moves, so the
+	 * panel-off may follow by one work item.
+	 */
+	atomic_inc(&sdev->mode_gen);
+	if (!mutex_trylock(&sdev->mode_lock))
+		goto panel_off;
 	sm750_sii902x_disable_link();
 	/*
 	 * A timed-out panel-off used to be invisible: the enable path that
@@ -4379,6 +4521,11 @@ static void sm750_pipe_disable(struct drm_simple_display_pipe *pipe)
 			 "panel did not acknowledge display-off: %d (PANEL_DISPLAY_CTRL=%#08x)\n",
 			 ret, peek32(PANEL_DISPLAY_CTRL));
 	mutex_unlock(&sdev->mode_lock);
+	goto panel_done;
+
+panel_off:
+	sm750_mode_defer(sdev, true, NULL, 0, 0, 0);
+panel_done:
 	sdev->softscale_active = false;
 	sdev->softscale_source_width = 0;
 	sdev->shadow_source_width = 0;
@@ -4841,18 +4988,17 @@ static void sm750_free_shadow_buffer(void *data)
 	kvfree(data);
 }
 
-/* Defect A65: a hot remove wedges in Unloading with fbcon bound and no
- * stack exists.  The marks record which teardown step was executing. */
-static void a65_mark(const char *what)
-{
-	if (a65_trace)
-		pr_err("A65: %s\n", what);
-}
-
+/*
+ * Quiesce and destroy the shadow queue.  sm750_pci_remove() calls this, so
+ * the worker is gone before the console framebuffer it reads is freed; the
+ * probe failure path calls it too, and the NULL check keeps both safe.
+ */
 static void sm750_destroy_shadow_workqueue(void *data)
 {
 	struct sm750_drm_device *sdev = data;
 
+	if (!sdev->shadow_workqueue)
+		return;
 	a65_mark("before async_quiesce");
 	sm750_async_quiesce(sdev);
 	a65_mark("after async_quiesce");
@@ -5322,6 +5468,9 @@ static int sm750_pci_probe(struct pci_dev *pdev,
 	INIT_WORK(&sdev->shadow_work, sm750_async_shadow_work);
 	INIT_DELAYED_WORK(&sdev->test_pattern_work, sm750_test_pattern_work);
 	spin_lock_init(&sdev->vblank_lock);
+	INIT_WORK(&sdev->mode_defer_work, sm750_mode_defer_worker);
+	spin_lock_init(&sdev->mode_defer_lock);
+	atomic_set(&sdev->mode_gen, 0);
 	hrtimer_setup(&sdev->vblank_timer, sm750_vblank_timer_fn,
 		      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 
@@ -5424,14 +5573,6 @@ static int sm750_pci_probe(struct pci_dev *pdev,
 					sdev->async_source);
 			if (ret)
 				return ret;
-			sdev->shadow_workqueue = alloc_ordered_workqueue(
-				"sm750-shadow", WQ_HIGHPRI | WQ_MEM_RECLAIM);
-			if (!sdev->shadow_workqueue)
-				return -ENOMEM;
-			ret = devm_add_action_or_reset(&pdev->dev,
-					sm750_destroy_shadow_workqueue, sdev);
-			if (ret)
-				return ret;
 		}
 		if (sdev->vram_size < SM750_DRM_MIN_VRAM)
 			return dev_err_probe(&pdev->dev, -ENOSPC,
@@ -5521,9 +5662,21 @@ static int sm750_pci_probe(struct pci_dev *pdev,
 	ret = devm_device_add_group(&pdev->dev, &sm750_attr_group);
 	if (ret)
 		return ret;
+	/*
+	 * Created here, after the last failure path that simply returns, so
+	 * sm750_pci_remove() owns the teardown (defect A65, contract step 3):
+	 * the devres action that used to destroy it ran after .remove
+	 * returned, when the buffer its worker reads was already freed.
+	 */
+	if (sdev->async_source) {
+		sdev->shadow_workqueue = alloc_ordered_workqueue(
+			"sm750-shadow", WQ_HIGHPRI | WQ_MEM_RECLAIM);
+		if (!sdev->shadow_workqueue)
+			return -ENOMEM;
+	}
 	ret = drm_dev_register(&sdev->drm, 0);
 	if (ret)
-		return ret;
+		goto err_shadow_wq;
 	drm_kms_helper_poll_init(&sdev->drm);
 	drm_client_setup(&sdev->drm, drm_format_info(DRM_FORMAT_XRGB8888));
 	drm_info(&sdev->drm,
@@ -5557,6 +5710,40 @@ static int sm750_pci_probe(struct pci_dev *pdev,
 			 "DMA1 interrupt-driven completion enabled on IRQ %u\n",
 			 sdev->pdev->irq);
 	return 0;
+
+err_shadow_wq:
+	sm750_destroy_shadow_workqueue(sdev);
+	return ret;
+}
+
+/*
+ * Detach the console from our framebuffer before drm_dev_unplug() runs
+ * (defect A65, contract step 5).  drm_client_dev_unregister() does the same
+ * work later, but it does it while holding clientlist_mutex, and
+ * unregister_framebuffer() takes console_lock inside it: a console_lock
+ * holder that then needs a driver lock waits forever.  Here the client is
+ * unlinked under clientlist_mutex and the console teardown runs outside it,
+ * with no driver mutex held and every producer already stopped.
+ */
+static void sm750_detach_vtconsole(struct sm750_drm_device *sdev)
+{
+	struct drm_device *dev = &sdev->drm;
+	struct drm_client_dev *client = NULL;
+
+	mutex_lock(&dev->clientlist_mutex);
+	if (dev->fb_helper) {
+		client = &dev->fb_helper->client;
+		list_del(&client->list);
+	}
+	mutex_unlock(&dev->clientlist_mutex);
+	if (!client)
+		return;
+	if (client->funcs && client->funcs->unregister)
+		client->funcs->unregister(client);
+	else {
+		drm_client_release(client);
+		kfree(client);
+	}
 }
 
 static void sm750_pci_remove(struct pci_dev *pdev)
@@ -5564,22 +5751,50 @@ static void sm750_pci_remove(struct pci_dev *pdev)
 	struct sm750_drm_device *sdev = pci_get_drvdata(pdev);
 
 	a65_mark("remove enter");
+	/* 1. Stop every producer before anything it reads is freed. */
 	a65_mark("before poll_fini");
 	drm_kms_helper_poll_fini(&sdev->drm);
 	a65_mark("after poll_fini");
-	a65_mark("before unplug");
-	drm_dev_unplug(&sdev->drm);
-	a65_mark("after unplug");
 	a65_mark("before test_pattern_cancel");
 	sm750_test_pattern_cancel(sdev);
 	a65_mark("after test_pattern_cancel");
-	a65_mark("before atomic_shutdown");
-	drm_atomic_helper_shutdown(&sdev->drm);
-	a65_mark("after atomic_shutdown");
 	a65_mark("before vblank_stop");
 	sm750_vblank_timer_stop(sdev, true);
 	a65_mark("after vblank_stop");
+	/* 2. Shut the pipeline down while its buffer is still allocated. */
+	a65_mark("before atomic_shutdown");
+	drm_atomic_helper_shutdown(&sdev->drm);
+	a65_mark("after atomic_shutdown");
+	/*
+	 * Candidate C1: the shutdown commit tails take mode_lock with
+	 * mutex_trylock(), so drain any register write they deferred before
+	 * the hardware is torn down.  disable_work_sync() also makes a later
+	 * queue_work() a no-op, and nothing commits after this point.
+	 */
+	disable_work_sync(&sdev->mode_defer_work);
+	/*
+	 * 3. Candidate C2b: quiesce and destroy the shadow queue here, while
+	 * the buffer its worker reads is still alive. The devres action that
+	 * used to do this ran after .remove returned, with that buffer gone.
+	 */
+	sm750_destroy_shadow_workqueue(sdev);
+	/* 4. Detach the vtconsole explicitly, with no driver mutex held. */
+	sm750_detach_vtconsole(sdev);
+	a65_mark("before unplug");
+	drm_dev_unplug(&sdev->drm);
+	a65_mark("after unplug");
+	/*
+	 * 5. No driver lock may be held once the device is unplugged: these
+	 * catch a teardown task that still owns one while waiting for
+	 * console_lock.
+	 */
+	WARN_ON(mutex_is_locked(&sdev->mode_lock));
+	WARN_ON(mutex_is_locked(&sdev->shadow_lock));
+	WARN_ON(mutex_is_locked(&sdev->cursor_lock));
+	/* 6. Power the panel down last, under the driver's own lock. */
+	a65_mark("before sii902x_shutdown");
 	mutex_lock(&sdev->mode_lock);
+	a65_mark("mode_lock acquired");
 	sm750_sii902x_shutdown();
 	mutex_unlock(&sdev->mode_lock);
 	a65_mark("after sii902x_shutdown");
