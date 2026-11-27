@@ -1,0 +1,357 @@
+A65 / T1 - where sm750_pci_remove() can block forever with fbcon bound
+======================================================================
+Plan: docs/plan/20261127-sm750-strict-production/plan.yaml, task T1 (wave 1)
+Author: agent (gem-debugger subagent)
+Date: 2026-11-27 UTC
+Nature: read-only source analysis. No build, no module load, no root action,
+        no card access, no VT/console/compositor operation was performed for
+        this document. Every statement is either a citation into this tree,
+        a citation into a captured core tree, or an explicitly marked
+        hypothesis.
+
+Sources
+-------
+Repo (current tree, version 0.6.10 + working copy):
+  src/sm750_drm.c          driver
+  src/sii902x.c            SiI902x bridge
+  src/ddk750_swi2c.c       bit-banged I2C
+  docs/evidence/runtime/47-hot-reload-hang.txt
+  docs/evidence/runtime/54-a65-trace-mitigated-reload.txt
+  docs/evidence/runtime/51-lastclose-open-count.txt
+  tools/sm750-vt.sh, tools/sm750-hang.sh
+Core (captured, NOT checksummed against the build tree):
+  /mega/tmp/sm750/refcnt/, provenance REPORT.txt "Date: 2026-11-26 (UTC),
+  kernel 7.3.4-100": drm_drv.c, drm_client.c, drm_fbdev_ttm.c,
+  drm_fb_helper.c, fbmem.c, fbcon.c, drm_client_setup.c
+  /mega/tmp/sm750/atomic_helper.c (same capture, 7.3.4-era)
+CAVEAT: the core citations are 7.3.4-era. The host builds 7.3.4 and 7.3.5.
+Line numbers in the captured tree are used as evidence of *structure*
+(which function takes which lock around which call), not as proof that the
+running kernel has the lock at that exact line.
+
+1. What the evidence already fixes
+----------------------------------
+F1  The unload never returns and the module is stuck in the loader's
+    point of no return: /proc/modules shows
+    "sm750hdmidrm 200704 -1 - Unloading 0xffffffffc0a3d000 (OE-)",
+    modprobe -r is in D state, refcnt -1
+    (docs/evidence/runtime/47-hot-reload-hang.txt). Therefore one thread is
+    blocked inside the device-release chain (pci_driver.remove, then the
+    devres actions it registered) with no timeout and no wakeup.
+
+F2  The same remove completes when the vtconsole is detached and the device
+    is unbound through sysfs before modprobe -r: all sixteen A65 marks appear
+    in order in docs/evidence/runtime/54-a65-trace-mitigated-reload.txt, and
+    tools/sm750-vt.sh:1-60 documents exactly that order (bind 0, unbind via
+    BDF, modprobe -r, modprobe, bind 1). The wedged state is therefore
+    order-dependent, and fbcon's participation is causal, not incidental.
+
+F3  Detaching the vtconsole alone does not release the reference
+    (docs/evidence/runtime/51-lastclose-open-count.txt: never zero
+    open_count; A51 is structural). The reference is the registered fb_info,
+    which only goes away inside remove. So the mitigation in F2 is not "get
+    rid of the console"; it is "run the console detachment outside the
+    modprobe -r call stack".
+
+F4  Every wait the driver itself performs is bounded: DMA drain
+    wait_for_completion_timeout (5 ms, src/sm750_drm.c:1630), hrtimer_cancel
+    (src/sm750_drm.c:578), SiI902x msleep(20) writes
+    (src/sii902x.c:598-613) and at most nine bus-recovery clocks
+    (src/ddk750_swi2c.c:574-594), test-pattern and shadow cancellation are
+    work/completion waits. Conclusion F4 forces: the unbounded wait in A65 is
+    one of exactly three primitives -- console_sem, a workqueue flush
+    (cancel_work_sync/destroy_workqueue), or a mutex held by a task that
+    never returns. All three are represented below.
+
+H-0 (hypothesis) docs/evidence/runtime/47-hot-reload-hang.txt ends with
+    "Console: switching to colour VGA+ 80x25". That string is printed by
+    do_unbind_con_driver inside the console_lock window opened at
+    fbcon.c:2813 (fbcon_fb_unbind), which remove reaches through
+    unregister_framebuffer. But the same string is also printed when the
+    vtconsole is detached by writing bind=0, and the helper order in F2 does
+    that first. The capture does not record which task emitted it, so it is
+    weak support that remove reached drm_client_dev_unregister, not proof.
+
+2. The three candidates
+-----------------------
+Ranking rationale: C1 is the only candidate whose blocking primitive is
+unbounded *by construction and by design* and which is reached
+unconditionally by every unload that has an fbdev client; C2 is equally
+unbounded but needs a second stuck task; C3 needs a third stuck task and
+its non-lock work is provably bounded (F4).
+
+--------------------------------------------------------------------------
+C1 (rank 1) -- console_sem, taken inside drm_dev_unplug()
+--------------------------------------------------------------------------
+Site inside remove: src/sm750_drm.c:5571 (drm_dev_unplug).
+Core chain:
+  drm_drv.c drm_dev_unplug -> drm_dev_unregister -> drm_client_dev_unregister
+  drm_client.c:194  mutex_lock(&dev->clientlist_mutex)
+  drm_client.c:198  client->funcs->unregister(client)
+  drm_fbdev_ttm.c:243-252 drm_fbdev_ttm_client_unregister
+  drm_fbdev_ttm.c:248  drm_fb_helper_unregister_info(fb_helper)
+  drm_fb_helper.c:563-568 -> unregister_framebuffer(fb_helper->info)
+  fbmem.c:629-635 unregister_framebuffer -> fbmem.c:564-588
+                  do_unregister_framebuffer
+  fbmem.c:551-562 unlink_framebuffer -> fbmem.c:561 unbind_console(fb_info)
+  fbcon.c:2813      console_lock()      [fbcon_fb_unbind, :2807-2854]
+  fbmem.c:585       fbcon_fb_unregistered -> fbcon.c:2861 console_lock()
+  drm_client.c:204  mutex_unlock(&dev->clientlist_mutex)
+
+Blocking primitive: console_sem, acquired by console_lock(), which is an
+uninterruptible, untimed down(). There is no timeout parameter and no error
+return: a waiter is woken only by console_unlock() from the current holder.
+This is the only primitive in the entire teardown that cannot be bounded from
+the caller side.
+
+Why it can stay held forever: a console_lock holder in fbcon (blank, VT
+repaint, cursor blink) calls into the driver's pipe callbacks
+sm750_pipe_enable (src/sm750_drm.c:4088, mode_lock at :4182) and
+sm750_pipe_disable (src/sm750_drm.c:4354, mode_lock at :4369). Those mutexes
+are unbounded. If that holder is itself blocked on one of them -- and some
+holder of that mutex is blocked on something that only progresses after
+remove -- the console_lock is never released and remove waits forever. The
+cycle is therefore not provable from the captured sources (the prior RCA in
+/mega/tmp/sm750/a65-rca.md reaches the same conclusion); what *is* provable
+is that C1 is the only wait that is unconditionally unbounded and
+unconditionally present.
+
+Secondary damage: clientlist_mutex (drm_client.c:194) is held across the
+whole console_sem wait, so every other DRM client registration/unregistration
+on this device blocks behind it too. That is why the wedge is not a single
+stuck task: it also freezes client teardown for anything else.
+
+Distinguishing observation (single, decisive): a stack of the D-state
+modprobe -r thread showing down_console_sem / console_lock with
+unregister_framebuffer as its immediate caller, captured together with the
+stacks of all other D-state tasks. Two outcomes are distinct:
+  C1a  a second task is inside a console_lock window and blocked on a driver
+       mutex -> the holder is identified, the cycle is real, and the driver
+       ordering (section 4) is the cause;
+  C1b  no task anywhere in console code exists -> the console_sem count lost
+       its unlock, i.e. a core console bug, and no driver change can prevent
+       it (only the ordering that avoids re-entering console code during
+       teardown can lower the exposure).
+ /proc/<pid>/stack requires root; the host kernels have
+ "# CONFIG_DETECT_HUNG_TASK is not set", so no stack is ever produced
+ automatically.
+
+Mark a wedged run prints last: "A65: before unplug" (src/sm750_drm.c:5570);
+"A65: after unplug" (:5572) is absent. Note this same last mark is also
+produced by C2a, which is why the mark alone cannot separate them.
+
+Instrumentation: the bracket (5570/5572) exists in 0.6.10. A finer mark is
+impossible -- the blocking point is core code called from core code, not a
+driver line. What is missing is the identity of the holder, which is a
+capture problem, not a mark problem: tools/sm750-hang.sh already reads
+/proc/<pid>/stack for D-state tasks and /proc/modules, and is allowlisted as
+/usr/local/sbin/sm750-hang, so C1a vs C1b is decidable from one helper run
+during a wedge. 0.6.10 therefore has the necessary instrumentation for C1 at
+the bracket level, and the decisive capture already exists as a helper.
+
+--------------------------------------------------------------------------
+C2 (rank 2) -- unbounded workqueue flush with no completion
+--------------------------------------------------------------------------
+Two distinct sites, both inside the teardown chain of this task's scope.
+
+C2a, inside remove via unplug (fbdev client's own work):
+  src/sm750_drm.c:5571 drm_dev_unplug
+  -> drm_fbdev_ttm.c:40-56 drm_fbdev_ttm_fb_destroy
+  -> drm_fbdev_ttm.c:50  drm_fb_helper_fini
+  -> drm_fb_helper.c:586 cancel_work_sync(&fb_helper->resume_work)
+  -> drm_fb_helper.c:587 cancel_work_sync(&fb_helper->damage_work)
+  (damage worker: drm_fb_helper.c:395-400 -> drm_fb_helper_fb_dirty)
+
+C2b, devres phase after remove returns:
+  src/sm750_drm.c:5431-5432 devm_add_action_or_reset(sm750_destroy_shadow_workqueue)
+  -> src/sm750_drm.c:4852-4862
+  -> :4857 sm750_async_quiesce
+  -> :2777 cancel_work_sync(&sdev->shadow_work)
+  -> :4859 destroy_workqueue(sdev->shadow_workqueue)
+
+Blocking primitive: the work item's completion (flush_work waits for
+work->done) and, for destroy_workqueue, for every worker to exit. Both are
+untimed. A worker that is blocked on a mutex never completes its work, so
+both calls wait forever; cancel_work_sync in a loop cannot time out.
+
+Why the worker can be stuck: sm750_async_shadow_work (src/sm750_drm.c:2684-2723)
+takes async_lock (:2694) and shadow_lock (:2706) and then calls
+sm750_present_staged_frame (:2707-2720), which takes mode_lock
+(:2503-2516). All three are plain mutexes. The declared nesting order is
+shadow_lock before mode_lock (src/sm750_drm.c:380-385), so the worker is the
+legitimate lower end of a chain; it stalls as soon as any mode_lock holder
+stalls.
+
+Distinguishing observation: a stack containing __flush_work /
+cancel_work_sync / flush_workqueue, plus a kworker (not the remove thread)
+in sm750_async_shadow_work or in __mutex_lock. This is what separates C2 from
+C1 and from C3: the blocked *caller* is in workqueue code, and the second
+stuck task is a kworker.
+
+Mark a wedged run prints last:
+  C2a: "A65: before unplug" (:5570) -- same mark as C1;
+  C2b: "A65: before async_quiesce" (:4856) if cancel_work_sync hangs, or
+       "A65: after async_quiesce" (:4858) if destroy_workqueue at :4859
+       hangs (no "after destroy_workqueue" at :4860).
+
+Instrumentation: brackets exist in 0.6.10 for C2b (:4856/:4858/:4860) and
+for C2a only at whole-unplug granularity (:5570/:5572). Missing: any mark
+inside the worker or at fb_helper fini, and any per-worker state. A single
+atomic "worker entered/exited" pair, or a printk at
+sm750_async_shadow_work entry gated by a65_trace, would make C2b provable
+without root; 0.6.10 has neither. Note that C2b only runs after .remove
+returns (:5431), so a wedge there proves remove itself completed -- a fact
+that alone excludes C1 and C3.
+
+--------------------------------------------------------------------------
+C3 (rank 3) -- sdev->mode_lock held at :5582, around sii902x shutdown
+--------------------------------------------------------------------------
+Site inside remove: src/sm750_drm.c:5582 mutex_lock(&sdev->mode_lock);
+:5583 sm750_sii902x_shutdown(); :5584 mutex_unlock(&sdev->mode_lock).
+
+Blocking primitive: sdev->mode_lock, a plain mutex with no timeout. Known
+holders: :4010 (test pattern work), :4182 (sm750_pipe_enable), :4369
+(sm750_pipe_disable), :2510 (sm750_present_staged_frame, reached from the
+shadow worker at :2707-2720), :5509, :5612, :5631. A permanent block here
+requires one of those holders to be permanently stuck; the two plausible
+ones are :4182/:4369 when entered from fbcon under console_lock (then C3 is
+downstream of C1, not an independent cause) and :2510 via the shadow worker
+(then C3 is downstream of C2).
+
+The non-lock part of this region is bounded and therefore exonerated:
+sm750_sii902x_shutdown (src/sii902x.c:598-613) only calls
+sii902x_disable_link (writes with msleep(20)) and, for the bit-banged bus,
+sm750_sw_i2c_recover_bus (src/ddk750_swi2c.c:574-594), which clocks at most
+nine times and returns -EBUSY. There is no infinite loop.
+
+Distinguishing observation: __mutex_lock in the remove thread's stack with
+sdev->mode_lock as the mutex, and the owner's task visible in the same
+capture. Because 0.6.10 has no mark between :5581 and :5585, the *last mark*
+cannot by itself distinguish "blocked at :5582" from "inside :5583".
+
+Mark a wedged run prints last: "A65: after vblank_stop" (:5581);
+"after sii902x_shutdown" (:5585) is absent.
+
+Instrumentation: 0.6.10 does NOT have what is needed. Two marks are missing:
+"before sii902x_shutdown" after :5581, and "mode_lock acquired" after :5582.
+They are the cheapest possible addition and make this candidate decidable
+from dmesg alone, with no root and no stack.
+
+3. Reading a wedge from the last mark
+-------------------------------------
+last mark                        candidates        excluded
+"A65: before unplug"             C1, C2a           C3 (would have reached 5581)
+"A65: before test_pattern_cancel" core test-pattern flush, not in scope here
+"A65: after vblank_stop"         C3                C1, C2 (both before 5579)
+"A65: before async_quiesce"      C2b               everything in remove: remove
+                                                   already returned
+"A65: after async_quiesce"       C2b (destroy_wq)  as above
+"A65: remove exit" but no
+ "before async_quiesce"          devres phase not entered -- hypothesis: a
+                                 non-driver devres consumer or driver-core
+                                 step between remove and the action; no
+                                 file:line supports it, mark as hypothesis
+The mark sequence is therefore sufficient to place the wedge in one of the
+three regions; only the sub-case (C1a vs C1b, C2a vs C2b, :5582 vs :5583)
+needs the additions listed above.
+
+4. The ordering contract a safe unload must satisfy
+--------------------------------------------------
+K1  No producer may run after the buffer it reads is freed. Producers:
+    sm750_async_shadow_work reading the fbdev BO pixels through
+    shadow->data[0] (producer sm750_async_queue_damage,
+    src/sm750_drm.c:2725-2766, queue_work :2764); the test pattern worker
+    (:4000-4059); the vblank hrtimer (:566-579). The fbdev BO is freed in
+    drm_fbdev_ttm_fb_destroy (drm_fbdev_ttm.c:40-56), reached from remove
+    through :5571.
+
+K2  The vtconsole must be detached from our fb_info, and console_sem must be
+    released, before that fb_info is freed, and no DRM mutex may be held by
+    the task that performs the detach. The detach itself is
+    unregister_framebuffer -> unbind_console -> fbcon_fb_unbind
+    (fbmem.c:551-562, fbcon.c:2813) and cannot be avoided; what can be
+    avoided is doing it while holding locks whose owners need the console.
+
+K3  Everything that can touch the hardware must be cancelled before the
+    hardware is torn down and before drm_dev_unplug, so no worker can be
+    mid-register-access when the device is unbound.
+
+K4  Console detach must be the last console-side operation of the unload and
+    must not be followed by any driver operation that waits for a task which
+    may hold console_lock. Concretely: all driver producers stop first, so no
+    console_lock holder can be waiting on mode_lock at :2510/:4182/:4369
+    while remove waits at :2813.
+
+Contract order that satisfies K1-K4 (also the order T4 should implement):
+  1. stop new users: drm_kms_helper_poll_fini (:5568) plus a "removing"
+     flag tested by the producer paths;
+  2. cancel test pattern (:5574, work :3994-3998) and stop the vblank timer
+     (:5580, :566-579)  -- producers that touch hardware are gone;
+  3. disable CRTC/plane while the framebuffer still exists:
+     drm_atomic_helper_shutdown (:5577) -- this is a commit, so it must
+     precede the fbdev BO free, not follow it;
+  4. quiesce and destroy the shadow workqueue (:2777, :4859) -- the last
+     producer that reads the BO is gone and the WQ cannot be re-armed;
+  5. detach the vtconsole from the fb_info (K2), with no driver mutex held;
+  6. drm_dev_unplug (:5571) -- client teardown, now without an fbcon bound
+     to our framebuffer;
+  7. power the bridge down under mode_lock (:5582-5584), last, because it
+     must not be undone by any later commit.
+
+Which contract the current code violates:
+  - K1/K3: the fbdev BO is freed at :5571 (inside unplug) while the shadow
+    workqueue is only quiesced in the devres action registered at
+    :5431-5432, i.e. after .remove returns (:4852-4862). Violation of the
+    producer-before-buffer rule, and the use-after-free window the prior RCA
+    records as H4.
+  - K3: the test pattern is cancelled at :5574 and the vblank timer stopped
+    at :5580, both AFTER drm_dev_unplug at :5571 -- two producers are still
+    live across unplug.
+  - K2/K4: the driver never detaches the vtconsole itself; it relies on the
+    implicit detach inside unregister_framebuffer, which runs with
+    clientlist_mutex held (drm_client.c:194) and is exactly the point where
+    an unbounded console_sem wait can occur. Whatever the precise cycle is,
+    the code has no step that establishes "no producer can be waiting on a
+    driver mutex under console_lock" before it enters console code.
+
+5. What T4 must implement (make the wedge impossible, not diagnosable)
+----------------------------------------------------------------------
+1. Reorder sm750_pci_remove to 1..7 above. Concretely: move
+   sm750_test_pattern_cancel and sm750_vblank_timer_stop(sdev, true) before
+   drm_dev_unplug; move drm_atomic_helper_shutdown before drm_dev_unplug;
+   move the shadow workqueue quiesce+destroy out of the devres action into
+   .remove (delete :5431-5432) so no work outlives the remove call.
+2. Detach the vtconsole explicitly and before unplug. If the kernel offers no
+   driver-visible path, the only acceptable substitute is to guarantee the
+   precondition of K4 (all producers stopped, so no console_lock holder can
+   be blocked on mode_lock) and to assert it: WARN_ON on
+   mutex_is_locked(&sdev->mode_lock) / shadow_lock / async_lock at the
+   unplug call site. A wedge then becomes a bug report with a culprit
+   instead of a silent hang.
+3. Add the two missing marks (:5581b "before sii902x_shutdown", :5582b
+   "mode_lock acquired") and one worker-entry mark gated by a65_trace, so
+   C1/C2a/C2b/:5582/:5583 are separable from dmesg alone.
+4. Remove the reverse edge in the driver where it can be removed: the commit
+   tail path (pipe_enable :4088, pipe_disable :4354) must not wait
+   indefinitely on mode_lock while it may be running under console_lock.
+   A bounded or non-blocking register path for the fbcon-driven
+   enable/disable is the only way to make C1 structurally impossible from
+   the driver side.
+5. Do not attempt to bound console_sem or the modeset locks acquired by
+   DRM_MODESET_LOCK_ALL_BEGIN inside drm_atomic_helper_shutdown
+   (/mega/tmp/sm750/atomic_helper.c:3688): neither has a timeout API. The
+   only lever is ordering plus (4).
+
+6. Hypotheses and gaps
+----------------------
+H-0  Origin of the 0.6.7 "Console: switching to colour VGA+ 80x25" line is
+     not recorded; may be the vtconsole-detach write rather than remove.
+H-C1 The console_sem cycle involving mode_lock at :4182/:4369 is not
+     provable from source; C1a vs C1b requires the stack capture.
+H-C2 The shadow worker is blocked on mode_lock at :2510 specifically (rather
+     than on shadow_lock) in A65; only a stack can say.
+H-DEV No file:line explains a wedge after "A65: remove exit" but before
+     "A65: before async_quiesce"; the devres ordering is the only known
+     asymmetry and is not evidence.
+GAP  No test or reproduction exists for any of the three; by contract this
+     task runs no experiment, and the plan has one reboot.

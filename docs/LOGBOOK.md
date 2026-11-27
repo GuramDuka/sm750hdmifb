@@ -4741,3 +4741,79 @@ action: install the helper, then run it only with him present.
 - Outcome: plan written and validated, not executed. The previous plan of record
   `docs/plan/20261117-sm750-driver-prod/plan.yaml` is retained unchanged as the
   history of stages 0-3; this entry names it rather than editing it.
+
+### 2026-11-27T23:12Z | orchestrator | the helper now says it is alive, and records who holds the input
+
+- Actor: orchestrator, gem-implementer session `ses_de16ae78effelsnVNaXy2Whpq4`.
+- Action: the owner asked for a progress line every 10 s and corrected the
+  incident report - his DVI screen never went blank, his mouse and keyboard
+  stopped working. Both are now in `tools/sm750-headless.sh`.
+- Changes: `wait_window()` replaced the single silent `sleep "$seconds"` and
+  prints `sm750-headless: t=<n>s mode=<mode> pid=<pid|none> <alive|gone>` once
+  per 10 s step, with the last step clipped so a window shorter than 10 s still
+  prints exactly one line; probe and diagnose exit before the wait and gain
+  neither. `input_scan()` walks `/proc/[0-9]*/fd`, resolves each link and keeps
+  only `/dev/input/event*`, printing `input-holder pid= uid= fd= node= comm=`
+  and counting (not failing on) fd tables it cannot list, so a zero-holder run
+  still writes a record. It is called once before the client launch into
+  `07-input-before.txt` and once in cleanup after `vt_restore` into
+  `08-input-after.txt`; `input_delta()` prints
+  `input: N holders before, M after`, the appeared and disappeared pids, and -
+  only when the sets differ - `WARNING: the owner's input devices may now
+  belong to another VT; press Ctrl-Alt-F<N> on the keyboard to get back`. The
+  `SM750_CONSOLE_ACK=1` refusal gained one sentence stating the consequence in
+  the owner's terms: while the run holds the console his mouse and keyboard
+  follow the VT and his screen keeps the last frame, so the machine looks alive
+  but stops responding. Observation only: nothing under `/dev/input` is opened,
+  grabbed or signalled.
+- Gate: `tests/check-headless-helper.sh` section `p`, four assertions and three
+  planted controls (`progress-line-removed`, `progress-burst`,
+  `input-delta-removed`), each rejected with its own `FAIL: p:` line.
+  `Headless helper checks passed (23 assertions, 26 planted controls)`.
+- Doc rows moved from nineteen/thirty-three to the measured counts:
+  `README.md` gate table, `docs/DELIVERABLES.md` gate row, and the S26 status
+  block in `docs/TEST-STRATEGY.md` (the pre-section-`p` counts kept as history).
+- Checks: `sh -n`, `bash -n`, `./tests/check-headless-helper.sh`,
+  `./tests/check-drm-policy.sh`, `./tests/check-scratch-policy.sh`,
+  `git diff --check` all exit 0; both files 0 non-ASCII bytes.
+- Outcome: helper and gate changed, not installed. The installed
+  `/usr/local/sbin/sm750-headless` is still the 2026-11-27T22:42Z build
+  (`d0f2c70d...`) and needs one owner `install` before the next run uses these.
+- Evidence: the gate output above; no host run was made, and none may be made
+  without the owner present (AGENTS.md first rule).
+
+### 2026-11-27T23:20Z | gem-debugger | T1: A65 teardown analysis written
+
+- Action: read-only source analysis of `sm750_pci_remove()` and
+  `sm750_destroy_shadow_workqueue()` to name at most three places where an
+  unload with the fbcon vtconsole bound can block forever, the ordering
+  contract a safe unload must satisfy, and what T4 must implement. No code
+  change, no build, no module load, no root action, no card access, no VT,
+  console, seat or compositor operation.
+- Files touched: `docs/evidence/a65/01-teardown-analysis.txt` (new, 0 non-ASCII
+  bytes), `docs/LOGBOOK.md`.
+- Result: C1 ranked 1, console_sem taken from `src/sm750_drm.c:5571`
+  (`drm_dev_unplug`) via `drm_client.c:194-204` -> `drm_fbdev_ttm.c:243-252` ->
+  `drm_fb_helper.c:563-568` -> `fbmem.c:629-635`/`:551-562` ->
+  `fbcon.c:2813` and `:2861`; it is the only teardown wait that is
+  uninterruptible and has no timeout API. C2 ranked 2, the untimed workqueue
+  flush at `drm_fb_helper.c:586-587` (inside `:5571`) or
+  `src/sm750_drm.c:2777`/`:4859` (devres, after remove returns, registered at
+  `:5431-5432`). C3 ranked 3, `sdev->mode_lock` at `src/sm750_drm.c:5582`;
+  its non-lock body is bounded (`src/sii902x.c:598-613`,
+  `src/ddk750_swi2c.c:574-594`), so only a stuck holder can wedge it, and
+  0.6.10 has no mark that separates `:5582` from `:5583`.
+- Contract: producers stop -> CRTC disable while the BO lives -> shadow
+  workqueue quiesce and destroy in `.remove` -> vtconsole detach -> unplug ->
+  bit-banged bridge power-down last. The current code violates it in three
+  ways, each cited in the evidence file: the fbdev BO is freed at `:5571`
+  before the workqueue is quiesced at `:4857`/`:4859`; the test pattern and
+  the vblank timer are stopped at `:5574` and `:5580`, after `:5571`; and the
+  vtconsole detach is implicit and happens under `clientlist_mutex`.
+- Evidence: `docs/evidence/a65/01-teardown-analysis.txt`; core citations are
+  from the 7.3.4-era capture at `/mega/tmp/sm750/refcnt/` (provenance
+  `REPORT.txt`), which is not checksummed against the build tree and is used
+  for structure only, as the file states.
+- Outcome: analysis complete, no experiment run, no reproduction exists yet;
+  the open A65 gap in `docs/DEFECTS.md` and the absent A65 row in
+  `docs/evidence/EVIDENCE-GAPS.md` are unchanged and reported, not edited.
