@@ -233,6 +233,10 @@ section 4 replaces it.
 Note the grant is on the path, not on the file content: replacing a helper's
 body needs no sudoers change.
 
+`/usr/local/sbin/sm750-soak` (section 3.18) is deliberately not granted: it is
+a soak helper that runs unprivileged as the invoking user, and its two optional
+privileged reads, `sm750-regs` and `sm750-crc`, are already on the list above.
+
 ## 2. Recovery recipe for a broken sudoers.d file
 
 A parse error in any file under `/etc/sudoers.d/` is fatal for EVERY user on the
@@ -290,6 +294,11 @@ Install command shape, for any of them:
 ```sh
 sudo install -m 0755 -o root -g root /mega/tmp/sm750/<name> /usr/local/sbin/<name>
 ```
+
+A thirteenth helper, `sm750-soak` (section 3.18), is documented here before it
+is installed. It is `#!/bin/sh`, `set -eu` and ASCII like the rest, but it runs
+as the invoking user and is deliberately not granted, because it needs no
+privilege: its two optional privileged reads are two of the twelve above.
 
 ### 3.1 `/usr/local/sbin/sm750-regs`
 
@@ -2314,3 +2323,100 @@ platform wake path and every other device on the bus are untouched. The real
 verification is the devices-level `pm_test` cycle, which now has a PASS on this
 host (section 3.14); `pm_probe` was the aid that reached the callbacks while
 that cycle was blocked.
+
+### 3.18 `/usr/local/sbin/sm750-soak` (long-window soak, no root needed)
+
+Every other helper here measures one moment. A driver that stops scanning out,
+leaks a reference or starts failing mode sets does so after an hour of use, and
+a verdict taken from one command cannot tell a transient from a failure. This
+helper takes a sample every `--interval` seconds for `--duration` seconds (24 h
+by default, 48 h the maximum it accepts), appends one tab-separated row per
+sample, and derives its verdict from the whole series: a count of out-of-range
+samples and a count of new fault lines, never a single reading.
+
+Install (repo-relative source; the installed copy is then byte-identical):
+
+```sh
+sudo install -m 0755 -o root -g root tools/sm750-soak.sh /usr/local/sbin/sm750-soak
+```
+
+No NOPASSWD line is needed for it, and it is deliberately not on the
+allowlist. The helper runs as the invoking user and reads only 0444 sysfs
+attributes, `/proc` and the kernel log. Its two optional privileged reads,
+`/usr/local/sbin/sm750-regs` and `/usr/local/sbin/sm750-crc`, are already
+granted in section 1, so `sudo -n` succeeds for them, and a refusal is recorded
+as `-` or as an `unavailable:` reason instead of failing the run. Granting root
+to a script that only appends rows under `/mega/tmp/sm750` would widen the
+allowlist for no gain, so the shape
+`coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-soak` is not installed.
+
+The helper is read-only, by construction and by gate. It never opens a DRM
+node, never grabs a console, never switches a VT, never unshares `/dev/input`,
+never starts a graphical server and never signals a process. It reads
+`active_mode`, `active_mode_refresh_hz`, `active_crtc`, `hpd`, `rxsense`,
+`link_state`, `vblank_count`, `vram_used_bytes`, `vram_total_bytes`,
+`mem_info_vram_total`, `crc_supported` and the eleven `b8_*` counters from
+`/sys/bus/pci/devices/0000:01:00.0`, `refcnt` and `version` from
+`/sys/module/sm750hdmidrm`, the resident module size from `/proc/modules`,
+`MemAvailable` from `/proc/meminfo`, `PANEL_CURRENT_LINE` through
+`/usr/local/sbin/sm750-regs`, and new kernel log lines from `dmesg` (or
+`journalctl -k -b` when `dmesg` is restricted).
+
+Run a soak for a day, then read it back:
+
+```sh
+/usr/local/sbin/sm750-soak run --duration 86400 --interval 60
+/usr/local/sbin/sm750-soak status /mega/tmp/sm750/soak/<UTC stamp>
+```
+
+`run` writes three files into a fresh directory (default
+`/mega/tmp/sm750/soak/<UTC stamp>`; an existing directory is refused, and so is
+any path outside `/mega/tmp/sm750`):
+
+- `samples.tsv` - the header row plus one row per sample, 29 tab-separated
+  columns: sample number, timestamp, epoch, present flag, the panel cell
+  (`mode:refresh_hz:crtc:hpd:rxsense:link_state`), VRAM used and total, the
+  meminfo total, refcount, module version, resident module size, MemAvailable,
+  `vblank_count`, `PANEL_CURRENT_LINE`, the crc cell, the eleven `b8_*`
+  counters, the recorded gate result, and the kernel-log line and fault deltas.
+- `verdict.json` - `verdict`, `complete`, the window, the sample counts, the
+  eleven criteria with their counts and the failed criterion names, for a
+  report to cite directly.
+- `summary.txt` - the same verdict as text, with each criterion and its counts.
+
+The eleven criteria: `card-present` (the PCI device directory existed in every
+sample), `panel-vblank` (`vblank_count` present and never decreasing, and
+`PANEL_CURRENT_LINE` moving - a stalled vblank window is recorded, not failed,
+because an idle pipe freezes `vblank_count` through DRM core's
+`vblankoffdelay`), `vram-range` (`vram_used_bytes` within `vram_total_bytes`,
+which must equal `mem_info_vram_total`), `module-refcount` (1..16 and never
+above the first sample plus one), `module-identity` (the module version never
+changed), `module-size` (the resident size never changed), `mem-floor`
+(`MemAvailable` never below `--mem-floor`, default 65536 kB, so an unattended
+run cannot starve the machine), `log-quiet` (zero new driver fault lines and
+zero new kernel-wide severe lines), `counters-monotonic` (no `b8_*` counter
+decreased), `gates-recorded` (no sample read `gates=FAIL`) and `coverage` (at
+least two samples and the requested window completed).
+
+Point `--gates` at the log of a gate sweep the owner refreshes while the soak
+runs, for example
+`./tests/check-drm-policy.sh >/mega/tmp/sm750/soak/last-gate-results.txt 2>&1`;
+that path is the default. A sample that finds no such file records
+`unavailable:no-gate-log`, which is a missing measurement, not a failure.
+
+A fault line that was already in the kernel buffer before the window began
+cannot fail a run: the helper counts deltas from a baseline taken before the
+first sample, so an old fault is not attributed to the soak. A run cut short by
+Ctrl-C, a terminal hangup or `TERM` writes a verdict with `complete: false`,
+fails `coverage` and exits with the signal's status; it is never PASS.
+
+Exit codes: 0 PASS, 1 FAIL, 2 usage, 3 environment problem before the first
+sample (no PCI device directory, no loaded module, an unusable or refused
+output directory).
+
+The gate `tests/check-soak-helper.sh` pins the properties above and runs the
+helper against a fixture root with no card and no root; it plants each
+forbidden construct and each out-of-range field to prove the checks are not
+vacuous. A 5-minute dry run on this host, with its sample count and an explicit
+statement of what such a short window cannot prove, is
+`docs/evidence/soak/01-dry-run.txt`.

@@ -1,0 +1,253 @@
+T6 soak helper - dry run on the real host, 5 minutes
+====================================================
+
+Date:      2026-11-27T21:34:08Z .. 2026-11-27T21:39:08Z
+Actor:     agent session (subagent, task T6 of plan 20261127-sm750-strict-production)
+Host:      Fedora 43, kernel 7.3.5-100.fc43.x86_64
+Device:    0000:01:00.0 (126f:0750), module sm750hdmidrm 0.6.10, refcnt 1
+Tree HEAD: 2231924 (branch main; helper, gate and wiring uncommitted)
+Helper:    tools/sm750-soak.sh
+Gate:      tests/check-soak-helper.sh
+
+Purpose
+-------
+Prove the helper runs end to end on this host, unprivileged, with no card node
+and no root, that it writes the three artifacts a report can cite, and that its
+verdict is PASS with exit 0 on a healthy host. Prove nothing about a 24 h
+window: this run is 300 s.
+
+Command and exit code
+---------------------
+  $ ./tools/sm750-soak.sh run --duration 300 --interval 60 \
+        --outdir /mega/tmp/sm750/soak/dry-20261127T213408Z
+  exit code: 0
+
+Not run as root, no sudo in the command line. The two optional privileged
+reads (sm750-regs, sm750-crc) each go through `sudo -n` on an allowlisted
+path, and both refused or returned probe output only; see "fields that are
+unavailable" below.
+
+Helper stdout, verbatim
+-----------------------
+sm750-soak: sampling every 60 s for 300 s into /mega/tmp/sm750/soak/dry-20261127T213408Z
+sm750-soak: read-only; no card node is opened and no VT is touched
+sm750-soak: sample 0 21:34:09Z panel=1024x768 vblank=7056 vram=3147008/16777216 refcnt=1 faults+=0
+sm750-soak: sample 1 21:35:08Z panel=1024x768 vblank=7056 vram=3147008/16777216 refcnt=1 faults+=0
+sm750-soak: sample 2 21:36:08Z panel=1024x768 vblank=7056 vram=3147008/16777216 refcnt=1 faults+=0
+sm750-soak: sample 3 21:37:09Z panel=1024x768 vblank=7056 vram=3147008/16777216 refcnt=1 faults+=0
+sm750-soak: sample 4 21:38:08Z panel=1024x768 vblank=7056 vram=3147008/16777216 refcnt=1 faults+=0
+sm750-soak: sample 5 21:39:08Z panel=1024x768 vblank=7056 vram=3147008/16777216 refcnt=1 faults+=0
+  sm750-soak summary
+  started:   2026-11-27T21:34:08Z
+  finished:  2026-11-27T21:39:08Z
+  window:    300 s requested, 6 sample(s) every 60 s
+  device:    0000:01:00.0 (module 0.6.10)
+  kernel log source: dmesg (ring-buffer wraps seen: 0)
+  verdict:   PASS
+  criteria (11):
+    ok   card-present: 6 of 6 samples found the PCI device directory
+    ok   panel-vblank: present in 6 of 6 samples, advanced 0 over the window, 0 decrease(s), longest stall 5 sample(s), PANEL_CURRENT_LINE took 6 distinct value(s) (an idle pipe freezes vblank_count by design)
+    ok   vram-range: 0 sample(s) out of range or inconsistent
+    ok   module-refcount: 0 sample(s) outside 1..16 or above first+1
+    ok   module-identity: 0 sample(s) carried a different module version
+    ok   module-size: 0 sample(s) carried a different resident module size
+    ok   mem-floor: 0 sample(s) below MemAvailable 65536 kB
+    ok   log-quiet: 0 new driver fault line(s) and kernel severe line(s)
+    ok   counters-monotonic: 0 decrease(s) across the b8_* counters
+    ok   gates-recorded: 0 sample(s) read gates=FAIL, 6 sample(s) had no gate log
+    ok   coverage: 6 sample(s) taken, window completed
+  samples file: samples.tsv
+  what this window proves: every field above stayed in range, the
+  panel kept a live scanout, and the kernel logged no new fault
+  line for this driver for the whole window.
+  what it does not prove: a window of 300 s is not a warranty. It does
+  not exercise a mode set, a hot reload, a suspend or heavy use, and
+  a short window cannot exclude a fault that needs hours to appear.
+  It also does not measure a crc when the crc column reads
+  unavailable, and it says nothing about a CRT-only output path.
+sm750-soak: wrote /mega/tmp/sm750/soak/dry-20261127T213408Z/samples.tsv /mega/tmp/sm750/soak/dry-20261127T213408Z/verdict.json
+sm750-soak: verdict: PASS
+
+Sample count
+------------
+6 samples, taken at 21:34:09, 21:35:08, 21:36:08, 21:37:09, 21:38:08 and
+21:39:08 UTC. The helper computed samples_expected as 6 for a 300 s window at
+a 60 s interval, and took 6, so the window completed rather than being cut
+short. Spacing is 59..61 s per sample: the helper samples, then sleeps to the
+next grid point, so a sample that itself takes a second does not drift the run.
+
+samples.tsv, verbatim (tabs shown as written; one header row + six rows)
+-----------------------------------------------------------------------
+#sample	ts	epoch	present	panel_cell	vram_used	vram_total	vram_total_meminfo	refcnt	version	module_size	mem_avail_kb	vblank	panel_line	crc	b8_mode_attempts	b8_mode_failures	b8_mode_retries	b8_stage_failures	b8_i2c_write_timeouts	b8_i2c_recoveries	b8_ready_expired	b8_ddc_grant_timeouts	b8_edid_reads	b8_edid_failures	b8_epoch_s	gates	dmesg_lines	dmesg_faults
+0	2026-11-27T21:34:09Z	1795815249	1	1024x768:75.00:0:1:1:connected	3147008	16777216	16777216	1	0.6.10	208896	257052620	7056	0x00000209	unavailable:probe-only-supported=1	-	-	-	-	-	-	-	-	-	-	-	unavailable:no-gate-log	0	0
+1	2026-11-27T21:35:08Z	1795815308	1	1024x768:75.00:0:1:1:connected	3147008	16777216	16777216	1	0.6.10	208896	256813348	7056	0x00000089	unavailable:probe-only-supported=1	-	-	-	-	-	-	-	-	-	-	-	unavailable:no-gate-log	0	0
+2	2026-11-27T21:36:08Z	1795815368	1	1024x768:75.00:0:1:1:connected	3147008	16777216	16777216	1	0.6.10	208896	256237012	7056	0x000000f0	unavailable:probe-only-supported=1	-	-	-	-	-	-	-	-	-	-	-	unavailable:no-gate-log	0	0
+3	2026-11-27T21:37:09Z	1795815429	1	1024x768:75.00:0:1:1:connected	3147008	16777216	16777216	1	0.6.10	208896	255666648	7056	0x00000097	unavailable:probe-only-supported=1	-	-	-	-	-	-	-	-	-	-	-	unavailable:no-gate-log	0	0
+4	2026-11-27T21:38:08Z	1795815488	1	1024x768:75.00:0:1:1:connected	3147008	16777216	16777216	1	0.6.10	208896	253927176	7056	0x000001be	unavailable:probe-only-supported=1	-	-	-	-	-	-	-	-	-	-	-	unavailable:no-gate-log	0	0
+5	2026-11-27T21:39:08Z	1795815548	1	1024x768:75.00:0:1:1:connected	3147008	16777216	16777216	1	0.6.10	208896	250693920	7056	0x00000314	unavailable:probe-only-supported=1	-	-	-	-	-	-	-	-	-	-	-	unavailable:no-gate-log	0	0
+
+verdict.json, verbatim
+----------------------
+{
+  "helper": "sm750-soak",
+  "schema": 1,
+  "verdict": "PASS",
+  "complete": true,
+  "started_utc": "2026-11-27T21:34:08Z",
+  "finished_utc": "2026-11-27T21:39:08Z",
+  "duration_requested_s": 300,
+  "interval_s": 60,
+  "samples": 6,
+  "samples_expected": 6,
+  "samples_file": "samples.tsv",
+  "log_wraps": 0,
+  "criteria": [
+    {"name": "card-present", "ok": true, "detail": "6 of 6 samples found the PCI device directory"},
+    {"name": "panel-vblank", "ok": true, "detail": "present in 6 of 6 samples, advanced 0 over the window, 0 decrease(s), longest stall 5 sample(s), PANEL_CURRENT_LINE took 6 distinct value(s) (an idle pipe freezes vblank_count by design)"},
+    {"name": "vram-range", "ok": true, "detail": "0 sample(s) out of range or inconsistent"},
+    {"name": "module-refcount", "ok": true, "detail": "0 sample(s) outside 1..16 or above first+1"},
+    {"name": "module-identity", "ok": true, "detail": "0 sample(s) carried a different module version"},
+    {"name": "module-size", "ok": true, "detail": "0 sample(s) carried a different resident module size"},
+    {"name": "mem-floor", "ok": true, "detail": "0 sample(s) below MemAvailable 65536 kB"},
+    {"name": "log-quiet", "ok": true, "detail": "0 new driver fault line(s) and kernel severe line(s)"},
+    {"name": "counters-monotonic", "ok": true, "detail": "0 decrease(s) across the b8_* counters"},
+    {"name": "gates-recorded", "ok": true, "detail": "0 sample(s) read gates=FAIL, 6 sample(s) had no gate log"},
+    {"name": "coverage", "ok": true, "detail": "6 sample(s) taken, window completed"}
+  ],
+  "failed_criteria": []
+}
+
+Verdict line
+------------
+sm750-soak: verdict: PASS
+
+summary.txt is byte-identical to the block the helper printed above, so it is
+not duplicated here.
+
+Fields that are unavailable on this tree, and why
+------------------------------------------------
+b8_* counters (11 cells read "-" in every sample)
+  The loaded module is 0.6.10, the committed tree. The eleven b8_* attributes
+  are part of the GAP-B8 work that is still uncommitted (another task's edits
+  to src/sm750_drm.c and tests/check-sysfs-attributes.sh), so sysfs does not
+  export them. The counters-monotonic criterion therefore passed with nothing
+  to check: it is a PASS with no evidence, and the report must not read it as
+  counter evidence. Once the GAP-B8 attributes are loaded, the same helper
+  samples them with no change.
+
+crc ("unavailable:probe-only-supported=1")
+  The only allowlisted CRC entry point is `sudo -n /usr/local/sbin/sm750-crc`
+  with no argument, which runs its read-only `probe` subcommand:
+    --- crc/source (supported sources)
+    ... one failing cat, so the probe exits 1 ...
+  It reports that the source exists (crc_supported=1) and that CRC is
+  supported, but it prints no value. Producing a crc needs `run`, which writes
+  the debugfs control, and a write is what this helper refuses to do. The cell
+  states the reason instead of inventing a number.
+
+gates ("unavailable:no-gate-log")
+  No gate sweep had been recorded at --gates (default
+  /mega/tmp/sm750/soak/last-gate-results.txt) at sampling time, so every
+  sample recorded the missing measurement. For the real 24 h run the owner
+  should write a sweep there:
+    ./tests/check-drm-policy.sh >/mega/tmp/sm750/soak/last-gate-results.txt 2>&1
+
+vblank_count frozen at 7056 for the whole window
+  This is a recorded observation, not a failure, and the helper says so in the
+  criterion line. The pipe was idle: DRM core freezes vblank_count after
+  vblankoffdelay when nothing is waiting for vblanks
+  (docs/evidence/runtime/34-vblank-idle-freeze). The panel was demonstrably
+  alive by a different signal: PANEL_CURRENT_LINE took six distinct values,
+  0x00000209, 0x00000089, 0x000000f0, 0x00000097, 0x000001be and 0x00000314.
+  That is what the panel-vblank criterion requires: vblank present and never
+  decreasing, plus the scanout pointer moving. Had the panel pointer stopped
+  too, panel-vblank would have failed.
+
+What 5 minutes proves
+---------------------
+- The helper runs unprivileged on this host with no card node, no console
+  grab and no VT operation, and exits 0.
+- It finds 0000:01:00.0, the module, its refcount, its version and its
+  resident size, VRAM in use against total and against mem_info_vram_total,
+  MemAvailable, the panel state and the panel line, and it differences the
+  kernel log correctly: 0 new fault lines, 0 wraps.
+- It writes samples.tsv (29 columns, 6 rows), verdict.json (11 criteria) and
+  summary.txt, and `status` reads a PASS back out of them.
+- On a healthy host the verdict is PASS with exit 0, which is the acceptance
+  criterion for a dry run.
+
+What 5 minutes does not prove
+-----------------------------
+- Nothing about 24 or 48 h. Six samples cover 300 s. A leak, a slow reference
+  imbalance, a thermal fault or a fault that needs a mode change cannot appear
+  in a five-minute window; the run's own summary says so.
+- Nothing about the b8_* counters, as recorded above: the attributes are not in
+  the loaded module.
+- Nothing about a crc, for the read-only reason above.
+- Nothing about the gate results of the release, since no gate log was
+  recorded at sampling time.
+- Nothing about a mode set, a hot reload, a suspend/resume, heavy use, or the
+  CRT-only output path. The soak only observes.
+- Nothing about vblank progress: vblank_count was frozen by an idle pipe for
+  all six samples.
+
+Gate evidence
+-------------
+The helper is guarded by tests/check-soak-helper.sh, wired into
+tests/check-drm-policy.sh so `make check` keeps its recipe command count. Gate
+output on the delivered tree, verbatim:
+
+  static arm: 86 assertions, 0 failure(s)
+  soak helper checks passed (111 assertions, 11 planted controls)
+  exit code 0
+
+tests/check-drm-policy.sh, with the soak gate wired in, exit code 0, final
+line:
+
+  DRM mode policy checks passed (16 runtime-guard assertions, 16 planted controls)
+
+tests/check-scratch-policy.sh, with both new scripts added to the mktemp
+census, exit code 0, final line:
+
+  Scratch policy checks passed (28 scripts, resolver before first mktemp, census pinned)
+
+Each of the five forbidden constructs was also planted by hand into a copy of
+the helper under /mega/tmp/sm750/soak/plants and run through
+`bash tests/check-soak-helper.sh --single <copy>`; each copy was rejected:
+
+  FAIL: c: no chvt (found: chvt)
+  FAIL: c: no VT_ACTIVATE (found: VT_ACTIVATE)
+  FAIL: c: no unshare (found: unshare)
+  FAIL: c: no access to /dev/input (found: /dev/input)
+  FAIL: c: no compositor launch (found: weston)
+  FAIL: c: no signal to a process (found: kill)
+
+The sixth line is the sixth forbidden construct: the acceptance text lists
+five, and the gate also refuses any signal to a process, because a soak has no
+reason to send one.
+
+Runtime refusals verified by hand on this host:
+
+  $ ./tools/sm750-soak.sh run --duration 2 --interval 1 --outdir /tmp/nope
+  sm750-soak: --outdir must be under /mega/tmp/sm750 (got /tmp/nope)
+  exit code: 3
+  $ ./tools/sm750-soak.sh run --duration 2 --interval 1 --outdir /mega/tmp/sm750/soak/smoke1
+  sm750-soak: /mega/tmp/sm750/soak/smoke1 already exists; a run never overwrites one
+  exit code: 3
+  $ ./tools/sm750-soak.sh run --duration 0          # exit code 2, usage
+  $ ./tools/sm750-soak.sh run --interval 9999       # exit code 2, usage
+  $ ./tools/sm750-soak.sh bogus                     # exit code 2, usage
+  $ ./tools/sm750-soak.sh status /mega/tmp/sm750/soak/smoke2
+  "verdict": "PASS",
+  exit code: 0
+
+Gaps that remain open
+---------------------
+1. The b8_* counter sampling is written, wired and gated, but was not exercised
+   against a module that exports the attributes, because the only loaded module
+   is 0.6.10. The gate proves the helper samples them from a fixture; this host
+   cannot yet prove them from the device.
+2. The crc column is structurally an unavailable reason until a read-only crc
+   entry point exists in the allowlist. This is recorded, not hidden.
+3. No 24 h or 48 h run has been made. A dry run cannot substitute for one, and
+   this evidence file does not claim it.

@@ -308,6 +308,26 @@ test "$stage_count" -ge 6 || {
 # controls; it is invoked from here, so the documented count of 18 `make check`
 # recipe commands is unchanged.
 ./tests/check-a65-trace.sh
+# T6 of the strict-production plan: tools/sm750-soak.sh, the owner-installable
+# soak helper (ROOT-ACTIONS.md 3.18). It samples the panel state, the GAP-B8
+# counters, the module refcount, VRAM use, resident memory, kernel-log delta
+# counts and the last recorded gate results every --interval seconds for
+# --duration seconds (24 h by default), and derives its verdict from the whole
+# series: a count of out-of-range samples and a count of new fault lines, never
+# one reading. The gate pins POSIX sh and ASCII, a TMPDIR-pinned mktemp
+# scratch directory, the absence of chvt, VT_ACTIVATE, unshare, /dev/input,
+# every compositor and every signal to a process on executed lines, the 29
+# recorded sample columns, the eleven verdict criteria, the exit codes, and the
+# refusal to write outside /mega/tmp/sm750 or into an existing directory; then
+# it runs the helper against a fixture root with no card and no root: a healthy
+# fixture must reach PASS with exit 0 and at least two samples, a fault already
+# in the kernel buffer must not fail a run, a fault logged during a run must
+# fail it, each planted out-of-range field must turn the verdict into FAIL with
+# a non-zero exit status naming that criterion, and an interrupted run must
+# never be PASS. Seven planted controls prove the static arm rejects each
+# forbidden construct. It is invoked from here, so the documented count of 18
+# `make check` recipe commands is unchanged.
+./tests/check-soak-helper.sh
 # Runtime guard properties found by the 2026-11-26 production-readiness
 # review (docs/evidence/review/02-production-readiness-runtime.txt): D1 (the
 # direct scanout path must not read past the plane object or VRAM), D2 (the

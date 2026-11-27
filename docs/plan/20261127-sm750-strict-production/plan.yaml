@@ -69,6 +69,7 @@ decisions:
   - "T4 complete at cb157fc: 19 A65 marks, teardown reordered to the T1 contract (clientlist mutex, drm_atomic_helper_shutdown before the queue teardown, shadow queue destroyed inside .remove with the devres action removed, drm_dev_unplug last), WARN_ON(mutex_is_locked()) on mode/shadow/cursor locks at the unplug site, and both fbcon-reachable pipe paths moved to mutex_trylock with a deferred drain. tests/check-a65-trace.sh: 9 assertions, 9 planted controls, every control rejected, exit 0."
   - "Documentation correction pass after T3 (commit a94c261): the README verdict block was replaced by the strict-bar status, the release in README became 0.6.10, and 47 audited claims across eight documents were corrected. Two claims were deliberately left alone: the A54 row describes pre-fix code, and capture descriptions keep their historical command counts. My own premise about the installed headless helper being stale was wrong - both copies are 28930 bytes with sha256 da71bc31 - so the input-isolation claim stands for the installed build. Two deck files still quote the pre-0.6.8 failure suffix and remain open."
   - "T5 complete: eleven GAP-B8 counters on the existing sm750_attr_group (five mode-path, six SiI902x bus), all 0444, read and increment behind separate helpers; only event-driven bus clears counted and the uncounted housekeeping documented as a lower bound; check-sysfs-attributes.sh now asserts the increment sites and their position relative to the retry, enable and fail lines with 9 planted controls; acceptance criteria 1 and 4 are source-level only because the loaded 0.6.10 predates the attributes and a reload is an owner console action - evidence 03-counter-observed.txt records eleven ENOENT reads at uid 1005 and a 2 h 02 min retry window with 0 retry markers plus the limit that log absence proves nothing"
+  - "T6 complete: tools/sm750-soak.sh samples 29 columns per interval including the panel cell, vram, refcnt, module version and size, MemAvailable, vblank, panel current line, crc or its unavailable reason, the eleven GAP-B8 counters and the last recorded gate results; eleven criteria counted across samples; verdict.json plus summary.txt; exit 0 PASS / 1 FAIL / 2 usage / 3 environment; an interrupted run writes complete=false so a killed soak fails coverage; the five prohibitions are rejected structurally by tests/check-soak-helper.sh (111 assertions, 11 planted controls); a real 5-minute dry run gave 6 of 6 samples and PASS, with the limits that 300 s proves nothing about 24-48 h and that the b8_* columns read - because the loaded module predates the counters; the thirteenth helper is documented and deliberately not granted"
 assumptions:
   - "The owner either installs one new read-write trace helper through a ROOT-ACTIONS row or writes /sys/module/sm750hdmidrm/parameters/a65_trace himself before T8; both routes are acceptable and the plan does not depend on the first."
   - "The 6.17.1-300 header tree at /mega/tmp/sm750/t5/k617 survives; if it does not, the proven koji fetch and rpm2cpio extraction is repeated under /mega/tmp/sm750/."
@@ -245,7 +246,7 @@ tasks:
     depends_on:
       - "T2"
     agent: "gem-devops"
-    status: "pending"
+    status: "completed"
     retries_used: 0
     critical_path: false
     acceptance_criteria:

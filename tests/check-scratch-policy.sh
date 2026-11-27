@@ -49,9 +49,11 @@ scripts=(
 	tests/check-vt-helper.sh
 	tests/check-pmtest-helper.sh
 	tests/check-hang-helper.sh
+	tests/check-soak-helper.sh
 	tools/benchmark-staging.sh
 	tools/sm750-crc-cycle.sh
 	tools/sm750-pmtest.sh
+	tools/sm750-soak.sh
 )
 # packaging/write-xorg-config.sh also calls mktemp, but its template is
 # "${output}.XXXXXX" on purpose: the temporary file must sit on the same
