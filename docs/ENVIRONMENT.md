@@ -11,6 +11,12 @@ Refreshed 2026-11-18 by task T7 after the kernel moved to 7.3.4-100 and the
 the baseline captures in `docs/evidence/baseline/` still describe the 7.3.3
 state and are not rewritten.
 
+Refreshed 2026-11-27: the running kernel is `7.3.5-100.fc43.x86_64`, the loaded
+module is `0.6.10` (`/sys/module/sm750hdmidrm/version`), and DKMS reports
+`sm750hdmifb/0.6.10` installed for 7.2.15-100, 7.3.3-100, 7.3.4-100 and
+7.3.5-100. Values that were true at an earlier date are labelled as such in
+place; nothing earlier is deleted.
+
 Artifacts that could not be read without privileges are not guessed here. They
 are recorded with their exact closing command in `docs/evidence/EVIDENCE-GAPS.md`.
 
@@ -70,7 +76,7 @@ on purpose: the file ships in the source archive, and
 | --- | --- |
 | Hostname | `deneb` |
 | Distribution | Fedora Linux 43 (Server Edition), `VARIANT_ID=server`, `SUPPORT_END=2026-12-02` |
-| Kernel | `7.3.4-100.fc43.x86_64` (running kernel; the T3 capture recorded `7.3.3-100.fc43.x86_64`) |
+| Kernel | `7.3.5-100.fc43.x86_64` (running kernel, verified 2026-11-27; `7.3.4-100.fc43.x86_64` was the running kernel from 2026-11-18, and the T3 capture recorded `7.3.3-100.fc43.x86_64`) |
 | Architecture | `x86_64` |
 | Virtualisation | none: `/proc/1/cgroup` is `0::/init.scope`, no `/.dockerenv` |
 | System | Supermicro `X10DRi`, board `X10DRi`, BIOS `3.4a` (world-readable `/sys/class/dmi/id/*`, no privilege needed) |
@@ -193,7 +199,7 @@ What this does NOT change, and the reason A65 still has no stack:
 
 - `/proc/<pid>/stack` stays root-only. Measured after the change: reading
   `/proc/self/stack` as the unprivileged user still fails with
-  `Permission denied` (`Отказано в доступе` on this locale). `dmesg_restrict`
+  `Permission denied` (the message is localised on this host). `dmesg_restrict`
   governs the log buffer, not per-task kernel stacks.
 - `/proc/<pid>/wchan` is readable (`0` for an idle process), but it reports a
   symbol name in some builds and a number in others, and it never identifies
@@ -215,14 +221,16 @@ missing is a reproduction to point it at.
 
 ## 2. Kernel header trees
 
-`/lib/modules/<kver>/build` resolves as follows (refreshed 2026-11-18; the
-7.2.13-100 tree recorded by T3 no longer has a `build` link):
+`/lib/modules/<kver>/build` resolves as follows (refreshed 2026-11-18, table
+extended 2026-11-27; the 7.2.13-100 tree recorded by T3 no longer has a `build`
+link):
 
 | Tree | Resolves to | `make` usable |
 | --- | --- | --- |
 | `7.2.15-100.fc43.x86_64` | `/usr/src/kernels/7.2.15-100.fc43.x86_64` | yes |
 | `7.3.3-100.fc43.x86_64` | `/usr/src/kernels/7.3.3-100.fc43.x86_64` | yes |
-| `7.3.4-100.fc43.x86_64` | `/usr/src/kernels/7.3.4-100.fc43.x86_64` | yes (running kernel) |
+| `7.3.4-100.fc43.x86_64` | `/usr/src/kernels/7.3.4-100.fc43.x86_64` | yes (historical: the running kernel from 2026-11-18 to 2026-11-26) |
+| `7.3.5-100.fc43.x86_64` | `/usr/src/kernels/7.3.5-100.fc43.x86_64` | yes (running kernel) |
 | `6.18.13-200.fc43.x86_64` | no `build` link | no |
 
 `/lib/modules/6.18.13-200.fc43.x86_64/` exists but contains only
@@ -231,7 +239,7 @@ package is not installed. It is a stale directory left by the NVIDIA driver,
 not a buildable tree; it is excluded from the matrix.
 
 Installed kernel packages: `kernel-core` and `kernel-devel` for 7.2.15-100,
-7.3.3-100 and 7.3.4-100 only.
+7.3.3-100, 7.3.4-100 and 7.3.5-100 only (`7.3.5-100` added 2026-11-27).
 
 Capture: `docs/evidence/baseline/17-kernel-headers.txt` (7.3.3 state).
 

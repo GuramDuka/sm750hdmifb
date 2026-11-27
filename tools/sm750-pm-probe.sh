@@ -14,7 +14,7 @@
 # never enters D3hot and no power state changes. See docs/PARAMETERS.md.
 #
 # Installed as /usr/local/sbin/sm750-pm-probe (mode 0755 root:root),
-# allowlisted in docs/ROOT-ACTIONS.md section 3.16:
+# allowlisted in docs/ROOT-ACTIONS.md section 3.17:
 #
 #   coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-pm-probe
 #

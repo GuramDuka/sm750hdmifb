@@ -4612,3 +4612,39 @@ change, since both helpers read the log through `journalctl` as root anyway.
 `tools/sm750-hang.sh:8` deliberately keeps the old sentence: it describes the
 2026-11-26 capture, and rewriting it would falsify the record. No version bump:
 helpers, gates and docs only.
+
+### 2026-11-27T22:12Z | orchestrator | A65 has a written reproduction; the running-kernel drift is gone
+
+Two documentation jobs, both verified by measurement before they were accepted.
+
+The stale claims: `docs/ENVIRONMENT.md:79` and the header-tree table still
+presented 7.3.4-100 as the running kernel. Both now say 7.3.5-100.fc43.x86_64
+with module 0.6.10 loaded and DKMS builds for 7.2.15-100, 7.3.3-100, 7.3.4-100
+and 7.3.5-100, and every earlier value is kept as dated history rather than
+overwritten. The same file also carried non-ASCII text at `:202` (a localized
+`Permission denied`), which the ASCII gate is meant to catch; it is now
+`the message is localised on this host`.
+
+The reproduction procedure is `docs/ROOT-ACTIONS.md` 3.16, written as prepared
+and not run, with the cost first: a successful run ends in one reboot, the panel
+goes dark until then, and the module sits in `Unloading` at refcount -1 with no
+userspace remedy. A run that fails to wedge costs one reload instead of a
+reboot. The fact that shaped the procedure: `sm750-vt` has only `show`, `off`
+and `on`, and its `off` path unbinds the PCI device before `modprobe -r`, so no
+helper can produce the wedge - the raw `modprobe -r` is the route, and the
+allowlist already grants it to the coder account. Only the two sysfs writes need
+the owner, because `a65_trace` is `0644 root:root` and the allowlist has no
+`tee`. Verified today: `a65_trace` reads `N`, `drm.debug` reads `1`, and
+`sm750-vt show` reports `state: live`, `bind now: 1`, `refcnt=1` with two
+chromium holders on `renderD128`, so the procedure states that refcount must
+reach zero or the unload refuses with `is in use` instead of wedging.
+
+Numbering collision handled honestly: a section 3.16 already existed for the
+pm_probe helper, so that section became 3.17 and the two in-file references at
+`docs/ROOT-ACTIONS.md:40` and `:58` were retargeted. Two stragglers named the
+old number and were fixed here: `docs/DELIVERABLES.md:462` and
+`tools/sm750-pm-probe.sh:17`.
+
+Left as history on purpose: `docs/ENVIRONMENT.md:248` keeps the 2026-11-18 dnf
+availability probe (kernel-devel 7.3.4-100 as the only candidate then), and
+`:583` keeps its dated DKMS row; neither claims to describe today's kernel.

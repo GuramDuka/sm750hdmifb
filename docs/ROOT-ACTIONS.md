@@ -37,7 +37,7 @@ not close P1. Row 13 is done: the PM test helper (section 3.14) ran the
 host-wide cycle on 2026-11-27 with `verdict: PASS`, which is what closed the
 sleep half of P1 on this host. Row 15 installed the `pm_probe` helper and A66
 is fixed and measured; its installed copy needs one refresh after the A67 fix
-(section 3.16).
+(section 3.17).
 
 | # | Date (UTC) | Action | Closes |
 | --- | --- | --- | --- |
@@ -55,7 +55,7 @@ is fixed and measured; its installed copy needs one refresh after the A67 fix
 | 12 | proposed | reboot with `intel_iommu=on iommu=pt` (done: the host now reports 116 `iommu_groups` and `DMAR: IOMMU enabled`), then bind `0000:01:00.0` to `vfio-pci` for a guest (section 3.13) | no GAP and no P1: the guest runs its own copies of `sm750_pm_suspend()` / `sm750_pm_resume()`, the host's copies never execute, and the chip stays in D0 from the host's point of view |
 | 13 | 2026-11-27T16:12Z | install the PM test helper with `sudo install -m 0755 -o root -g root tools/sm750-pmtest.sh /usr/local/sbin/sm750-pmtest`, add `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-pmtest` (section 3.14), then run `sm750-pmtest run devices` | done: the owner set `nvidia.NVreg_PreserveVideoMemoryAllocations=0` and the armed `devices` cycle returned `verdict: PASS` on 2026-11-27 at 16:12 host clock (73 journal lines, all four `pm:` edges, `suspend_stats` unchanged); transcript `docs/evidence/runtime/49-pmtest-devices-cycle.txt` |
 | 14 | proposed | install the hang capture with `sudo install -m 0755 -o root -g root tools/sm750-hang.sh /usr/local/sbin/sm750-hang`, add `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-hang` (section 3.15), then run `sudo -n /usr/local/sbin/sm750-hang capture` after the next wedge | A65: the 2026-11-26 hot reload wedged the module in `Unloading` with no stack captured, so the blocked function is unknown; this helper exists before the next reproduction so `02-stacks.txt` finally closes it |
-| 15 | done; refresh outstanding | install the pm_probe helper with `sudo install -m 0755 -o root -g root tools/sm750-pm-probe.sh /usr/local/sbin/sm750-pm-probe`, add `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-pm-probe` (section 3.16), then run `sudo -n /usr/local/sbin/sm750-pm-probe cycle` once the 0.6.9 module is loaded | A66 is fixed and measured on the host. The installed copy was put in place on 2026-11-27T14:14Z (5390 bytes, sha256 `ca5b5981...`) and is stale after the A67 fix: the repository file `tools/sm750-pm-probe.sh` is 167 lines, sha256 `986a441cf4977d2753711254e983c98bc63b6076a7f6cc54fe6b17a210d87048`, so refresh it from the repository root with `sudo install -m 0755 -o root -g root tools/sm750-pm-probe.sh /usr/local/sbin/sm750-pm-probe`. A pass through `pm_probe` is not a system sleep |
+| 15 | done; refresh outstanding | install the pm_probe helper with `sudo install -m 0755 -o root -g root tools/sm750-pm-probe.sh /usr/local/sbin/sm750-pm-probe`, add `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-pm-probe` (section 3.17), then run `sudo -n /usr/local/sbin/sm750-pm-probe cycle` once the 0.6.9 module is loaded | A66 is fixed and measured on the host. The installed copy was put in place on 2026-11-27T14:14Z (5390 bytes, sha256 `ca5b5981...`) and is stale after the A67 fix: the repository file `tools/sm750-pm-probe.sh` is 167 lines, sha256 `986a441cf4977d2753711254e983c98bc63b6076a7f6cc54fe6b17a210d87048`, so refresh it from the repository root with `sudo install -m 0755 -o root -g root tools/sm750-pm-probe.sh /usr/local/sbin/sm750-pm-probe`. A pass through `pm_probe` is not a system sleep |
 
 Sections below are ordered by subject, not by date: allowlist, recovery recipe,
 helpers, udev rule, installed state and re-verification, gap map.
@@ -1764,6 +1764,129 @@ needs. The gate `tests/check-hang-helper.sh` pins its properties, and
 reload from re-entering the wedged state while the framebuffer vtconsole is
 still bound.
 
+### 3.16 Reproducing A65 deliberately: prepared, not run
+
+Prepared 2026-11-27, not executed. Nothing below runs by default: no gate, no
+script and no helper invokes it, and there is no partial version of it that can
+fire by accident.
+
+Cost, stated first. A successful run ends in one reboot. From the moment the
+module wedges until that reboot, the SM750 panel shows nothing, the framebuffer
+vtconsole is unbound (`bind now: 0`), there is no text console on that
+connector, and the module can be neither unloaded nor reloaded from userspace:
+it sits in `Unloading` at refcount -1 until the reboot. A run that fails to
+wedge costs one reload instead of a reboot.
+
+What it buys. `/proc/<pid>/stack` for the `modprobe -r` task while it is stuck in
+`D` state. That is the only artefact that names the function inside
+`sm750_pci_remove()` where the unload stops, and therefore the only thing that
+can close A65. The rest of the instrumentation narrows which step was running
+(`a65_trace` marks, `docs/PARAMETERS.md`) or widens the log ring
+(`kernel.dmesg_restrict=0`, section 1.4 of `docs/ENVIRONMENT.md`); neither names
+a blocked lock.
+
+Steps, in order. Steps 1 and 2 are the only ones that need the owner. Every
+other command is a current sudoers allowlist entry, measured on this host on
+2026-11-27.
+
+1. Owner: enable `a65_trace`. The parameter is a bool at mode `0644 root:root`
+   (declared `static bool a65_trace;` and `module_param(a65_trace, bool, 0644)`
+   at `src/sm750_drm.c:307-308`), so only root can write it, and the allowlist
+   carries no `tee` entry, so the coder account cannot do this. It currently
+   reads `N`, and every module load resets it to the default:
+
+   ```sh
+   # as root
+   echo 1 > /sys/module/sm750hdmidrm/parameters/a65_trace
+   ```
+
+2. Owner: enable the DRM debug mask. Already `1` on this host (read as root on
+   2026-11-27; the file is `-rw------- root:root` and an unprivileged read
+   answers `Permission denied`). Re-issue it only if a reload in this session
+   reset it:
+
+   ```sh
+   # as root
+   echo 1 > /sys/module/drm/parameters/debug
+   ```
+
+3. Confirm the console is bound and nothing else holds the module:
+
+   ```sh
+   sudo -n /usr/local/sbin/sm750-vt show
+   ```
+
+   Expect `state: live`, `bind now: 1`, `refcnt=0` and no holder lines. If `refcnt`
+   is above 0 the unload in step 5 refuses with `Module sm750hdmidrm is in use.`
+   instead of wedging: the DRM clients must be closed first, and on this host
+   `chromium` normally holds `renderD128` (the 2026-11-27 reading was
+   `refcnt=1`, `holders: 2`).
+
+4. Run the mitigated reload once, as the control. This path does NOT wedge: it
+   detaches fbcon, unbinds the PCI device so `remove` runs with no console
+   client, unloads, loads, and re-binds fbcon, all inside one second. It is the
+   path measured in `docs/evidence/runtime/54-a65-trace-mitigated-reload.txt`.
+
+   ```sh
+   sudo -n /usr/local/sbin/sm750-vt off
+   ```
+
+5. Re-bind, then perform the unmitigated unload. No helper can produce A65:
+   `sm750-vt` has exactly three modes, `show | off | on`
+   (`tools/sm750-vt.sh:47`), and `off` unbinds the PCI device before it calls
+   `modprobe -r` by design (`tools/sm750-vt.sh:16-20`), so the helper refuses to
+   unload with fbcon bound rather than walking into the state. The remaining
+   route is the raw unload, and the allowlist covers it directly
+   (`/usr/bin/modprobe -r sm750hdmidrm`), with no owner step:
+
+   ```sh
+   sudo -n /usr/local/sbin/sm750-vt on
+   sudo -n /usr/local/sbin/sm750-vt show          # bind now: 1, refcnt=0 again
+   sudo -n /usr/bin/modprobe -r sm750hdmidrm      # the wedge: this call does not return
+   ```
+
+   Run step 5 from one session. The last command blocks in `D` state, which is
+   the object of the exercise; its parent shell stops there for the rest of the
+   boot. Steps 6 and 7 run from a second session.
+
+6. Capture the stack, from the second session, while the module is still stuck:
+
+   ```sh
+   sudo -n /usr/local/sbin/sm750-hang capture
+   sudo -n /usr/local/sbin/sm750-hang status
+   ```
+
+   `capture` writes six files into a fresh directory under
+   `/mega/tmp/sm750/hang/` (section 3.15). Read `02-stacks.txt` first: it holds
+   `/proc/<pid>/stack` plus `wchan` for every `D`-state task, and the verdict
+   line `stacks captured, read 02-stacks.txt first` means the stack was
+   obtained. Installed copy sha256
+   `be41e1fcd617c151d8c8cd37cbeb0485ca9b679a5c3781347fce0740ad9fe785`, identical
+   to `tools/sm750-hang.sh`, one NOPASSWD line. Read `00-summary.txt` second for
+   the `Unloading` and refcount -1 lines that prove the wedge happened.
+
+7. Reboot. This is the only recovery; step 6 cannot unwedge anything. After the
+   reboot, confirm the driver is back:
+
+   ```sh
+   sudo -n /usr/local/sbin/sm750-pkg install     # installs 0.6.10 again
+   sudo -n /usr/local/sbin/sm750-vt show         # expect state: live, bind now: 1
+   cat /sys/module/sm750hdmidrm/version          # expect 0.6.10
+   ```
+
+   If the unload in step 5 completed instead of wedging, there is nothing to
+   capture and no reboot is needed: `sudo -n /usr/bin/modprobe sm750hdmidrm`
+   loads the driver again immediately.
+
+Precondition. This section runs only on an explicit owner request that names
+this run; an open A65 and a prepared procedure are not such a request. The owner
+declined the controlled reproduction twice (most recently 2026-11-27T20:30Z), so
+A65 stays open on this host by his decision and not for want of a procedure. The
+record of that decision is plan decision 113
+(`docs/plan/20261117-sm750-driver-prod/plan.yaml:190`) and the A65 blast-radius
+note (`docs/DEFECTS.md:1815-1821`, which also lists the two helper guards that
+keep the accidental path closed).
+
 ## 4. udev ACL rule
 
 Path: `/etc/udev/rules.d/99-sm750-coder-acl.rules`, mode `0644 root:root`, 710
@@ -2101,7 +2224,7 @@ printf 'scanout' | sudo -n tee /sys/kernel/debug/dri/0/crtc-0/crc/control
 printf 'none'    | sudo -n tee /sys/kernel/debug/dri/0/crtc-0/crc/control
 ```
 
-### 3.16 Driving the PM callbacks through pm_probe
+### 3.17 Driving the PM callbacks through pm_probe
 
 Defect A66: on 2026-11-27 an armed `pm_test=devices` cycle never reached the
 SM750. The freeze write failed with `Input/output error` because the two
