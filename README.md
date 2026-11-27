@@ -6,7 +6,7 @@ ultrawide desktop, with bandwidth-saving colour conversion and update
 optimisations for smoother performance.**
 
 Linux display driver for the single-HDMI `SE-DP750A-HDMI` PCIe card. Current
-release **0.6.8**: atomic KMS, dithered 16-bit scanout, hardware cursor, DMA and
+release **0.6.9**: atomic KMS, dithered 16-bit scanout, hardware cursor, DMA and
 polling upload paths, sysfs monitoring attributes, a test-card fallback so a
 panel with no client is never dead-black, DKMS packages for `.deb` and `.rpm`,
 and an acceptance audit of 6 PASS / 0 FAIL / 1 GAP run against the 0.6.0 tree
@@ -25,7 +25,7 @@ read and archived, the option ROM was reconstructed from the image, the driver
 was brought to feature-complete state, every check was written down and turned
 into a gate, and the result was packaged for DKMS on RPM and Debian.
 
-`release 0.6.8` `kernel 6.17 and newer` `x86_64` `GPL-2.0-only` `DKMS`
+`release 0.6.9` `kernel 6.17 and newer` `x86_64` `GPL-2.0-only` `DKMS`
 `no firmware blobs` `no closed libraries`
 
 The signal path this driver owns ends at the transmitter:
@@ -141,14 +141,14 @@ transmitter, or different GPIO wiring and are not currently supported.
 
 ## Status
 
-Release 0.6.8. The driver is feature-complete for this board and meets the
+Release 0.6.9. The driver is feature-complete for this board and meets the
 project's production criteria except for one item that needs a person at the
 panel; see the [acceptance report](docs/ACCEPTANCE-REPORT.md).
 
 | Area | Verified state |
 |---|---|
-| Module | `sm750hdmidrm` 0.6.8, built by DKMS from one source tree |
-| Runtime | DKMS built and installed 0.6.7 for kernels 7.2.15-100, 7.3.3-100 and 7.3.4-100 (Fedora 43) from this tree, loaded and exercised on 7.3.4-100; 0.6.8 is built and packaged but not yet installed; the version-free `sm750-pkg` helper performs install and rollback (`docs/ROOT-ACTIONS.md` 3.8) |
+| Module | `sm750hdmidrm` 0.6.9, built by DKMS from one source tree |
+| Runtime | DKMS built and installed 0.6.9 for kernels 7.2.15-100, 7.3.3-100 and 7.3.4-100 (Fedora 43) from this tree; the 0.6.8 module remains loaded until `sudo sm750-pkg reload` (or a reboot) after the card has no holders; the version-free `sm750-pkg` helper performs install and rollback (`docs/ROOT-ACTIONS.md` 3.8) |
 | Test card | seen on the panel; the disc animates and the scanout CRC gate stays green while it runs (`docs/evidence/runtime/26-test-card-crc-fix.txt`) |
 | Build matrix | 9 kernel and scanout-format combinations, 6.17.1 through the 7.4 daily headers |
 | Modeset | atomic commit verified with `modetest`, 1920x1080 at 60 Hz |
@@ -202,7 +202,7 @@ git clone https://github.com/GuramDuka/sm750hdmifb.git
 cd sm750hdmifb
 make check
 ./build-package.sh
-sudo apt install ./dist/sm750hdmifb_0.6.8_all.deb ./dist/sm750hdmifb-tools_0.6.8_*.deb
+sudo apt install ./dist/sm750hdmifb_0.6.9_all.deb ./dist/sm750hdmifb-tools_0.6.9_*.deb
 sudo reboot
 ```
 
@@ -234,13 +234,13 @@ mkdir -p "$topdir"/{SOURCES,SPECS,BUILD,BUILDROOT,RPMS,SRPMS}
 . ./packaging/source-excludes.sh
 mapfile -t skip < <(sm750_dev_only_pathspecs)
 git ls-files -z -- . "${skip[@]}" >"$work/tracked"
-tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.8-source.tar.gz" \
-    --transform='s|^|sm750hdmifb-0.6.8/|' --null -T "$work/tracked"
+tar -C . -czf "$topdir/SOURCES/sm750hdmifb-0.6.9-source.tar.gz" \
+    --transform='s|^|sm750hdmifb-0.6.9/|' --null -T "$work/tracked"
 
 rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb.spec
 rpmbuild -ba --define "_topdir $topdir" packaging/sm750hdmifb-tools.spec
-sudo dnf install -y "$topdir"/RPMS/noarch/sm750hdmifb-0.6.8-1.fc43.noarch.rpm \
-    "$topdir"/RPMS/x86_64/sm750hdmifb-tools-0.6.8-1.fc43.x86_64.rpm
+sudo dnf install -y "$topdir"/RPMS/noarch/sm750hdmifb-0.6.9-1.fc43.noarch.rpm \
+    "$topdir"/RPMS/x86_64/sm750hdmifb-tools-0.6.9-1.fc43.x86_64.rpm
 sm750-smi
 sudo reboot
 ```

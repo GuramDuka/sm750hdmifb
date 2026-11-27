@@ -4403,3 +4403,33 @@ Note for the record: two gem-implementer sessions for this batch died on provide
 writing most of the code, and I finished the wiring, the gate fixes and the helper myself rather
 than reopening a third session; the deviation from the delegation rule is recorded here because the
 logbook is the audit trail.
+
+### 2026-11-27T14:20Z | orchestrator | the third hardcoded release version, and this one blocked the RPM
+
+Installing 0.6.9 exposed a gate defect that had nothing to do with 0.6.9: tools/sm750-pkg install
+reported that the newest RPM pair was 0.6.8, because tests/check-rpm-dkms.sh - the only thing that
+builds the RPMs - still carried version=0.6.8 on line 45. The gate then built
+sm750hdmifb-0.6.8-source.tar.gz into its own SOURCES directory while the 0.6.9 spec asked %prep for
+sm750hdmifb-0.6.9-source.tar.gz, so rpmbuild died with "No such file or directory" and the failure
+read as a packaging error.
+
+This is the third gate in three days with the same shape. tests/check-drm-packaging.sh hardcoded the
+version in two greps and turned the 0.6.9 bump into a false packaging failure; docs carried a fourth
+copy in a table. The rule is now enforced where it can be: every gate reads readonly version= from
+build-package.sh and compares or substitutes, never restates it.
+
+tests/check-rpm-dkms.sh needed three changes, not one: the version line, the expected dkms/depmod
+call sequence (built with printf now, so the two -v arguments carry the read version), and the stale
+registration fixture, whose "already installed" lines had to name ${version} - which also meant
+converting that heredoc from quoted to unquoted, since a quoted heredoc does not expand. Five further
+assertions compared the literal 0.6.8 against calls the spec makes with its own version and would
+have failed the purge tests for the same reason.
+
+Verified: tests/check-rpm-dkms.sh exits 0 with "RPM/DKMS checks passed: sm750hdmifb 0.6.9 (+
+sm750hdmifb-tools 0.6.9/x86_64), sandbox built, 8 planted controls rejected, root-only steps
+skipped", and the RPMs now exist as sm750hdmifb-0.6.9-1.fc43.noarch.rpm and
+sm750hdmifb-tools-0.6.9-1.fc43.x86_64.rpm.
+
+Lesson: a version number copied into a test is not a test input, it is a deadline. Every copy that
+sits outside build-package.sh will fail the build that raises it, and it will fail while looking like
+the thing it is testing.
