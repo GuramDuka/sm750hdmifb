@@ -643,9 +643,13 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   Each mutates a
   copy under the scratch directory and must exit non-zero naming the defect;
   the unmutated copy must pass.
-- Status: PASS 2026-11-26, `Headless helper checks passed (14 assertions, 20
-  planted controls)`; the `--self-test` run prints
-  `Headless helper checks passed (14 assertions, 20 planted controls, self-test)`.
+- Status: PASS 2026-11-27, `Headless helper checks passed (19 assertions, 23
+  planted controls)`. Section `o` was added after an incident: the `x11` arm
+  took DRM master on the card behind the owner's console and its teardown ran
+  `chvt 2`, moving his foreground VT, and he had to cut power. The arm now
+  refuses without `SM750_CONSOLE_ACK=1`, records `start-vt`, and restores only
+  that VT. The 2026-11-26 run of this gate passed with fourteen assertions and
+  twenty controls.
   The helper itself has not been run with the isolation in place: every mode
   needs root and the card, and the incident that produced A49 came from doing
   exactly that. The isolated run is in the NOT YET OBSERVED list of

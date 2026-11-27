@@ -7,8 +7,9 @@
 # a real compositor, so its blast radius is the card plus the owner's session
 # on seat0. This gate pins the properties that keep that radius small: a fixed
 # program list with no passthrough argument, a clamed run time, a seat backend
-# that never switches a VT, and a verdict that cannot pass on a frame count
-# alone.
+# that never switches a VT, a verdict that cannot pass on a frame count alone,
+# an x11 arm that refuses to start without SM750_CONSOLE_ACK=1, and a teardown
+# that activates only the VT the run started on.
 #
 # Nothing here runs the helper. No compositor is started, no card node is
 # opened, no ioctl is issued, no root is needed: the gate reads the script
@@ -423,6 +424,78 @@ has "$body" '# fd-table holders of the card inode' \
 	"n: the existing card0 line must stay"
 ok "n. diagnose matches every node of the device by device number, prints inode and holders, and counts unreadable fd tables"
 
+# --- o. the console is the owner's: an ack, the start VT, and a way back -----
+# Measured 2026-11-27: three runs of `sm750-headless x11 150` each took DRM
+# master on the card behind the owner's console and reprogrammed its mode, and
+# the teardown chvt'd to tty2, moving his foreground VT off tty1 while his
+# keyboard still went to a VT where nothing ran; he had to cut power. The
+# properties pinned here: only an explicitly acknowledged x11 run may start,
+# teardown activates only the VT the run started on, and every path that cannot
+# do so prints the command to do it by hand.
+x11_arm=$(arm "$helper" x11)
+has "$x11_arm" '[ "${SM750_CONSOLE_ACK:-}" != 1 ]' \
+	"o: the x11 arm must refuse unless SM750_CONSOLE_ACK=1 is set"
+has "$x11_arm" 'exit 2' \
+	"o: the refusal must exit 2 instead of starting the server"
+for m in weston cage kmscube; do
+	if printf '%s\n' "$(arm "$helper" "$m")" | grep -qF 'SM750_CONSOLE_ACK'; then
+		bad "o: only the x11 arm takes the console; the $m arm must not require SM750_CONSOLE_ACK"
+	fi
+done
+ok "o1. the x11 arm refuses without SM750_CONSOLE_ACK=1 and no other arm gained a requirement"
+
+has "$x11_arm" 'behind the console' \
+	"o: the refusal must name the hazard: the arm takes the card behind the console"
+has "$x11_arm" 'reprograms its mode' \
+	"o: the refusal must say the arm reprograms the card's mode"
+has "$x11_arm" 'nobody is using the machine' \
+	"o: the refusal must say to run it only when nobody is using the machine"
+ok "o2. the refusal names the console hazard, the mode change and the idle-machine condition"
+
+ack_line=$(grep -nF '[ "${SM750_CONSOLE_ACK:-}" != 1 ]' "$helper" | head -n 1 | cut -d: -f1)
+xorg_spawn=$(grep -nF 'exec "$prog" :1 -config' "$helper" | head -n 1 | cut -d: -f1)
+master_line=$(grep -nF 'probe_master >' "$helper" | head -n 1 | cut -d: -f1)
+if [ -z "$ack_line" ] || [ -z "$xorg_spawn" ] || [ -z "$master_line" ]; then
+	bad "o: the ack test, the Xorg spawn and the master probe must all exist"
+elif [ "$ack_line" -ge "$xorg_spawn" ]; then
+	bad "o: the ack test at :$ack_line must precede the Xorg spawn at :$xorg_spawn"
+elif [ "$ack_line" -ge "$master_line" ]; then
+	bad "o: the ack test at :$ack_line must precede the first DRM master work at :$master_line"
+fi
+ok "o3. the ack test runs before the Xorg spawn and before the first DRM master work"
+
+has "$x11_arm" 'start-vt' \
+	"o: the x11 run must record the start VT in 00-plan.txt"
+has "$x11_arm" 'active_vt' \
+	"o: the recorded start VT must be read from the active VT, not guessed"
+ok "o4. the x11 run records in 00-plan.txt the start VT it will restore"
+
+restore_body=$(func_body "$helper" vt_restore)
+has "$restore_body" '"$CHVT" "${start_vt#tty}"' \
+	"o: teardown must chvt to the recorded start VT"
+if printf '%s\n' "$restore_body" | grep -qE '"\$CHVT"[[:space:]]+[0-9]'; then
+	bad "o: teardown must not chvt to a fixed VT number"
+fi
+if printf '%s\n' "$restore_body" | grep -qF 'candidates'; then
+	bad "o: teardown must not pick a spare VT from a candidate list"
+fi
+has "$restore_body" 'the start VT was not recorded' \
+	"o: an unrecorded start VT must be reported instead of guessed"
+has "$restore_body" 'restored text console on $start_vt' \
+	"o: the teardown line must name the VT it restored"
+has "$restore_body" 'chvt ${start_vt#tty} failed' \
+	"o: a failed chvt must be reported with the VT it tried"
+recovery_calls=$(printf '%s\n' "$restore_body" | grep -cF 'vt_recovery' || true)
+if [ "${recovery_calls:-0}" -lt 2 ]; then
+	bad "o: the recovery command must be printed on the unrecorded start VT and on a failed chvt, found ${recovery_calls:-0} calls"
+fi
+recovery_body=$(func_body "$helper" vt_recovery)
+has "$recovery_body" '$CHVT ${start_vt#tty}' \
+	"o: the recovery hint must print the chvt command for the recorded VT"
+has "$recovery_body" 'Ctrl-Alt-F' \
+	"o: the recovery hint must also name the key sequence for the operator"
+ok "o5. teardown activates only the recorded start VT and prints the manual recovery command when it cannot"
+
 [ "$fail" -eq 0 ] || exit 1
 
 if [ "$single" -eq 1 ]; then
@@ -572,6 +645,24 @@ open(p, 'w').write(s.replace(old, new))
 MUT
 }
 
+plant_vt_restore_hardcoded_tty2() { # teardown chvt's a fixed tty2, moving the owner's console
+	# The property, not its comment: the switch target itself becomes a
+	# constant, which is exactly what moved the owner's VT on 2026-11-27.
+	sed -i 's|"\$CHVT" "\${start_vt#tty}"|"$CHVT" 2|' "$1"
+}
+
+plant_vt_restore_moved_after_release() { # teardown restores a discovered VT, not the start VT
+	# Still a target, still a chvt, but no longer the VT the run began on:
+	# the restore follows whatever the foreground is when it runs.
+	sed -i 's|"\$CHVT" "\${start_vt#tty}"|"$CHVT" "${now_vt#tty}"|' "$1"
+}
+
+plant_console_ack_removed() { # the acknowledgement deleted: a stray run takes the console
+	# The condition becomes ':', so the refusal block is dead and the server
+	# starts on an unacknowledged run exactly as it did three times before.
+	sed -i 's|\[ "\${SM750_CONSOLE_ACK:-}" != 1 \]|:|' "$1"
+}
+
 control() {
 	local name=$1
 	local planted=$scratch/sm750-headless.sh
@@ -609,6 +700,9 @@ control x11-env-note-dropped plant_x11_env_note_dropped
 control x11-session-script-unset-dropped plant_x11_session_script_unset_dropped
 control console-restore-dropped plant_no_console_restore
 control diagnose-card0-only plant_diagnose_card0_only
+control vt-restore-hardcoded-tty2 plant_vt_restore_hardcoded_tty2
+control vt-restore-moved-after-release plant_vt_restore_moved_after_release
+control console-ack-removed plant_console_ack_removed
 
 # The pristine copy must still pass, otherwise the controls prove nothing.
 cp "$helper" "$scratch/pristine.sh"
@@ -618,7 +712,7 @@ fi
 printf 'negative control pristine: accepted\n'
 
 [ "$fail" -eq 0 ] || exit 1
-controls=20
+controls=23
 if [ "$self_test" -eq 1 ]; then
 	printf 'Headless helper checks passed (%s assertions, %s planted controls, self-test)\n' "$assertions" "$controls"
 else

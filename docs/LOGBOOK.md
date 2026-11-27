@@ -4671,3 +4671,40 @@ teardown is being changed to restore the starting VT and to refuse the x11 arm
 without an explicit acknowledgement; a `sm750-crc run` from the same session left
 two root children blocked on `crc/data` (pids 13196, 13213) and restoring the VT
 and clearing those is the owner's call, not mine.
+
+### 2026-11-27T22:45Z | orchestrator | the x11 arm can no longer take the console
+
+`tools/sm750-headless.sh` now refuses the `x11` arm with exit 2 unless
+`SM750_CONSOLE_ACK=1` is set, as the first statement of that arm and before the
+config, the snapshot, `probe_master` and the Xorg exec. The refusal names the
+hazard: it takes DRM master on the card behind the console, reprograms its mode,
+and can leave the foreground VT moved, so it belongs to the owner and not to an
+agent. The other arms are untouched.
+
+Teardown was rewritten around the VT the run started on. `active_vt()` is the
+one source of the foreground VT, `00-plan.txt` records `start-vt`, `vt_record()`
+keeps only that value, and `vt_restore()` chvt's `${start_vt#tty}` and nothing
+else; the old candidate list of spare text VTs is gone because a spare VT is the
+owner's console too. `vt_recovery()` prints the exact manual command whenever the
+start VT is unrecorded, unreadable, no longer foreground, missing, or the chvt
+fails, and the success line names the VT it left alone.
+
+`tests/check-headless-helper.sh` gained section `o`: five assertions (the ack
+test exists in the x11 arm and not in the weston, cage or kmscube arms; the
+refusal names the console hazard; the ack precedes `probe_master` and the Xorg
+exec; the arm records `start-vt` through `active_vt`; teardown targets only
+`${start_vt#tty}` and calls `vt_recovery` from every failure path) and three
+planted controls that alter the property itself -
+`plant_vt_restore_hardcoded_tty2`, `plant_vt_restore_moved_after_release` and
+`plant_console_ack_removed`. Gate line: `Headless helper checks passed (19
+assertions, 23 planted controls)`; `tests/check-scratch-policy.sh` still passes
+with 26 scripts.
+
+Docs caught up in the same commit: the two gate rows in `README.md:1083` and
+`docs/DELIVERABLES.md:455` had been quoting fourteen assertions and twenty
+controls since 2026-11-26, and the S26 status block in `docs/TEST-STRATEGY.md`
+quoted the same old counts; all three now state 19 and 23 and say why section
+`o` exists.
+
+Nothing here was executed against the card. The approval line is an owner
+action: install the helper, then run it only with him present.

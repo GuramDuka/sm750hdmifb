@@ -26,7 +26,15 @@
 #     root on this host and the logind seat belongs to the owner. It generates
 #     its own server config with AutoAddDevices off and no InputDevice
 #     section, so the server never opens /dev/input at all, and runs with
-#     -sharevts -novtswitch so no VT is taken or switched.
+#     -sharevts -novtswitch so no VT is taken or switched;
+#   - the x11 arm still takes the card behind the owner's console: it holds
+#     DRM master, reprograms the mode and can leave the foreground VT moved, so
+#     it refuses to start without SM750_CONSOLE_ACK=1 and is meant to run only
+#     while nobody is using the machine (2026-11-27: three unacknowledged runs
+#     left the owner's keyboard on a VT where nothing ran);
+#   - teardown activates only the VT the run started on, never a spare or a
+#     discovered one, and prints the manual recovery command when it cannot
+#     (same incident: a chvt to tty2 took the console from the owner).
 #
 # Exit codes:
 #   0  the requested run completed and every expectation held
@@ -52,8 +60,15 @@ DEV_ATTRS=/sys/bus/pci/devices/$BDF
 CONNECTOR=/sys/class/drm/card0-HDMI-A-1
 BASE=${SM750_HEADLESS_DIR:-/mega/tmp/sm750/headless}
 
+# The foreground VT. Both the run record and the teardown read it through this
+# one function, so the VT a run reports and the VT it restores cannot drift.
+active_vt() {
+	cat /sys/class/tty/tty0/active 2>/dev/null || true
+}
+
 usage() {
 	echo "usage: $PROG [probe | diagnose | weston [SECONDS] | cage [SECONDS] | kmscube [SECONDS] | x11 [SECONDS]]" >&2
+	echo "       x11 takes the console; it needs SM750_CONSOLE_ACK=1" >&2
 	exit 2
 }
 
@@ -117,6 +132,20 @@ weston|cage)
 	} >"$out/00-plan.txt"
 	;;
 x11)
+	# This arm is the only one that takes the console: it opens the card that
+	# is behind the owner's console, takes DRM master, reprograms its mode and
+	# can leave the foreground VT moved. On 2026-11-27 three unacknowledged
+	# runs of `sm750-headless x11 150` did exactly that; from the owner's side
+	# the machine was frozen. The caller therefore has to say, explicitly,
+	# that the machine is nobody's right now.
+	if [ "${SM750_CONSOLE_ACK:-}" != 1 ]; then
+		cat >&2 <<EOF
+$PROG: refusing to start the x11 arm without SM750_CONSOLE_ACK=1
+$PROG: this arm takes DRM master on the card behind the console, reprograms its mode and can leave the foreground VT moved
+$PROG: run it only when nobody is using the machine: SM750_CONSOLE_ACK=1 $PROG x11 SECONDS
+EOF
+		exit 2
+	fi
 	# A root Xorg needs no mount-namespace trick: with AutoAddDevices off and
 	# no InputDevice section it never opens /dev/input, which is the same
 	# guarantee by a different mechanism (see the A49 bullet above).
@@ -160,6 +189,7 @@ EOF
 		printf '%s\n' "no input devices are configured (AutoAddDevices off, no InputDevice section)"
 		printf '%-10s %s :1 -config sm750-x11.conf -sharevts -novtswitch -noreset -ac -nolisten tcp\n' xorg /usr/libexec/Xorg
 		printf '%-10s %s\n' config "$out/sm750-x11.conf"
+		printf '%-10s %s\n' start-vt "$(active_vt)"
 		printf '%-10s %s\n' mode "$mode"
 		printf '%-10s %s\n' seconds "$seconds"
 		printf '%s\n' "a Plasma session on :1 must start with these variables unset, or kwin_x11 dies at once:"
@@ -357,28 +387,48 @@ PY
 # Record what a session may destroy. Called only by the modes that start a
 # client: probe and diagnose never take a VT, so they must not record one.
 vt_record() {
-	start_vt=$(cat /sys/class/tty/tty0/active 2>/dev/null || true)
-	start_mode=$(vt_mode /dev/tty0 || true)
+	start_vt=$(active_vt)
+}
+
+# The exact command an operator has to type when the automatic restore cannot
+# run or fails: the console is theirs, so the instruction names a command, not
+# just the symptom.
+vt_recovery() {
+	if [ -n "${start_vt:-}" ]; then
+		echo "$PROG: bring the console back by hand: $CHVT ${start_vt#tty} (or press Ctrl-Alt-F${start_vt#tty})" >&2
+	else
+		echo "$PROG: bring the console back by hand: $CHVT 1 (or press Ctrl-Alt-F1)" >&2
+	fi
 }
 
 # vt_restore - put the console back once the client is gone. Never fails the
-# run, and never switches a VT that is not the one this run left us on.
+# run. It activates only the VT this run started on: on 2026-11-27 a teardown
+# that switched to a spare text VT moved the owner's console from tty1 to
+# tty2, his keyboard kept going to tty1, and he had to cut power.
 vt_restore() {
-	[ -n "${start_vt:-}" ] || return 0
+	if [ -z "${start_vt:-}" ]; then
+		echo "$PROG: the start VT was not recorded; not switching any VT" >&2
+		vt_recovery
+		return 0
+	fi
 	now_mode=$(vt_mode /dev/tty0 || true)
-	[ -n "$now_mode" ] || {
+	if [ -z "$now_mode" ]; then
 		echo "$PROG: cannot read the VT mode; the console may stay dark" >&2
+		vt_recovery
 		return 0
-	}
+	fi
 	# A text-mode VT needs no repair: fbcon owns it and the console repaints.
-	[ "$now_mode" = 0 ] && return 0
-	now_vt=$(cat /sys/class/tty/tty0/active 2>/dev/null || true)
-	[ -n "$now_vt" ] || {
-		echo "$PROG: cannot read the active VT; the console may stay dark" >&2
+	if [ "$now_mode" = 0 ]; then
+		echo "$PROG: $start_vt was left in text mode; no switch needed (the panel was left with no client)"
 		return 0
-	}
-	# The session moved the foreground somewhere else, or another user's
-	# session owns it now: that VT is not ours to switch.
+	fi
+	now_vt=$(active_vt)
+	if [ -z "$now_vt" ]; then
+		echo "$PROG: cannot read the active VT; not switching any VT" >&2
+		vt_recovery
+		return 0
+	fi
+	# Another session owns the foreground now: that VT is not ours to switch.
 	if [ "$now_vt" != "$start_vt" ]; then
 		echo "$PROG: foreground VT is $now_vt, not $start_vt; left it alone, it is not ours to switch" >&2
 		return 0
@@ -390,32 +440,17 @@ vt_restore() {
 		echo "$PROG: $start_vt is no longer the foreground VT; left it alone, it is not ours to switch" >&2
 		return 0
 	fi
-	# Prefer the VT this run started on when it was a text VT, else the first
-	# spare text VT. Never the foreground VT: VT_ACTIVATE to the active VT is
-	# a no-op and repaints nothing.
-	target=
-	candidates="tty2 tty3"
-	[ "${start_mode:-1}" = 0 ] && candidates="$start_vt $candidates"
-	for v in $candidates; do
-		[ -e "/dev/$v" ] || continue
-		[ "$v" = "$now_vt" ] && continue
-		[ "$(vt_mode "/dev/$v" || true)" = 0 ] || continue
-		target=$v
-		break
-	done
-	if [ -z "$target" ]; then
-		echo "$PROG: no text VT available; the console may stay dark until the next VT switch" >&2
+	if [ ! -x "$CHVT" ] || [ ! -e "/dev/$start_vt" ]; then
+		echo "$PROG: $CHVT or /dev/$start_vt is unavailable; the console may stay dark until the next VT switch" >&2
+		vt_recovery
 		return 0
 	fi
-	if [ ! -x "$CHVT" ]; then
-		echo "$PROG: $CHVT is unavailable; the console may stay dark until the next VT switch" >&2
+	if ! "$CHVT" "${start_vt#tty}" 2>/dev/null; then
+		echo "$PROG: chvt ${start_vt#tty} failed; the console may stay dark" >&2
+		vt_recovery
 		return 0
 	fi
-	"$CHVT" "${target#tty}" 2>/dev/null || {
-		echo "$PROG: chvt ${target#tty} failed; the console may stay dark" >&2
-		return 0
-	}
-	echo "$PROG: restored text console on $target (the panel was left with no client)"
+	echo "$PROG: restored text console on $start_vt after the $mode run by activating the VT it started on (the panel was left with no client)"
 }
 
 vt_record
