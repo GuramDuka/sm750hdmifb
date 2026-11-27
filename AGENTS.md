@@ -32,6 +32,15 @@ Repository: Linux DRM/KMS driver for the Silicon Motion SM750 (module
 
 ## Rules
 
+- Not ours: seat, VT, kwin, plasma. Never activate or switch a VT (`chvt`,
+  `VT_ACTIVATE`, anything that changes `/sys/class/tty/tty0/active`), never run
+  a compositor or X server on a console the owner may be using, never signal a
+  process belonging to another uid, and never touch seat or logind state.
+  Console-grabbing helpers (`sm750-headless` x11 mode, `weston`, `cage`) are
+  owner-supervised tools, not agent tools: a run needs the owner present, an
+  explicit agreement to it, and a stated duration. On 2026-11-27 a run of
+  `sm750-headless x11` moved the owner's foreground VT to tty2 and he had to cut
+  power; the VT belongs to him, not to this work.
 - ASCII only, in every file. No Unicode, no emoji, no typographic dashes.
 - Scratch files go under `/mega/tmp/sm750/` only. Never write to `$HOME`, never
   leave scratch files in the project tree; the tree carries committed
