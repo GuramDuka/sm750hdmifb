@@ -4315,3 +4315,46 @@ Lesson: a readback must parse the format the kernel actually emits, not the form
 convenient at the first value, and a gate that tests a parser must include the position where
 the interesting token is not first. The refusal itself was the good outcome - the helper printed
 an armed line before proving it, and the comparison still stopped the run.
+
+### 2026-11-27T12:05Z | orchestrator | the armed pm_test cycle stops at nvidia, not at the SM750
+
+After the helper was reinstalled at 11:54Z (sha256 9ea79619...) the ordered cycle ran:
+
+    sudo -n /usr/local/sbin/sm750-pmtest run devices
+
+It armed correctly this time - `pm_test armed at devices (readback: devices)`, which is the
+37feab9 fix verified against the live kernel - then the suspend was refused:
+
+    writing freeze to /sys/power/state returned 1: ... write error: Input/output error
+    journal lines added: 33
+    driver pm: lines: none
+    suspend_stats after: fail=1 failed_suspend=1 last_failed_dev=0000:83:00.0 last_failed_errno=-5
+    verdict: FAIL: no 'pm: suspend complete' line; no 'pm: resume complete' line;
+             suspend_stats error counters changed
+
+The kernel log says exactly why: two Tesla P100s, 0000:83:00.0 and 0000:84:00.0, return -5 from
+nv_pmops_suspend (`NVRM: PreserveVideoMemoryAllocations module parameter is set. System Power
+Management attempted without driver procfs suspend interface.`), the framework reports `PM: Some
+devices failed to suspend`, and the cycle ends with `PM: suspend exit` inside the same second.
+devices-level testing suspends every device and aborts on the first failure, so an unrelated GPU
+stops the whole run before the SM750 is reached: the journal holds zero `sm750 ... pm: ` lines,
+so the driver's own suspend and resume callbacks never executed and src/sm750_drm.c:5476-5520
+never printed.
+
+What the run did prove, beyond the helper fix: the trap restored pm_test to none, the verdict
+rule rejected the run for the right reasons, and the driver came through untouched - 0.6.8 still
+loaded, vtcon1 bound, HDMI-A-1 connected at 1024x768 75 Hz, PANEL_CURRENT_LINE 0x1c2 -> 0x146,
+vblank counter 3923 -> 4331.
+
+Evidence: docs/evidence/runtime/48-pmtest-devices-attempt.txt (the full transcript, the 33-line
+window condensed, and a strict split between what is proved and what is not).
+
+Consequence: P1 is blocked by the host, not by the driver, and no user-space action inside the
+allowlist changes it. The candidates are all owner-level: make the two P100s stop failing system
+suspend (nvidia module parameter or a different driver state), unbind them from nvidia for the
+duration of the test, or accept a weaker callback-only exercise. Until one of those happens the
+pin state of the SM750 on a system sleep remains unmeasured, and the honest record says so.
+
+Lesson: on a multi-device host, a devices-level PM test is only as good as its worst-behaved
+device; the verdict must therefore name which device failed, and a driver whose callback never
+ran must not be described as passing or failing the sleep path.

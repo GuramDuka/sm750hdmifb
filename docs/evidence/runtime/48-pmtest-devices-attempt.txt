@@ -1,0 +1,94 @@
+# 48 - the first armed pm_test cycle: the helper works, the suspend is refused by nvidia
+
+Date:    2026-11-27 11:55Z (host clock 11:55, UTC 08:55)
+Kernel:  7.3.4-100.fc43.x86_64
+Driver:  0.6.8 loaded (srcversion 3AC8D0650636E51E7169158), rebooted 11:13:29
+Command: sudo -n /usr/local/sbin/sm750-pmtest run devices
+
+## 1. Why this run happened
+
+The owner ordered the deferred PM cycle (m09985 item 3). The first attempt at
+08:22Z was refused by the helper itself, before any suspend, because
+read_pm_test() matched the bracketed level only at the start of the line and so
+read `none` for every other level (see commit 37feab9 and the logbook entry of
+2026-11-27T11:55Z). After the helper was reinstalled from commit 37feab9
+(sha256 9ea7961994aa60977d3cafbec5918ff25c45eca3744d0a44d51808f4ebb1196f) the
+same command armed correctly.
+
+## 2. Output of the run
+
+    sm750-pmtest: pm_test=devices, suspending once with freeze; the panel may blank briefly
+    sm750-pmtest: pm_test armed at devices (readback: devices)
+    sm750-pmtest: writing freeze to /sys/power/state returned 1: ... write error: Input/output error
+    journal lines added since the snapshot: 33
+    driver pm: lines in that window:
+      none
+    pm: suspend complete count: 0
+    pm: resume complete count: 0
+    pm: failure lines: 0
+    PANEL_CURRENT_LINE: 0x000001c2 -> 0x00000146 (advances)
+    suspend_stats error counters before: fail=0 ... last_failed_dev= last_failed_errno=0 last_failed_step=
+    suspend_stats error counters after:  fail=1 ... failed_suspend=1 ... last_failed_dev=0000:83:00.0 last_failed_errno=-5 last_failed_step=suspend
+    verdict: FAIL: no 'pm: suspend complete' line; no 'pm: resume complete' line;
+             suspend_stats error counters changed
+
+The armed readback reads `devices`, which is the defect fixed in 37feab9
+verified on the live host: the first attempt printed `readback: none` here.
+
+## 3. The kernel log of the attempt (33 lines, condensed to the decision-makers)
+
+    PM: suspend entry (s2idle)
+    Filesystems sync: 0.091 seconds
+    Freezing user space processes ... completed (elapsed 0.003 seconds)
+    OOM killer disabled.
+    Freezing remaining freezable tasks ... completed (elapsed 0.001 seconds)
+    printk: Suspending console(s) (use no_console_suspend to debug)
+    NVRM: GPU 0000:84:00.0: PreserveVideoMemoryAllocations module parameter is set.
+          System Power Management attempted without driver procfs suspend interface.
+    NVRM: GPU 0000:83:00.0: <same>
+    nvidia 0000:84:00.0: PM: pci_pm_suspend(): nv_pmops_suspend [nvidia] returns -5
+    nvidia 0000:83:00.0: PM: pci_pm_suspend(): nv_pmops_suspend [nvidia] returns -5
+    nvidia 0000:84:00.0: PM: failed to suspend async: error -5
+    nvidia 0000:83:00.0: PM: failed to suspend async: error -5
+    serial 00:01: disabled
+    sd 4:0:0:0: [sdc] Synchronizing SCSI cache   (and six more block devices)
+    PM: Some devices failed to suspend, or early wake event detected
+    pci 0000:00:05.0: disabled boot interrupts on device [8086:6f28]
+    serial 00:01: activated
+    pci 0000:80:05.0: disabled boot interrupts on device [8086:6f28]
+    PM: resume devices took 0.021 seconds
+    OOM killer enabled.
+    Restarting tasks: Started / Done
+    random: crng reseeded on system resumption
+    PM: suspend exit
+
+## 4. What this proves and what it does not
+
+Proved:
+- pm_test armed at `devices` and read back `devices`: the parser defect of
+  commit 37feab9 is fixed on the live host.
+- the trap restored `none` on exit (`sm750-pmtest: pm_test readback after
+  cleanup: none`), so no level is left armed.
+- the verdict rule rejected the run for the right reasons: no completion lines
+  and changed error counters.
+- the driver survived untouched: 0.6.8 still loaded, vtcon1 bound, HDMI-A-1
+  connected at 1024x768 75 Hz, PANEL_CURRENT_LINE advancing (0x1c2 -> 0x146),
+  vblank counter 3923 -> 4331.
+
+Not proved, and the reason the cycle cannot complete on this host:
+- the SM750 suspend and resume callbacks were NEVER invoked. The journal holds
+  zero `sm750 ... pm: ` lines in the window, so the driver's PM logging at
+  src/sm750_drm.c:5476-5520 did not run at all.
+- the suspend aborted on two Tesla P100s (0000:83:00.0 and 0000:84:00.0) whose
+  nvidia driver returns -5 from nv_pmops_suspend because
+  PreserveVideoMemoryAllocations is set without the procfs suspend interface.
+  devices-level testing suspends every device in parallel and aborts on the
+  first failure, so one failing unrelated GPU blocks the whole cycle.
+
+## 5. Consequence
+
+P1 stays open and is now blocked by the host, not by the driver: any
+`pm_test=devices` cycle on this machine stops at nvidia before the SM750 is
+reached, and no allowable user-space action changes that (the two P100s must
+either stop failing system suspend or be unbound from nvidia for the duration,
+and the display GPU 0000:02:00.0 belongs to the owner's running session).
