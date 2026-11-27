@@ -1,0 +1,358 @@
+STRICT-BAR INVENTORY
+====================
+
+Artifact: docs/evidence/strict/01-strict-bar-inventory.txt
+Task: T3, docs/plan/20261127-sm750-strict-production/plan.yaml (read-only review task)
+Author: reviewer (independent, read-only; no src/, packaging/, tools/, tests/ or plan edit)
+Date: 2026-11-27T23:30Z
+Tree: HEAD 1c0a47a, working tree clean at time of audit
+Live module: sm750hdmidrm 0.6.10, srcversion 6DA22404EEA85B6D6535912, kernel.dmesg_restrict=0
+Documents audited: docs/DEFECTS.md (2015 lines), docs/evidence/EVIDENCE-GAPS.md (794),
+docs/TEST-STRATEGY.md (1275), docs/ROOT-ACTIONS.md (2298), docs/PACKAGING-RPM.md (673),
+README.md (1140), docs/ACCEPTANCE-REPORT.md (692).
+
+Tag convention, used throughout:
+  [F] measured during this audit, command or file named in the line
+  [I] inference drawn from files that exist in this tree
+  [A] assumption, stated as an assumption, not evidence
+A claim is "unsupported" here when no committed file under docs/evidence/ supports it,
+or when the file a document cites does not exist. A claim is "contradicted" when a
+later committed capture or this tree's src/ shows the opposite.
+
+1. VERDICT AGAINST THE STRICT BAR
+---------------------------------
+The owner rejected the "usable with three limitations" bar (plan objective,
+docs/plan/20261127-sm750-strict-production/plan.yaml:2). The nine elements below are
+taken from that objective line. No element may be graded met on a limitation list.
+
+| # | Strict-bar element | Verdict | Evidence today | Closed by |
+|---|---|---|---|---|
+| 1 | A65 cause captured (stack, or evidenced unobtainability) and named | UNMET | docs/evidence/runtime/47-hot-reload-hang.txt (wedge, no stack, dmesg_restrict=1), docs/evidence/a65/01-teardown-analysis.txt (three candidate orderings, no attribution), docs/DEFECTS.md:149 "blocked function is NOT identified", docs/evidence/runtime/54-a65-trace-mitigated-reload.txt (guard path works, A65 path not forced) | T4 (gate), T8 (reproduction), T9 (remedy) |
+| 2 | GAP-B8 recurrence analysis: attempt/retry/bus-recovery/final-failure counters readable by uid 1000, plus a written recurrence signature | UNMET | docs/evidence/gap-b8/02-counter-design.txt is a design document only; no counter of any kind exists in src/ at 0.6.10 [F: grep for attempt/retry/bus_recovery/final_failure finds only src/sii902x.c:1106, an unrelated DDC block loop]; docs/evidence/gap-b8/01-stage-instrumentation.txt is a 2026-11-19 transcript | T5 (counters), T7 (0.6.11 installed) |
+| 3 | 24-48 h soak with a machine-readable verdict | UNMET | docs/evidence/soak/ does not exist [F: ls docs/evidence]; no sample file, no verdict.json, no soak transcript anywhere in the tree | T6 (helper), T12 (run) |
+| 4 | Defect closure | UNMET | 67 rows at docs/DEFECTS.md:86-152; A65 remains S1 open (docs/DEFECTS.md:149). A53/A54 are S2 and are platform limits, see section 4 | T9 closes A65; T13 grades the rest |
+| 5 | Gap closure | PARTIAL | docs/evidence/EVIDENCE-GAPS.md: B1 CLOSED (:39-118), B2 CLOSED (:120-237), B4 CLOSED (:400-527), B5 CLOSED (:529-559), B6 CLOSED, B7 CLOSED (:575-690); B3 PARTIAL with the CRC half CLOSED at :361-391; B8 open (:694-771) | T5, T12 close B8; B3 stays out of scope (section 4) |
+| 6 | Packaging | MET, with stale documentation | packaging/sm750hdmifb.spec:22/26/27 and packaging/sm750hdmifb-tools.spec:21/22 at Version 0.6.10, dkms.conf:3 PACKAGE_VERSION="0.6.10"; docs/evidence/builds/26-audit-release.log, 27-source-archive-manifest.log, 28-static-determinism.log; docs/ROOT-ACTIONS.md:2144-2145 records dnf install and dnf remove CLOSED | no task needed; docs/PACKAGING-RPM.md is repaired by T14 |
+| 7 | Kernel coverage | UNMET for a strict bar | runtime evidence exists only on 7.3.4-100 and 7.3.5-100 [F: /sys/module/sm750hdmidrm/srcversion matches docs/ROOT-ACTIONS.md:1211-1384 capture]; 4 DKMS kernels built, 9 offline build combos; docs/TEST-STRATEGY.md:1115-1117 "no kernel in the matrix was booted with the newly built module"; docs/TEST-STRATEGY.md:1105-1107 headers for 6.18, 7.0, 7.1 absent | T11 (regression matrix) |
+| 8 | Documentation | UNMET | 45 stale 0.6.4 references in docs/PACKAGING-RPM.md, 13 stale 0.6.9 claims in README.md, 39 stale 0.6.0 references in docs/ACCEPTANCE-REPORT.md, three nonexistent or misnamed evidence paths, four internal count contradictions. Sections 2 and 3 | T14 (doc actualization), T13 (report rewrite) |
+| 9 | Platform limits stated as limits, with proofs, not as a limitation list | PARTIAL | A53 and A54 both carry a committed proof (docs/evidence/runtime/43-plasma-x11.txt, docs/evidence/runtime/44-production-readiness-review.txt section 4, docs/evidence/runtime/51-lastclose-open-count.txt), so the limit is evidenced; but README.md:169-204 and docs/ACCEPTANCE-REPORT.md:458-469 still present them inside a "usable with limitations" list, which is the bar the owner rejected | T13 (out-of-scope statements, PASS/GAP/OUT-OF-SCOPE per claim) |
+
+Reading of the table: six of nine elements are open. Elements 6 and 9 have evidence but
+their documents do not state them at the strict bar; element 5 is closed for six of eight
+gaps. Nothing in this tree supports a "strict production" verdict today.
+
+2. CLAIMS WITH NO SUPPORTING EVIDENCE FILE, PER DOCUMENT
+--------------------------------------------------------
+Counts: DEFECTS 6, EVIDENCE-GAPS 5, TEST-STRATEGY 7, ROOT-ACTIONS 7, PACKAGING-RPM 6,
+README 9, ACCEPTANCE-REPORT 7. Total 47. Each entry is document:line.
+
+2.1 docs/DEFECTS.md (6)
+D1. :4-5 "plus the forty-two found later". No file. Contradicted: the enumerable ids
+    after A30 are A32-A68, so the late-defect count is 43, not 42 [F: 67 table rows,
+    A01-A30 plus A32-A68, listed by grep of "^| A[0-9][0-9] |"].
+D2. :59 cites docs/evidence/runtime/47-hot-reload-wedge.txt. The file does not exist;
+    the capture is docs/evidence/runtime/47-hot-reload-hang.txt [F: ls].
+D3. :107 (A23) "it runs 17" make check commands, with "count re-verified". Contradicted
+    by the Makefile check recipe, which has 18 command lines [F: sed of the check target],
+    and by docs/TEST-STRATEGY.md:911-917.
+D4. :137 (A53) the file metadata of /etc/environment (root:root, 0644, 821 bytes, mtime
+    2026-11-23 13:20:32). The only cited file, docs/evidence/runtime/43-plasma-x11.txt,
+    is a session transcript; uid 1005 cannot stat /etc/environment, so this sub-claim is
+    restated, not captured [I]. The behavioural half of A53 is captured.
+D5. :86-108 the evidence column of rows A02-A24 cites bare transcript numbers ("01",
+    "07", "10") that resolve to a path only through a convention stated elsewhere. Not
+    unsupported, but unresolvable from the row [F]. Reported as ambiguity.
+D6. :137-138 A53/A54 rows state dispositions "S2" and "structural, no driver remedy"
+    without citing the review that assigned the severity. The behavioural proofs are
+    cited; the severity judgement is not [I].
+
+2.2 docs/evidence/EVIDENCE-GAPS.md (5)
+E1. :753 states that the next GAP-B8 occurrence prints
+    "failed to enable HDMI mode: -110 at stage <name> (commit finished, event consumed)".
+    Contradicted: src/sm750_drm.c:4254-4257 prints "(pipe left down; commit event not
+    armed)" since commit 8e4e09f (0.6.8) [F].
+E2. :781 (B8 summary row) repeats the same promise, and :766-771 states the instrumented
+    build "has not been loaded (root-only)". Contradicted: 0.6.10 is loaded on this host
+    [F], with the stage-name format in place, and docs/evidence/runtime/54-a65-trace-
+    mitigated-reload.txt records sixteen marks from a reload.
+E3. :781 (B3 summary row) states readback and CRC "have no path on this host at any
+    privilege level ... no get_crc_sources in the driver". Contradicted twice over: by
+    this document's own :361-391 (CRC half CLOSED, docs/evidence/runtime/26-test-card-
+    crc-fix.txt and 28-dangling-kernel-link.txt), and by src/sm750_drm.c:4456
+    (".get_crc_sources" registered) [F].
+E4. :694-771 offers no counter evidence for B8 despite the plan's strict bar requiring
+    a recurrence signature; the 1-in-205-206 rate at :694-720 rests on one captured hit
+    (docs/evidence/runtime/09-hdmi-minus-110.txt) and the denominator is not re-derivable
+    from a committed sample file [I].
+E5. :39-118 closes GAP-B1 while :93 of the same section records the helper printing
+    "WARNING size is 49152, expected 65536". The document explains it at :98 as a stale
+    EXPECT constant, so the closing claim rests on a rerun after the v3 helper refresh;
+    the closing sentence itself (:113-118) does not say so [I]. Should name the v3 run.
+
+2.3 docs/TEST-STRATEGY.md (7)
+T1. :114-147 and :930-934 state the check target "contains 17 command lines" from
+    "Makefile:30-48". Contradicted: 18 commands [F], which the same document concedes at
+    :911-917. Section 10 (:1259-1275) resolves the conflict in favour of 17, i.e. against
+    the tree.
+T2. :942 the recipe transcript row prints "Release version consistency checks passed:
+    0.5.9". Presented as the current recipe record; 0.5.9 is seven releases behind.
+T3. :591 (S16 sysfs gate) cites docs/evidence/runtime/31-sysfs-attributes.txt. The file
+    does not exist and runtime/ holds no 31-* file [F].
+T4. :85-113 (S18) records KUnit as NOT YET OBSERVED. Contradicted by
+    docs/ROOT-ACTIONS.md:977-986 (all 21 DRM KUnit suites ran, 0 failures, 8.7 s,
+    docs/evidence/runtime/33-kunit-and-oops-sweep.txt) and by README.md:1089.
+T5. :1125 (section 7) "the instrumented module has not been loaded (root-only)". Stale:
+    0.6.10 is loaded and instrumented [F], docs/evidence/runtime/54-...txt.
+T6. :1129 "No runtime test; no suspend was attempted". Stale: docs/ROOT-ACTIONS.md:1620-
+    1648 records a PASS on 2026-11-27T16:12Z with docs/evidence/runtime/49-pmtest-devices-
+    cycle.txt.
+T7. :1138 ".deb or RPM install/erase ... out of T4 scope". Stale: GAP-B7 is CLOSED
+    (docs/evidence/EVIDENCE-GAPS.md:575-690) and docs/ROOT-ACTIONS.md:2144-2145 records
+    dnf install and dnf remove done.
+
+2.4 docs/ROOT-ACTIONS.md (7)
+R1. :128-135 "76 distinct NOPASSWD command lines, measured 2026-11-25: 73 for this work
+    plus three that predate it". No evidence file. The count cannot be re-derived from
+    the document: the list at :138-215 carries dkms entries for 0.6.0 and 0.6.1 only and
+    dnf install for 0.6.0 through 0.6.2-3 only, while sections 3.12, 3.14, 3.15 and 3.17
+    say sm750-vt, sm750-pmtest, sm750-hang and sm750-pm-probe lines are installed and
+    none of those four appears in the list [F].
+R2. :2034 "The 19-entry allowlist in section 1" against :128 "76 distinct ... command
+    lines". Two incompatible statements about the privilege surface, no file for either.
+R3. :274 "All three are 0755 root:root". Contradicted by the document's own body, which
+    documents 15+ helpers across 3.1-3.17 with per-helper byte counts and digests [F].
+R4. :1139-1147 3.11 presents the installed /usr/local/sbin/sm750-headless as the input-
+    isolating helper, printing a 9223-byte digest 137c665b... while the source is 12020
+    bytes bc1d3a06.... The document does say the installed body is stale, but section
+    3.11's own PASS table at :1189-1203 is still presented as the helper's validation.
+    The runs it cites live in /mega/tmp/sm750/headless/, not under docs/evidence/, so the
+    PASS claims have no committed evidence file [F].
+R5. :1203 "Every mode has been exercised through the installed helper" with a per-mode
+    PASS column. Backed by scratch logs only; no docs/evidence/ file [F].
+R6. :1803-1811 states an A65-environment measurement of /sys/module/drm/parameters/debug
+    as "1 ... read as root on 2026-11-27", with no evidence file, while docs/evidence/
+    runtime/53-pm-probe-live-0.6.10.txt:140-143 records that the same value cannot be
+    proven from a transcript because the file is root-only [I]. One of the two is wrong;
+    neither cites a capture.
+R7. :2227-2298 3.17 documents pm_probe while the installed copy is stale (5390 bytes
+    ca5b5981...) against the repo file (167 lines, 986a441c...). Same failure as R4:
+    capability documented for a helper that is not the one installed.
+
+2.5 docs/PACKAGING-RPM.md (6)
+P1. The whole procedure is written for 0.6.4 (45 occurrences including :15, :17, :27,
+    :66, :194, :344-381, :612-619) while the specs in this tree are 0.6.10 [F]. An
+    operator following the document builds a release six versions behind.
+P2. :110-113 "the erase and reinstall steps remain GAP-B7". Stale; GAP-B7 CLOSED
+    (docs/evidence/EVIDENCE-GAPS.md:575-690, docs/ROOT-ACTIONS.md:2144-2145).
+P3. :368 "OK: planted controls: 7 rejected" contradicts the document's own list of eight
+    plant_* lines at :354-360 and its own conclusion at :381 "8 planted controls
+    rejected" [F].
+P4. :537-543 "expected to build on EL9" with no file and no run; an expectation presented
+    inside a packaging procedure.
+P5. :371 built object "366136 bytes" is a 0.6.4 artifact presented in a current procedure;
+    docs/ACCEPTANCE-REPORT.md:37 states 321952 bytes for 0.6.0, so both numbers are
+    historical and neither describes the shipped 0.6.10 object [I].
+P6. :376 the SKIP record ("dkms remove ... -v 0.5.9 ... not in the sudoers allowlist")
+    is kept as a current limitation while docs/ROOT-ACTIONS.md row 10 and section 3.8
+    state that sm750-pkg replaced the per-version allowlist entries [F].
+
+2.6 README.md (9)
+N1. :77 "11252 lines of C and headers under src/". Measured 11564 (C only 9546) [F].
+N2. :78 "67, from A01 to A67". The table's ids run A01-A30 and A32-A68, so it is 67 rows
+    spanning A01-A68 with A31 absent by design [F].
+N3. :86 "22 documents under docs/". Measured 23 [F].
+N4. :69 "30 project gates of which 18 run in the default make check" against :80 "35
+    gate scripts". Internal contradiction; 35 check scripts exist [F].
+N5. :410-450 an sm750-smi transcript with driver 0.6.4 and srcversion 53463BAE... shown
+    as the live output of the shipped tool; the module on this host is 0.6.10 [F].
+N6. :650-669 the boot-message table is stated to be what "appears on every boot of the
+    reference host" with no evidence file, and it teaches the pre-0.6.8 wording of the
+    GAP-B8 line ("the commit is completed and the atomic state stays consistent") which
+    src/sm750_drm.c:4254-4257 no longer prints [F].
+N7. :849-852 "weston and cage run inside a private mount namespace whose /dev/input is an
+    empty tmpfs" is stated as delivered behaviour. Contradicted: the installed helper is
+    the 9223-byte stale body with no input isolation (docs/ROOT-ACTIONS.md:1139-1147) [F].
+    This is the most serious README finding: a security property the artifact lacks.
+N8. :1089 the check-kunit row says the suites "print only `kunit: disabled` ... so the
+    gate skips". Contradicted by docs/ROOT-ACTIONS.md:977-986 and by docs/TEST-STRATEGY.md
+    S18, which disagree with each other and with this line [F].
+N9. :164-167 "6 PASS, 0 FAIL, 1 GAP" republished as the current state of a 0.6.10 tree
+    from a report graded at 0.6.0 (docs/ACCEPTANCE-REPORT.md:20, HEAD 2f0d48b).
+
+2.7 docs/ACCEPTANCE-REPORT.md (7)
+A1. :20 "6 PASS, 0 FAIL, 1 GAP" and :28-33 "No criterion failed in the sense of a claim
+    contradicted by an artefact". Two of the graded claims are now contradicted:
+    :43 AC-5 "17 recipe commands" (18 today) and :40 AC-2 "30 rows after A29 and A30"
+    (67 rows today) [F].
+A2. :41 and :367 "`grep -c 'get_crc_sources' src/*.c src/*.h` -> 0 - the driver registers
+    no CRC source". Contradicted: src/sm750_drm.c:3482 defines sm750_crtc_get_crc_sources,
+    :4456 registers .get_crc_sources [F].
+A3. :362 "the :19 NOPASSWD entries" against docs/ROOT-ACTIONS.md:128 "76 distinct
+    command lines". No file for either count.
+A4. :373-377 AC-3 tier 4 quotes "48 nonzero bytes of 8294400" and the report states it
+    has no evidence file. Correctly self-declared, still an unsupported claim.
+A5. :399-404 AC-6 "73 files" archive count; the current payload is 115 files
+    (docs/ACCEPTANCE-REPORT.md itself records 115 at :40) [I].
+A6. :458-469 residual risks are a limitation list, including GAP-B8 as "-110
+    unidentified" and the reboot hazard after erase; the owner rejected this bar.
+A7. :654-690 the addenda count as the report's hardware observation, but :683 records
+    "The 50 cycles were driven manually" and :690 that zero fault lines lowers but does
+    not exclude a failure rate. The report is graded on manual cycles, which is not the
+    soak the strict bar asks for.
+
+3. STALE VERSION REFERENCES AND STATEMENTS CONTRADICTED BY LATER EVIDENCE
+-------------------------------------------------------------------------
+3.1 Version distribution per document [F: grep -o '0\.6\.[0-9]\+' | sort | uniq -c]
+docs/PACKAGING-RPM.md    0.6.4 x45, 0.6.2 x9, 0.6.1 x4, 0.6.0 x3, 0.6.10 x0
+README.md                0.6.9 x13, 0.6.7 x4, 0.6.4 x4, 0.6.5 x2, 0.6.0 x2, 0.6.2 x1
+docs/ACCEPTANCE-REPORT.md 0.6.0 x39 only
+docs/evidence/EVIDENCE-GAPS.md 0.6.0 x33
+docs/TEST-STRATEGY.md    0.6.0 x15, 0.6.5 x7, 0.6.9 x2
+docs/ROOT-ACTIONS.md     0.6.10 x5 (newest sections), 0.6.2 x31, 0.6.0 x19 (historical)
+docs/DEFECTS.md          historical, acceptable: rows describe pre-fix code by design
+Truth for comparison: packaging/sm750hdmifb.spec:26, packaging/sm750hdmifb-tools.spec:21,
+dkms.conf:3, /sys/module/sm750hdmidrm/version all read 0.6.10.
+
+Pre-0.6.10 references that misdescribe the shipped artifact (not merely historical):
+S1. docs/evidence/EVIDENCE-GAPS.md:753 and :781  "(commit finished, event consumed)"
+S2. docs/evidence/gap-b8/01-stage-instrumentation.txt:57-60 quotes
+    "src/sm750_drm.c:3314-3316" and the same consumed-event string; the current site is
+    src/sm750_drm.c:4254-4257 and the string changed in 8e4e09f (0.6.8)
+S3. README.md:650-669 the same old string presented as current boot output
+S4. README.md:9-14, :29, :145-147, :151-162 "Current release 0.6.9", :219, :251-257
+S5. docs/PACKAGING-RPM.md: every procedure path (P1 above)
+S6. docs/TEST-STRATEGY.md:942 the recipe transcript printing 0.5.9
+S7. docs/ROOT-ACTIONS.md:1139-1147 and :2227-2298 installed helpers presented as current
+    while the installed digests are the stale bodies
+S8. docs/ACCEPTANCE-REPORT.md:41/:367 get_crc_sources -> 0 (false at 0.6.6+)
+S9. docs/DEFECTS.md:107 "it runs 17" (18 since the 2026-11-22 recipe change)
+S10. README.md:1089 "kunit: disabled" (KUnit runs for real per ROOT-ACTIONS:977-986)
+
+Cleared, listed so that a later reader does not re-open it:
+C1. docs/DEFECTS.md:125/:848 "polled 0x3d every 25 ms for 2000 ms" describes the pre-fix
+    code truthfully; git show ddd8500^:src/sii902x.c contains the literal 2000/25 loop,
+    and the fix introduced SII902X_READY_BUDGET_MS 500 at src/sii902x.c:64 in the same
+    commit. The 2000 ms that survives in src/sii902x.c:74 is a different knob
+    (SII902X_DDC_GRANT_BUDGET_MS). Not a stale reference.
+    Excluded from the drift list against a competing claim: the 23:15Z T2 logbook
+    entry counts docs/DEFECTS.md:125 as drift against src/sii902x.c:64. It is not:
+    the row's defect column describes the pre-fix loop, and its own fix column
+    already says "polls a 500 ms budget (src/sii902x.c:62-64)". T14 should not
+    "correct" that row.
+C2. docs/evidence/EVIDENCE-GAPS.md:93-98 the B1 size warning is explained in place as a
+    stale EXPECT constant, so the CLOSED verdict is not a defect.
+C3. docs/ROOT-ACTIONS.md:2195 names docs/evidence/scanout/07-crc-debugfs-run.txt as a
+    prospective store path, not as a capture. Not a broken citation.
+
+4. OWNER-LEVEL ITEMS SEPARATED FROM DRIVER-LEVEL ITEMS
+------------------------------------------------------
+Owner-level, no driver remedy. These belong in the acceptance report as explicit
+out-of-scope statements with their proofs, not in a limitations list.
+O1. A53 (docs/DEFECTS.md:137). Cause lives in /etc/environment, outside the tree:
+    KWIN_DRM_DEVICES points at the NVIDIA card for every login, and kwin_x11 crash-loops
+    before it draws. Proof docs/evidence/runtime/43-plasma-x11.txt plus docs/PLASMA-X11.md:
+    the session log carries four KCrash lines, and a session that clears the variable runs
+    with zero crashing lines. The file is unreadable and unwritable for uid 1005 [A: not
+    re-read in this audit, by design of the read-only rule]. Owner action: edit or remove
+    the NVIDIA lines for this card's sessions.
+O2. A54 (docs/DEFECTS.md:138). Structural, no driver remedy: the DRM core disables the
+    CRTC on last framebuffer close (upstream drivers/gpu/drm/drm_framebuffer.c:1000-1093),
+    and the fbdev last-close restore never commits although fb_set_par works (upstream
+    drivers/gpu/drm/drm_fbdev_helper.c:1199-1228). Proof docs/evidence/runtime/
+    44-production-readiness-review.txt section 4 (PANEL_DISPLAY_CTRL 0x0f010105 ->
+    0x0f012001, raster frozen) and docs/evidence/runtime/51-lastclose-open-count.txt
+    (drm_lastclose absent from 286821 kernel lines, open_count never reaching 0).
+    The shipped mitigation is the helper's vt_restore(), which the owner invokes.
+O3. The root-only observation routes are still owner actions, and three of them gate
+    evidence this audit found missing: docs/ROOT-ACTIONS.md:51 (row 8, proposed: rebuild,
+    reload and run tests/check-scanout-crc.sh once as root, which would close the GAP-B3
+    readback/CRC half), :52 (row 12, proposed: VFIO bind, which "does not close P1"), and
+    :58 (row 14, proposed: install sm750-hang and run capture after the next wedge, the
+    route to the A65 stack). None can be done by an agent without a root credential.
+O4. The installed console helpers are older than the tree and only the owner can install
+    the current bodies: docs/ROOT-ACTIONS.md:1143-1150 states the installed
+    /usr/local/sbin/sm750-headless "must be refreshed" with sudo install, after which the
+    digest must read bc1d3a06... and the size 12020, and notes that the static gate
+    "cannot see /usr/local/sbin". :58 (row 15) records the same for sm750-pm-probe
+    ("done; refresh outstanding"), and :2290-2298 states what a pm_probe pass does and
+    does not prove.
+
+Driver-level, closed by a plan task.
+L1. A65 (docs/DEFECTS.md:149, detail :1746-1835). The wedge is in this module's unload
+    path; the candidate orderings are inside sm750_pci_remove() (src/sm750_drm.c:
+    5446-5457). T4 adds the gate, T8 captures the stack under one owner-approved reboot,
+    T9 remedies.
+L2. GAP-B8 (docs/evidence/EVIDENCE-GAPS.md:694-771). The -110 comes from one of five
+    fallible calls inside sm750_program_mode(); the counter set in
+    docs/evidence/gap-b8/02-counter-design.txt names the calls. T5, T7.
+L3. The soak (T6, T12) is a driver-level observation duty: it measures wedge, panel loss
+    and fault lines of this module under load.
+L4. Kernel coverage (T11) is driver-level: it is about this module building and loading
+    across 6.17-7.4.
+
+5. CLAIMS THAT EXCEED THE EVIDENCE (ADVERSARIAL)
+------------------------------------------------
+X1. README.md:849-852 asserts an input-isolation property (private mount namespace, empty
+    /dev/input tmpfs) for a helper whose installed body does not contain it. The claim is
+    about a security boundary and is false for the artifact in the tree. Indefensible as
+    written; the honest sentence is "the source has the isolation; the installed helper
+    does not and needs the owner's refresh".
+X2. README.md:164-167 plus :169-204 is the rejected bar, republished: a 6 PASS/0 FAIL/1
+    GAP grade from 0.6.0 followed by a seven-item limitation list including GAP-B8 and
+    A65. The owner rejected exactly this construction. A strict-bar statement must say
+    which element is unmet and which task closes it.
+X3. docs/evidence/EVIDENCE-GAPS.md:753, :781 and README.md:650-669 promise a future
+    diagnostic string that the shipped source no longer prints. A recurrence analysis
+    built on the wrong string wastes the next occurrence.
+X4. docs/ACCEPTANCE-REPORT.md:20 "No criterion failed in the sense of a claim contradicted
+    by an artefact" is now false on its own terms (A1, A2 above). The sentence was true at
+    2f0d48b and is being read today.
+X5. docs/ROOT-ACTIONS.md:128-135 is the single measurement of the host's privilege surface,
+    has no evidence file, and is contradicted by the document's own helper inventory
+    (R1, R2). A 76-line measurement that cannot be reproduced is not a measurement.
+X6. docs/ROOT-ACTIONS.md:1189-1203 grades "every mode" of two console helpers as PASS on
+    the strength of scratch logs under /mega/tmp/sm750/, which are neither committed nor
+    reproducible; AGENTS.md is explicit that a claim without an evidence file is a gap.
+X7. docs/TEST-STRATEGY.md is titled as the test record yet two of its section 7 rows
+    (:1125 B8 not loaded, :1129 suspend untested) are contradicted by later captures, and
+    its section 1 count contradicts its own section 10. Its authority as a record is
+    therefore per-row, not document-wide, and the strict bar cannot be graded from it.
+X8. docs/PACKAGING-RPM.md presents a 0.6.4 procedure as the packaging record for a 0.6.10
+    tree, including a GAP-B7 statement that the tree has since closed. Following it
+    produces an unshipped build.
+X9. docs/ACCEPTANCE-REPORT.md:654-690 grades hardware observation on 50 manually driven
+    cycles and says so at :683; README.md:995-1000 then cites "30 cycles, 95 enable
+    events" as the restore proof. Manual cycles cannot stand in for the 24-48 h soak the
+    strict bar requires, and they do not exercise the automatic last-close path at all
+    (that is A54).
+X10. No document anywhere states the thermal or duty-cycle limit of a soak on this
+     hardware, and docs/TEST-STRATEGY.md:1129 records that no suspend/resume had been
+     attempted when it was written. A 24-48 h soak has never been run on this host; every
+     existing longevity figure is minutes (kmscube 5.07 s, 50 manual cycles).
+
+6. COUNTS AND KEY FIGURES USED ABOVE
+------------------------------------
+- Defect rows: 67 (A01-A30, A32-A68); header says 42 late findings, actual 43.
+- Gate scripts: 35 (tests/check-*.sh); make check recipe: 18 command lines.
+- Evidence files: 62 runtime, 28 build, 14 packaging (8 direct + 6 under packaging/0.5.9).
+- Documents under docs/: 23 .md.
+- src/ size: 11564 lines across *.c and *.h (9546 C only).
+- Broken or absent evidence paths: 3 (docs/DEFECTS.md:59, docs/TEST-STRATEGY.md:591,
+  docs/ROOT-ACTIONS.md:2195 prospective).
+- Evidence directories: a65, audit, baseline, builds, gap-b8, packaging, review, runtime,
+  scanout, vbios-re. No soak, no strict before this file.
+
+7. WHAT THIS FILE DOES NOT COVER
+---------------------------------
+- It does not re-derive hardware behaviour. No card access, no root, no console helper
+  was used; every hardware statement above is traced to a committed transcript.
+- It does not open /etc/environment; A53's metadata claim is reported as restated, not
+  verified (D4).
+- It does not grade the plan itself. T3 is a review of documents against evidence; the
+  plan's own task ordering is reviewed by the orchestrator.
+- It does not measure duration. A 24-48 h soak cannot be established by reading files;
+  section 1 element 3 is UNMET because no soak transcript exists, not because a soak
+  transcript is short.
+- Line numbers refer to HEAD 1c0a47a. T14's edit of these documents will move them.
+
+END OF INVENTORY

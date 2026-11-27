@@ -4884,3 +4884,51 @@ action: install the helper, then run it only with him present.
 - Outcome: design complete; no counter exists in the loaded 0.6.10 build, so
   every expected value in section 6 is a specification to be checked against
   T5's implementation, not a measurement.
+
+### 2026-11-27T20:36Z | reviewer | strict-bar inventory: 47 unsupported claims, 6 of 9 strict-bar elements unmet
+
+- Task: T3 of `docs/plan/20261127-sm750-strict-production/plan.yaml`, read-only
+  review. HEAD `1c0a47a`, working tree clean. No src/, packaging/, tools/,
+  tests/ or plan edit; no root, no console helper, no card access. Host clock at
+  the time was `20:31Z` UTC (23:31 local, UTC+03:00); the neighbouring entries
+  stamped `23:12Z` and `23:20Z` carry local-clock values.
+- Files touched: `docs/evidence/strict/01-strict-bar-inventory.txt` (created,
+  358 lines) and this entry. Nothing else.
+- Evidence path: the file itself, section by section.
+- Outcome: the strict bar is not met today. 6 of 9 elements UNMET, 1 PARTIAL,
+  1 MET (packaging, whose documents are stale anyway), 1 PARTIAL (platform
+  limits). Unmet: A65 cause (T4/T8/T9), GAP-B8 counters and recurrence
+  signature (T5/T7), the 24-48 h soak (T6/T12) - `docs/evidence/soak/` does not
+  exist and no soak has ever been run on this host - defect closure (A65 still
+  S1 open at `docs/DEFECTS.md:149`), and kernel coverage (runtime evidence only
+  on 7.3.4-100 and 7.3.5-100; `docs/TEST-STRATEGY.md:1115-1117`).
+- Counts: 47 claims with no supporting evidence file, per document - DEFECTS 6,
+  EVIDENCE-GAPS 5, TEST-STRATEGY 7, ROOT-ACTIONS 7, PACKAGING-RPM 6, README 9,
+  ACCEPTANCE-REPORT 7. Three cited evidence paths do not exist:
+  `docs/DEFECTS.md:59` (`47-hot-reload-wedge.txt`), `docs/TEST-STRATEGY.md:591`
+  (`runtime/31-sysfs-attributes.txt`), and `docs/ROOT-ACTIONS.md:2195`
+  (prospective store path, not a capture).
+- Stale references: 45 `0.6.4` in `docs/PACKAGING-RPM.md` and none for the
+  shipped 0.6.10; 13 `0.6.9` release claims in `README.md`; 39 `0.6.0` in
+  `docs/ACCEPTANCE-REPORT.md`; the pre-0.6.8 `(commit finished, event consumed)`
+  string still taught at `docs/evidence/EVIDENCE-GAPS.md:753`, `:781`,
+  `docs/evidence/gap-b8/01-stage-instrumentation.txt:57-60` and
+  `README.md:650-669`; `get_crc_sources -> 0` at `docs/ACCEPTANCE-REPORT.md:41`
+  and `:367` is false since 0.6.6 (`src/sm750_drm.c:4456`).
+- Indefensible as written: `README.md:849-852` claims an input isolation
+  (private mount namespace, empty `/dev/input` tmpfs) that the installed helper
+  does not contain (`docs/ROOT-ACTIONS.md:1143-1150`, stale 9223-byte body);
+  `README.md:164-204` republishes the 6 PASS/0 FAIL/1 GAP grade plus a
+  seven-item limitation list, which is the bar the owner rejected;
+  `docs/ROOT-ACTIONS.md:128-135` (76 NOPASSWD lines) has no evidence file and is
+  contradicted by the document's own inventory; `docs/ROOT-ACTIONS.md:1189-1203`
+  grades every console-helper mode PASS on scratch logs under `/mega/tmp/sm750/`.
+- Disagreement recorded, not edited: the 23:15Z T2 entry counts
+  `docs/DEFECTS.md:125` (2000 ms readiness budget) as drift against
+  `src/sii902x.c:64` (500 ms). It is not drift. `git show ddd8500^:src/sii902x.c`
+  contains a literal `for (elapsed = 0; elapsed < 2000; elapsed += 25)`, the row
+  describes that pre-fix loop, and the row's own fix column cites the 500 ms
+  constant. The 2000 ms that survives is `SII902X_DDC_GRANT_BUDGET_MS` at
+  `src/sii902x.c:74`. T14 should leave the row alone.
+- Not done by this task: no commit and no push; the orchestrator commits this
+  file and this entry and runs `git push origin main`.
