@@ -1,5 +1,5 @@
-# utc: 2026-11-27T11:00:21Z
-# running kernel: 7.3.4-100.fc43.x86_64
+# utc: 2026-11-27T15:57:15Z
+# running kernel: 7.3.5-100.fc43.x86_64
 # uid: 1005
 # command: rpmbuild -ba --nodeps --define '_topdir /mega/tmp/sm750/t6/rpmbuild' /home/coder/sm750hdmifb/packaging/sm750hdmifb.spec
 # workdir: /home/coder/sm750hdmifb
@@ -11,23 +11,23 @@ libdrm: pkg-config finds libdrm (PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/l
 Building target platforms: noarch
 Building for target noarch
 setting SOURCE_DATE_EPOCH=1795737600
-Executing(%mkbuilddir): /bin/sh -e /var/tmp/rpm-tmp.17V8P7
-Executing(%prep): /bin/sh -e /var/tmp/rpm-tmp.oekxi6
+Executing(%mkbuilddir): /bin/sh -e /var/tmp/rpm-tmp.r9hjFu
+Executing(%prep): /bin/sh -e /var/tmp/rpm-tmp.aEzydc
 + umask 022
-+ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build
-+ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build
-+ rm -rf sm750hdmifb-0.6.9
-+ /usr/lib/rpm/rpmuncompress -x /mega/tmp/sm750/t6/rpmbuild/SOURCES/sm750hdmifb-0.6.9-source.tar.gz
++ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build
++ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build
++ rm -rf sm750hdmifb-0.6.10
++ /usr/lib/rpm/rpmuncompress -x /mega/tmp/sm750/t6/rpmbuild/SOURCES/sm750hdmifb-0.6.10-source.tar.gz
 + STATUS=0
 + '[' 0 -ne 0 ']'
-+ cd sm750hdmifb-0.6.9
++ cd sm750hdmifb-0.6.10
 + /usr/bin/chmod -Rf a+rX,u+w,g-w,o-w .
 + RPM_EC=0
 ++ jobs -p
 + exit 0
-Executing(%build): /bin/sh -e /var/tmp/rpm-tmp.IDrXNE
+Executing(%build): /bin/sh -e /var/tmp/rpm-tmp.JhWe9J
 + umask 022
-+ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build
++ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build
 + CFLAGS='-O2 -flto=auto -ffat-lto-objects -fexceptions -g -grecord-gcc-switches -pipe -Wall -Werror=format-security -Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3 -Wp,-D_GLIBCXX_ASSERTIONS -specs=/usr/lib/rpm/redhat/redhat-hardened-cc1 -fstack-protector-strong -specs=/usr/lib/rpm/redhat/redhat-annobin-cc1  -m64 -march=x86-64 -mtune=generic -fasynchronous-unwind-tables -fstack-clash-protection -fcf-protection -mtls-dialect=gnu2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer  '
 + export CFLAGS
 + CXXFLAGS='-O2 -flto=auto -ffat-lto-objects -fexceptions -g -grecord-gcc-switches -pipe -Wall -Werror=format-security -Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3 -Wp,-D_GLIBCXX_ASSERTIONS -specs=/usr/lib/rpm/redhat/redhat-hardened-cc1 -fstack-protector-strong -specs=/usr/lib/rpm/redhat/redhat-annobin-cc1  -m64 -march=x86-64 -mtune=generic -fasynchronous-unwind-tables -fstack-clash-protection -fcf-protection -mtls-dialect=gnu2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer  '
@@ -48,18 +48,18 @@ Executing(%build): /bin/sh -e /var/tmp/rpm-tmp.IDrXNE
 + export CC
 + CXX=g++
 + export CXX
-+ cd sm750hdmifb-0.6.9
++ cd sm750hdmifb-0.6.10
 + RPM_EC=0
 ++ jobs -p
 + exit 0
-Executing(%install): /bin/sh -e /var/tmp/rpm-tmp.0JP4sg
+Executing(%install): /bin/sh -e /var/tmp/rpm-tmp.tgnk30
 + umask 022
-+ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build
-+ '[' /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT '!=' / ']'
-+ rm -rf /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT
-++ dirname /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT
-+ mkdir -p /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build
-+ mkdir /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT
++ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build
++ '[' /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT '!=' / ']'
++ rm -rf /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT
+++ dirname /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT
++ mkdir -p /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build
++ mkdir /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT
 + CFLAGS='-O2 -flto=auto -ffat-lto-objects -fexceptions -g -grecord-gcc-switches -pipe -Wall -Werror=format-security -Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3 -Wp,-D_GLIBCXX_ASSERTIONS -specs=/usr/lib/rpm/redhat/redhat-hardened-cc1 -fstack-protector-strong -specs=/usr/lib/rpm/redhat/redhat-annobin-cc1  -m64 -march=x86-64 -mtune=generic -fasynchronous-unwind-tables -fstack-clash-protection -fcf-protection -mtls-dialect=gnu2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer  '
 + export CFLAGS
 + CXXFLAGS='-O2 -flto=auto -ffat-lto-objects -fexceptions -g -grecord-gcc-switches -pipe -Wall -Werror=format-security -Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3 -Wp,-D_GLIBCXX_ASSERTIONS -specs=/usr/lib/rpm/redhat/redhat-hardened-cc1 -fstack-protector-strong -specs=/usr/lib/rpm/redhat/redhat-annobin-cc1  -m64 -march=x86-64 -mtune=generic -fasynchronous-unwind-tables -fstack-clash-protection -fcf-protection -mtls-dialect=gnu2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer  '
@@ -80,19 +80,19 @@ Executing(%install): /bin/sh -e /var/tmp/rpm-tmp.0JP4sg
 + export CC
 + CXX=g++
 + export CXX
-+ cd sm750hdmifb-0.6.9
-+ srcroot=/mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9
-+ install -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/usr/src/sm750hdmifb-0.6.9/src
-+ install -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/etc/modprobe.d
-+ install -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/etc/modules-load.d
-+ install -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/usr/share/X11/xorg.conf.d
-+ install -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/usr/lib/sm750hdmifb
-+ install -m 0644 /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/Makefile /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/README.md /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/LICENSE /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/dkms.conf /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/usr/src/sm750hdmifb-0.6.9/
-+ install -m 0644 /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/Makefile /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/Kconfig /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/ddk750.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/ddk750_chip.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/ddk750_chip.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/ddk750_display.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/ddk750_display.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/ddk750_hwi2c.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/ddk750_hwi2c.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/ddk750_mode.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/ddk750_mode.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/ddk750_power.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/ddk750_power.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/ddk750_reg.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/ddk750_swi2c.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/ddk750_swi2c.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/sii902x.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/sii902x.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/sm750_dither.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/sm750_dither.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/sm750_drm.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/sm750_drm_mode.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/src/sm750_drm_mode.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/usr/src/sm750hdmifb-0.6.9/src/
-+ install -m 0644 /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/packaging/sm750hdmidrm.conf /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/etc/modprobe.d/sm750hdmidrm.conf
-+ install -m 0644 /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/packaging/sm750hdmidrm.modules-load /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/etc/modules-load.d/sm750hdmidrm.conf
-+ install -m 0644 /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/packaging/20-sm750hdmidrm.conf /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/usr/share/X11/xorg.conf.d/20-sm750hdmidrm.conf
-+ install -m 0755 /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/packaging/write-xorg-config.sh /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/usr/lib/sm750hdmifb/write-xorg-config
++ cd sm750hdmifb-0.6.10
++ srcroot=/mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10
++ install -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/usr/src/sm750hdmifb-0.6.10/src
++ install -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/etc/modprobe.d
++ install -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/etc/modules-load.d
++ install -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/usr/share/X11/xorg.conf.d
++ install -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/usr/lib/sm750hdmifb
++ install -m 0644 /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/Makefile /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/README.md /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/LICENSE /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/dkms.conf /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/usr/src/sm750hdmifb-0.6.10/
++ install -m 0644 /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/Makefile /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/Kconfig /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/ddk750.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/ddk750_chip.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/ddk750_chip.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/ddk750_display.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/ddk750_display.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/ddk750_hwi2c.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/ddk750_hwi2c.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/ddk750_mode.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/ddk750_mode.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/ddk750_power.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/ddk750_power.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/ddk750_reg.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/ddk750_swi2c.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/ddk750_swi2c.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/sii902x.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/sii902x.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/sm750_dither.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/sm750_dither.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/sm750_drm.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/sm750_drm_mode.c /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/src/sm750_drm_mode.h /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/usr/src/sm750hdmifb-0.6.10/src/
++ install -m 0644 /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/packaging/sm750hdmidrm.conf /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/etc/modprobe.d/sm750hdmidrm.conf
++ install -m 0644 /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/packaging/sm750hdmidrm.modules-load /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/etc/modules-load.d/sm750hdmidrm.conf
++ install -m 0644 /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/packaging/20-sm750hdmidrm.conf /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/usr/share/X11/xorg.conf.d/20-sm750hdmidrm.conf
++ install -m 0755 /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/packaging/write-xorg-config.sh /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/usr/lib/sm750hdmifb/write-xorg-config
 + '[' '%{buildarch}' = noarch ']'
 + QA_CHECK_RPATHS=1
 + case "${QA_CHECK_RPATHS:-}" in
@@ -110,74 +110,74 @@ mangling shebang in /usr/lib/sm750hdmifb/write-xorg-config from /usr/bin/env bas
 + /usr/lib/rpm/redhat/brp-python-rpm-in-distinfo
 + env /usr/lib/rpm/redhat/brp-python-bytecompile '' 1 0 -j32
 + /usr/lib/rpm/redhat/brp-python-hardlink
-+ /usr/bin/add-determinism --brp -j32 /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT
++ /usr/bin/add-determinism --brp -j32 /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT
 Scanned 13 directories and 31 files,
                processed 0 inodes,
                0 modified (0 replaced + 0 rewritten),
                0 unsupported format, 0 errors
-Processing files: sm750hdmifb-0.6.9-1.fc43.noarch
-Executing(%doc): /bin/sh -e /var/tmp/rpm-tmp.Zi1vs0
+Processing files: sm750hdmifb-0.6.10-1.fc43.noarch
+Executing(%doc): /bin/sh -e /var/tmp/rpm-tmp.Laj534
 + umask 022
-+ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build
-+ cd sm750hdmifb-0.6.9
-+ DOCDIR=/mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/usr/share/doc/sm750hdmifb
++ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build
++ cd sm750hdmifb-0.6.10
++ DOCDIR=/mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/usr/share/doc/sm750hdmifb
 + export LC_ALL=C.UTF-8
 + LC_ALL=C.UTF-8
 + export DOCDIR
-+ /usr/bin/mkdir -p /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/usr/share/doc/sm750hdmifb
-+ cp -pr /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/README.md /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/usr/share/doc/sm750hdmifb
-+ cp -pr /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/LICENSE /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/usr/share/doc/sm750hdmifb
-+ cp -pr /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/docs/RELEASE-NOTES.md /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/usr/share/doc/sm750hdmifb
-+ cp -pr /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/docs/TESTING.md /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/usr/share/doc/sm750hdmifb
-+ cp -pr /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/sm750hdmifb-0.6.9/packaging/copyright /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT/usr/share/doc/sm750hdmifb
++ /usr/bin/mkdir -p /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/usr/share/doc/sm750hdmifb
++ cp -pr /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/README.md /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/usr/share/doc/sm750hdmifb
++ cp -pr /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/LICENSE /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/usr/share/doc/sm750hdmifb
++ cp -pr /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/docs/RELEASE-NOTES.md /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/usr/share/doc/sm750hdmifb
++ cp -pr /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/docs/TESTING.md /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/usr/share/doc/sm750hdmifb
++ cp -pr /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/sm750hdmifb-0.6.10/packaging/copyright /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT/usr/share/doc/sm750hdmifb
 + RPM_EC=0
 ++ jobs -p
 + exit 0
-Provides: config(sm750hdmifb) = 0.6.9-1.fc43 sm750hdmi-dkms = 0.6.9-1.fc43 sm750hdmidrm-rgb565-dither-dkms = 0.6.9-1.fc43 sm750hdmidrm-xrgb8888-dkms = 0.6.9-1.fc43 sm750hdmifb = 0.6.9-1.fc43
+Provides: config(sm750hdmifb) = 0.6.10-1.fc43 sm750hdmi-dkms = 0.6.10-1.fc43 sm750hdmidrm-rgb565-dither-dkms = 0.6.10-1.fc43 sm750hdmidrm-xrgb8888-dkms = 0.6.10-1.fc43 sm750hdmifb = 0.6.10-1.fc43
 Requires(interp): /bin/sh /bin/sh /bin/sh
 Requires(rpmlib): rpmlib(CompressedFileNames) <= 3.0.4-1 rpmlib(FileDigests) <= 4.6.0-1 rpmlib(PayloadFilesHavePrefix) <= 4.0-1
 Requires(post): /bin/sh dkms kmod
 Requires(preun): /bin/sh dkms
 Requires(posttrans): /bin/sh
 Requires: /usr/bin/bash
-Obsoletes: sm750hdmi-dkms < 0.6.9 sm750hdmidrm-rgb565-dither-dkms < 0.6.9 sm750hdmidrm-xrgb8888-dkms < 0.6.9
-Checking for unpackaged file(s): /usr/lib/rpm/check-files /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build/BUILDROOT
-Wrote: /mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-0.6.9-1.fc43.src.rpm
-Wrote: /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.9-1.fc43.noarch.rpm
-Executing(rmbuild): /bin/sh -e /var/tmp/rpm-tmp.tuniTo
+Obsoletes: sm750hdmi-dkms < 0.6.10 sm750hdmidrm-rgb565-dither-dkms < 0.6.10 sm750hdmidrm-xrgb8888-dkms < 0.6.10
+Checking for unpackaged file(s): /usr/lib/rpm/check-files /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build/BUILDROOT
+Wrote: /mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-0.6.10-1.fc43.src.rpm
+Wrote: /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.10-1.fc43.noarch.rpm
+Executing(rmbuild): /bin/sh -e /var/tmp/rpm-tmp.YRvsCx
 + umask 022
-+ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build
-+ test -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build
-+ /usr/bin/chmod -Rf a+rX,u+w,g-w,o-w /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build
-+ rm -rf /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.9-build
++ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build
++ test -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build
++ /usr/bin/chmod -Rf a+rX,u+w,g-w,o-w /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build
++ rm -rf /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-0.6.10-build
 + RPM_EC=0
 ++ jobs -p
 + exit 0
-# utc: 2026-11-27T11:00:23Z
-# running kernel: 7.3.4-100.fc43.x86_64
+# utc: 2026-11-27T15:57:18Z
+# running kernel: 7.3.5-100.fc43.x86_64
 # uid: 1005
 # command: rpmbuild -ba --nodeps --define '_topdir /mega/tmp/sm750/t6/rpmbuild' /home/coder/sm750hdmifb/packaging/sm750hdmifb-tools.spec
 # workdir: /home/coder/sm750hdmifb
 
 --- output ---
 setting SOURCE_DATE_EPOCH=1795737600
-Executing(%mkbuilddir): /bin/sh -e /var/tmp/rpm-tmp.zgIlp4
-Executing(%prep): /bin/sh -e /var/tmp/rpm-tmp.lJhJgR
+Executing(%mkbuilddir): /bin/sh -e /var/tmp/rpm-tmp.br9yMu
+Executing(%prep): /bin/sh -e /var/tmp/rpm-tmp.oWvcvt
 + umask 022
-+ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build
-+ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build
-+ rm -rf sm750hdmifb-0.6.9
-+ /usr/lib/rpm/rpmuncompress -x /mega/tmp/sm750/t6/rpmbuild/SOURCES/sm750hdmifb-0.6.9-source.tar.gz
++ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build
++ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build
++ rm -rf sm750hdmifb-0.6.10
++ /usr/lib/rpm/rpmuncompress -x /mega/tmp/sm750/t6/rpmbuild/SOURCES/sm750hdmifb-0.6.10-source.tar.gz
 + STATUS=0
 + '[' 0 -ne 0 ']'
-+ cd sm750hdmifb-0.6.9
++ cd sm750hdmifb-0.6.10
 + /usr/bin/chmod -Rf a+rX,u+w,g-w,o-w .
 + RPM_EC=0
 ++ jobs -p
 + exit 0
-Executing(%build): /bin/sh -e /var/tmp/rpm-tmp.qypKen
+Executing(%build): /bin/sh -e /var/tmp/rpm-tmp.xrJItT
 + umask 022
-+ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build
++ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build
 + CFLAGS='-O2 -flto=auto -ffat-lto-objects -fexceptions -g -grecord-gcc-switches -pipe -Wall -Werror=format-security -Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3 -Wp,-D_GLIBCXX_ASSERTIONS -specs=/usr/lib/rpm/redhat/redhat-hardened-cc1 -fstack-protector-strong -specs=/usr/lib/rpm/redhat/redhat-annobin-cc1  -m64 -march=x86-64 -mtune=generic -fasynchronous-unwind-tables -fstack-clash-protection -fcf-protection -mtls-dialect=gnu2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer  '
 + export CFLAGS
 + CXXFLAGS='-O2 -flto=auto -ffat-lto-objects -fexceptions -g -grecord-gcc-switches -pipe -Wall -Werror=format-security -Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3 -Wp,-D_GLIBCXX_ASSERTIONS -specs=/usr/lib/rpm/redhat/redhat-hardened-cc1 -fstack-protector-strong -specs=/usr/lib/rpm/redhat/redhat-annobin-cc1  -m64 -march=x86-64 -mtune=generic -fasynchronous-unwind-tables -fstack-clash-protection -fcf-protection -mtls-dialect=gnu2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer  '
@@ -198,7 +198,7 @@ Executing(%build): /bin/sh -e /var/tmp/rpm-tmp.qypKen
 + export CC
 + CXX=g++
 + export CXX
-+ cd sm750hdmifb-0.6.9
++ cd sm750hdmifb-0.6.10
 + pkg-config --exists libdrm
 ++ pkg-config --cflags libdrm
 ++ pkg-config --libs libdrm
@@ -206,14 +206,14 @@ Executing(%build): /bin/sh -e /var/tmp/rpm-tmp.qypKen
 + RPM_EC=0
 ++ jobs -p
 + exit 0
-Executing(%install): /bin/sh -e /var/tmp/rpm-tmp.PAr657
+Executing(%install): /bin/sh -e /var/tmp/rpm-tmp.0AFLbs
 + umask 022
-+ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build
-+ '[' /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build/BUILDROOT '!=' / ']'
-+ rm -rf /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build/BUILDROOT
-++ dirname /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build/BUILDROOT
-+ mkdir -p /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build
-+ mkdir /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build/BUILDROOT
++ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build
++ '[' /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build/BUILDROOT '!=' / ']'
++ rm -rf /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build/BUILDROOT
+++ dirname /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build/BUILDROOT
++ mkdir -p /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build
++ mkdir /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build/BUILDROOT
 + CFLAGS='-O2 -flto=auto -ffat-lto-objects -fexceptions -g -grecord-gcc-switches -pipe -Wall -Werror=format-security -Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3 -Wp,-D_GLIBCXX_ASSERTIONS -specs=/usr/lib/rpm/redhat/redhat-hardened-cc1 -fstack-protector-strong -specs=/usr/lib/rpm/redhat/redhat-annobin-cc1  -m64 -march=x86-64 -mtune=generic -fasynchronous-unwind-tables -fstack-clash-protection -fcf-protection -mtls-dialect=gnu2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer  '
 + export CFLAGS
 + CXXFLAGS='-O2 -flto=auto -ffat-lto-objects -fexceptions -g -grecord-gcc-switches -pipe -Wall -Werror=format-security -Wp,-U_FORTIFY_SOURCE,-D_FORTIFY_SOURCE=3 -Wp,-D_GLIBCXX_ASSERTIONS -specs=/usr/lib/rpm/redhat/redhat-hardened-cc1 -fstack-protector-strong -specs=/usr/lib/rpm/redhat/redhat-annobin-cc1  -m64 -march=x86-64 -mtune=generic -fasynchronous-unwind-tables -fstack-clash-protection -fcf-protection -mtls-dialect=gnu2 -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer  '
@@ -234,9 +234,9 @@ Executing(%install): /bin/sh -e /var/tmp/rpm-tmp.PAr657
 + export CC
 + CXX=g++
 + export CXX
-+ cd sm750hdmifb-0.6.9
-+ install -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build/BUILDROOT/usr/bin
-+ install -m 0755 tools/sm750-smi /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build/BUILDROOT/usr/bin/sm750-smi
++ cd sm750hdmifb-0.6.10
++ install -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build/BUILDROOT/usr/bin
++ install -m 0755 tools/sm750-smi /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build/BUILDROOT/usr/bin/sm750-smi
 + '[' '%{buildarch}' = noarch ']'
 + QA_CHECK_RPATHS=1
 + case "${QA_CHECK_RPATHS:-}" in
@@ -253,25 +253,25 @@ Executing(%install): /bin/sh -e /var/tmp/rpm-tmp.PAr657
 + /usr/lib/rpm/redhat/brp-python-rpm-in-distinfo
 + env /usr/lib/rpm/redhat/brp-python-bytecompile '' 1 0 -j32
 + /usr/lib/rpm/redhat/brp-python-hardlink
-+ /usr/bin/add-determinism --brp -j32 /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build/BUILDROOT
++ /usr/bin/add-determinism --brp -j32 /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build/BUILDROOT
 Scanned 3 directories and 1 files,
                processed 0 inodes,
                0 modified (0 replaced + 0 rewritten),
                0 unsupported format, 0 errors
-Reading /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build/SPECPARTS/rpm-debuginfo.specpart
-Processing files: sm750hdmifb-tools-0.6.9-1.fc43.x86_64
-Provides: sm750hdmifb-tools = 0.6.9-1.fc43 sm750hdmifb-tools(x86-64) = 0.6.9-1.fc43
+Reading /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build/SPECPARTS/rpm-debuginfo.specpart
+Processing files: sm750hdmifb-tools-0.6.10-1.fc43.x86_64
+Provides: sm750hdmifb-tools = 0.6.10-1.fc43 sm750hdmifb-tools(x86-64) = 0.6.10-1.fc43
 Requires(rpmlib): rpmlib(CompressedFileNames) <= 3.0.4-1 rpmlib(FileDigests) <= 4.6.0-1 rpmlib(PayloadFilesHavePrefix) <= 4.0-1
 Requires: libc.so.6()(64bit) libc.so.6(GLIBC_2.14)(64bit) libc.so.6(GLIBC_2.2.5)(64bit) libc.so.6(GLIBC_2.3.4)(64bit) libc.so.6(GLIBC_2.33)(64bit) libc.so.6(GLIBC_2.34)(64bit) libc.so.6(GLIBC_2.38)(64bit) libc.so.6(GLIBC_2.4)(64bit) libdrm.so.2()(64bit) rtld(GNU_HASH)
-Checking for unpackaged file(s): /usr/lib/rpm/check-files /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build/BUILDROOT
-Wrote: /mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-tools-0.6.9-1.fc43.src.rpm
-Wrote: /mega/tmp/sm750/t6/rpmbuild/RPMS/x86_64/sm750hdmifb-tools-0.6.9-1.fc43.x86_64.rpm
-Executing(rmbuild): /bin/sh -e /var/tmp/rpm-tmp.qBJJSJ
+Checking for unpackaged file(s): /usr/lib/rpm/check-files /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build/BUILDROOT
+Wrote: /mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-tools-0.6.10-1.fc43.src.rpm
+Wrote: /mega/tmp/sm750/t6/rpmbuild/RPMS/x86_64/sm750hdmifb-tools-0.6.10-1.fc43.x86_64.rpm
+Executing(rmbuild): /bin/sh -e /var/tmp/rpm-tmp.oFu120
 + umask 022
-+ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build
-+ test -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build
-+ /usr/bin/chmod -Rf a+rX,u+w,g-w,o-w /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build
-+ rm -rf /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.9-build
++ cd /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build
++ test -d /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build
++ /usr/bin/chmod -Rf a+rX,u+w,g-w,o-w /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build
++ rm -rf /mega/tmp/sm750/t6/rpmbuild/BUILD/sm750hdmifb-tools-0.6.10-build
 + RPM_EC=0
 ++ jobs -p
 + exit 0

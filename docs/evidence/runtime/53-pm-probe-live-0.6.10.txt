@@ -1,0 +1,144 @@
+0.6.10 on the host: reload from 0.6.9, pm_probe cycle, A67 fix confirmed live
+================================================================================
+
+Recorded:   2026-11-27, host clock 19:06-19:10
+Host:       Fedora 43, kernel 7.3.5-100.fc43.x86_64
+Device:     0000:01:00.0 Silicon Motion SM750 (126f:0750), driver sm750hdmidrm
+Locale:     the host prints month names in Russian; every transcript below was
+            transliterated to English month names so the file stays ASCII
+
+--------------------------------------------------------------------------------
+1. Why this file exists
+--------------------------------------------------------------------------------
+
+Two things were unproven after the 0.6.10 release:
+
+  * that the installed RPM and the DKMS module actually move from 0.6.9 to
+    0.6.10 on this host, and
+  * that the A67 fix in tools/sm750-pm-probe.sh reports a passing cycle as a
+    pass on live hardware, not only in the gate fixtures.
+
+Both are measured below.
+
+--------------------------------------------------------------------------------
+2. Precondition: the module refcount reached zero
+--------------------------------------------------------------------------------
+
+  $ sudo -n /usr/local/sbin/sm750-vt show
+  vtconsole:    /sys/class/vtconsole
+    vtcon0       bind=0 name=(S) VGA+
+    vtcon1       bind=1 name=(M) frame buffer device
+  target:       /sys/class/vtconsole/vtcon1
+    bind now:   1
+  module:       version=0.6.9 srcversion=67300D6D1C065017A0D1328 refcnt=0
+  active tty:   tty1
+  card:         /dev/dri/by-path/pci-0000:01:00.0-card -> /dev/dri/card0 inode 9:297
+  render:       /dev/dri/by-path/pci-0000:01:00.0-render -> /dev/dri/renderD128 inode 9:296
+  holders:      0 userspace processes hold the card
+
+The two chromium renderD128 holders recorded in evidence 51 were gone because
+the owner closed the browser, so the reload was possible without touching a
+process that belongs to him. A bound fbcon is not a pin: refcnt was 0 with
+bind=1, which matches the A65 finding that fbcon does not take a module
+reference.
+
+--------------------------------------------------------------------------------
+3. Packages: 0.6.10 built, then installed
+--------------------------------------------------------------------------------
+
+  $ ./tests/check-rpm-dkms.sh
+  RPM/DKMS checks passed: sm750hdmifb 0.6.10 (+ sm750hdmifb-tools
+  0.6.10/x86_64), sandbox built, 8 planted controls rejected, root-only steps
+  skipped
+
+  /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.10-1.fc43.noarch.rpm
+  /mega/tmp/sm750/t6/rpmbuild/RPMS/x86_64/sm750hdmifb-tools-0.6.10-1.fc43.x86_64.rpm
+
+Before this run the local build tree held only 0.6.9 (14:00), which is exactly
+why the owner's earlier install attempt changed nothing: sm750-pkg installs the
+newest pair it can find and there was no newer pair.
+
+  $ sudo -n /usr/local/sbin/sm750-pkg install
+  sm750hdmifb-0.6.10-1.fc43.noarch
+  sm750hdmifb-tools-0.6.10-1.fc43.x86_64
+  sm750hdmifb/0.6.10, 7.2.15-100.fc43.x86_64, x86_64: installed
+  sm750hdmifb/0.6.10, 7.3.3-100.fc43.x86_64, x86_64: installed
+  sm750hdmifb/0.6.10, 7.3.4-100.fc43.x86_64, x86_64: installed
+  sm750hdmifb/0.6.10, 7.3.5-100.fc43.x86_64, x86_64: installed
+  sm750hdmidrm          204800  0
+  sm750-pkg: loaded module reports '0.6.9', installed RPM is '0.6.10';
+  run: sudo sm750-pkg reload
+
+The helper refused to claim success while the running module was older than the
+installed package, which is the behaviour it was changed to have.
+
+--------------------------------------------------------------------------------
+4. Reload: 0.6.9 -> 0.6.10 with the console detached
+--------------------------------------------------------------------------------
+
+  $ sudo -n /usr/local/sbin/sm750-vt off
+  sm750-vt: device unbound, refcnt after the unbind: 0
+  sm750-vt: module unloaded
+  sm750-vt: device re-bound, /sys/bus/pci/devices/0000:01:00.0/driver ->
+            /sys/bus/pci/drivers/sm750hdmidrm
+  fbcon:        detached then re-bound to /sys/class/vtconsole/vtcon1, bind=1
+  device:       0000:01:00.0 unbound then re-bound to sm750hdmidrm
+  reloaded:     0.6.9 -> 0.6.10 (srcversion=6DA22404EEA85B6D6535912 refcnt=1)
+
+This is the same unload path that wedged in A65 on 2026-11-26, and it completed
+in under a second. The difference is the order the helper enforces: fbconsole
+detached before the unload, which is exactly the guard added after A65.
+
+  $ cat /sys/module/sm750hdmidrm/version
+  0.6.10
+  $ cat /sys/module/sm750hdmidrm/srcversion
+  6DA22404EEA85B6D6535912
+  $ cat /sys/module/sm750hdmidrm/refcnt
+  0
+
+Style note: the sysfs refcnt reads 0 while sm750-vt reports refcnt=1 during its
+own run, because the helper holds a reference for the length of the operation.
+
+--------------------------------------------------------------------------------
+5. pm_probe cycle on 0.6.10, read by the fixed helper
+--------------------------------------------------------------------------------
+
+  $ sudo -n /usr/local/sbin/sm750-pm-probe cycle
+  driver:     0.6.10
+  refcnt:     0
+  raster:     0x0000007f
+  writing cycle to /sys/bus/pci/devices/0000:01:00.0/pm_probe
+  raster:     0x00000161
+  kernel log:
+    Nov 27 19:09:12 deneb kernel: sm750hdmidrm 0000:01:00.0: [drm] pm probe: command cycle
+    Nov 27 19:09:13 deneb kernel: sm750hdmidrm 0000:01:00.0: [drm] pm probe: cycle suspend ok, resume ok
+  verdict:    pass (callback bodies ran and returned 0; this is not a system sleep)
+
+The raster advanced across the call (0x7f -> 0x161), so the display engine kept
+scanning while the callbacks ran, and the helper accepted the combined cycle
+line instead of demanding a per-command line it would never see. That is the
+A67 fix, observed on hardware rather than in a fixture.
+
+What this does not claim: no PCI config space was saved or restored, the device
+never entered D3hot, and no power state changed. The devices-level pm_test cycle
+that did run end to end is evidence 49.
+
+--------------------------------------------------------------------------------
+6. State after the run
+--------------------------------------------------------------------------------
+
+  * loaded module 0.6.10, srcversion 6DA22404EEA85B6D6535912, all four kernel
+    trees carry 0.6.10 under DKMS
+  * fbcon re-bound, console back on the panel
+  * /usr/local/sbin/sm750-pm-probe is byte-identical to tools/sm750-pm-probe.sh
+    (sha256 986a441cf4977d2753711254e983c98bc63b6076a7f6cc54fe6b17a210d87048),
+    so the A67 fix is what the host runs
+  * a65_trace is present in this module and reads N (off). Enabling it needs
+    root and no allowlisted helper writes module parameters, so the next capture
+    starts with: echo 1 | sudo tee
+    /sys/module/sm750hdmidrm/parameters/a65_trace
+  * the DRM debug mask was still producing debug-level lines in the ring at the
+    time of this transcript: of the last 200 dmesg lines, 192 carried a [drm:
+    prefix. The mask was asked to be lowered to 0x1 but this file cannot prove
+    it happened, because /sys/module/drm/parameters/debug is mode -rw------- and
+    unreadable to an unprivileged user.
