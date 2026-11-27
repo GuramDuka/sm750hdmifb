@@ -4817,3 +4817,70 @@ action: install the helper, then run it only with him present.
 - Outcome: analysis complete, no experiment run, no reproduction exists yet;
   the open A65 gap in `docs/DEFECTS.md` and the absent A65 row in
   `docs/evidence/EVIDENCE-GAPS.md` are unchanged and reported, not edited.
+
+### 2026-11-27T23:15Z | gem-researcher | T2: GAP-B8 counted events and a soak signature
+
+- Action: read-only design of the counters that make a GAP-B8 recurrence
+  observable after A42, the unprivileged read path for each, and the recurrence
+  signature a 24-48 h soak verdict can match. No code change, no build, no module
+  load, no root action, no card access, no VT, console, seat or compositor
+  operation; the 1-in-206 trigger was not attempted.
+- Timestamp note: this host's local clock is UTC+03:00 and the `Z` suffix in this
+  logbook has recorded local time all along; true UTC at this entry is
+  `2026-11-27T20:15Z`. Recorded rather than silently normalised, because
+  changing the convention mid-file would reorder the record.
+- Files touched: `docs/evidence/gap-b8/02-counter-design.txt` (new, 617 lines,
+  0 non-ASCII bytes), `docs/LOGBOOK.md`.
+- Central finding: since A42 the B8 symptom is non-fatal, so a recurrence is
+  silent. `sii902x_write_recovering()` returns at `src/sii902x.c:349-350` on a
+  recovered timeout, so attempt 1 timing out and attempt 2 succeeding prints
+  nothing and leaves `b8_mode_failures` at 0; the readiness gate's success is
+  `dev_dbg` (`src/sii902x.c:669-673`, root to see) while only expiry warns
+  (`:675-679`). A verdict built on "no `failed to enable HDMI mode` line" is
+  therefore a claim about a message the recovered case never prints.
+- Design: eleven `DEVICE_ATTR_RO` in the existing group
+  (`src/sm750_drm.c:5216-5231`, published at `:5521`), fifteen monotonic u64
+  counters, `atomic64_inc`/`atomic64_read` only so no show function sleeps or
+  takes a lock: `b8_mode_attempts` (`src/sm750_drm.c:4102`), `b8_mode_failures`
+  (`:4255`), `b8_mode_retries` (`:4297`), `b8_stage_failures` (`:4257`, six
+  lines in `sm750_mode_stage_names` order), `b8_i2c_write_timeouts`
+  (`src/sii902x.c:317`), `b8_i2c_recoveries` (`:321`, `:1164`, `:1186` and not
+  the routine clears at `:883`/`:609-610`), `b8_ready_expired` (`:675`),
+  `b8_ddc_grant_timeouts` (`:1154`), `b8_edid_reads` (`:1128`),
+  `b8_edid_failures` (`:1185`, `:1212`), `b8_counters_epoch_s` (probe,
+  `ktime_get_boottime_seconds()`).
+- Read path, observed at 23:01 local as uid 1005 coder (not the brief's 1000):
+  every sm750 attribute under `/sys/bus/pci/devices/0000:01:00.0/` is
+  `-r--r--r-- root root` (0444), so the other-read bit alone suffices, with no
+  group, ACL or sudoers line; `cat .../active_mode` printed `1024x768`,
+  `vblank_count` `4493`, and the class path `/sys/class/drm/card0/device/`
+  resolves to the same tree and read the same value. `pm_probe` is `0200` and
+  shows what a root-only diagnostic looks like; the counters must not follow it.
+- Soak constraints recorded: dmesg spans `[0.000000]..[1747.346466]` with 1772
+  lines and 135143 bytes, about 277 KB/h, so 48 h is about 13 MB and no
+  end-of-run ring read can cover the window; per-minute sampling of counters and
+  log delta is mandatory. Signature: delta `b8_i2c_write_timeouts` >= 1,
+  `b8_i2c_recoveries` >= 1, `b8_ready_expired` >= 1, `b8_mode_failures` at stage
+  `sii902x_begin_mode`/`sii902x_enable`, or a matching log line, each within one
+  60 s record, with the per-line stable regexes quoted in section 5.
+- Drift found: `docs/evidence/EVIDENCE-GAPS.md:753` and
+  `docs/evidence/gap-b8/01-stage-instrumentation.txt:59` quote the failure suffix
+  `(commit finished, event consumed)`; 0.6.10 prints
+  `(pipe left down; commit event not armed)` (`src/sm750_drm.c:4256`), so a grep
+  copied from either document matches nothing. Also `docs/DEFECTS.md:125` still
+  quotes the pre-A42 2000 ms readiness budget while `src/sii902x.c:64` is 500 ms.
+- Honesty rules written down: `b8_mode_failures == 0` alone is not evidence; a
+  run below the pre-registered floor is not coverage (at 1 in 206, 614 attempts
+  are needed for 95% detection and 2 attempts leave a 95% upper bound near 78%);
+  a counter decrease or a moved epoch is a reload that invalidates the hours
+  before it; routine bus clears must not be counted as recoveries.
+- Handoff: T5 implements the eleven attributes and must raise
+  `tests/check-sysfs-attributes.sh:42-44`, `:93-95` (24 array entries), `:96-105`
+  and `:284`, plus the "twelve" wording in `docs/PARAMETERS.md:95-100`,
+  `docs/TEST-STRATEGY.md:100`/`:565`, `docs/DELIVERABLES.md:449` and
+  `docs/RELEASE-NOTES.md:135`; `b8_stage_failures` is the one documented
+  exception to one-value-per-file.
+- Evidence: `docs/evidence/gap-b8/02-counter-design.txt`.
+- Outcome: design complete; no counter exists in the loaded 0.6.10 build, so
+  every expected value in section 6 is a specification to be checked against
+  T5's implementation, not a measurement.

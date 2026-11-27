@@ -1,0 +1,617 @@
+GAP-B8 counted events, T2, 2026-11-27
+
+Plan: docs/plan/20261127-sm750-strict-production/plan.yaml, task T2 (wave 1).
+Host: Linux 7.3.5-100.fc43.x86_64, module sm750hdmidrm 0.6.10, uid 1005 coder.
+No module was loaded, unloaded or reconfigured; no root action, no card access,
+no VT, seat or compositor operation was performed. Every command in section 3 is
+a read. The 1-in-206 -110 trigger was not attempted: this file is a design and
+an observation of the read path, not a reproduction.
+
+Contents
+  1. What the counters have to witness
+  2. The counters (event, file:line, semantics)
+  3. The unprivileged read path (observed)
+  4. Reset, reload and instrumentation-idle semantics
+  5. Recurrence signature a soak verdict matches
+  6. Expected values after 48 h with no recurrence
+  7. The smallest honest set, and what makes a claim dishonest
+  8. Exact deliverable for T5 (names, sites, gate and doc edits)
+  9. Gaps in this design
+
+------------------------------------------------------------------------------
+1. What the counters have to witness
+------------------------------------------------------------------------------
+
+GAP-B8 is -110 (I2C transmit timeout) on a SiI9024A block write during mode
+setup, measured at 1 in 206 attempts (plan.yaml:15, EVIDENCE-GAPS.md:786).
+A42 made that timeout non-fatal: sii902x_write_block_retrying() retries up to
+SII902X_WRITE_ATTEMPTS (3, src/sii902x.c:66) with a bus clear and a 10 ms
+settle between attempts, and sii902x_write_recovering() returns 0 after the
+last attempt with a single warning (src/sii902x.c:348-354).
+
+The consequence is the whole reason this task exists:
+
+  * attempt 1 times out, attempt 2 succeeds  -> the retrying helper returns 0,
+    sii902x_write_recovering() returns at src/sii902x.c:349-350, and NO line is
+    logged anywhere. The transient is invisible in dmesg today.
+  * the mode set then succeeds, so b8_mode_failures stays 0.
+
+So after A42 a B8 recurrence produces, by itself, no dmesg line, no failed
+commit and no error return. A soak verdict of "B8 did not recur" built on the
+absence of "failed to enable HDMI mode" lines is therefore not evidence; it is
+a claim about a message that the recovered case never prints. Counters on the
+retry path, sampled while the run is live, are the only witness.
+
+The second asymmetry, on the readiness gate: sii902x_wait_receiver_ready()
+logs success at dev_dbg (src/sii902x.c:669-673), which needs dynamic debug
+(root) to appear, and logs expiry at dev_warn (src/sii902x.c:675-679). So of
+the two outcomes, only the failure is visible, and the soak must not claim
+anything about readiness latency.
+
+Design rule that follows: every increment sits on the existing path, in code
+that already runs, so counting cannot change timing. No counter is incremented
+from a show function, from a timer, or from a second I2C read.
+
+------------------------------------------------------------------------------
+2. The counters (event, file:line, semantics)
+------------------------------------------------------------------------------
+
+Fifteen counters behind eleven read-only attributes, all monotonic u64, all
+incremented with atomic64_inc() and read with atomic64_read(): no spinlock, no
+mutex, so the show functions satisfy the existing gate
+(tests/check-sysfs-attributes.sh:125-159) and T5's show-function contract.
+
+Storage:
+  * modeset side, struct sm750_drm_device (src/sm750_drm.c:386):
+    mode_attempts, mode_failures, mode_retries, stage_failures[6],
+    counters_epoch_s.
+  * SiI9024A side, file-static atomic64_t in src/sii902x.c with one accessor
+    declared in src/sii902x.h, because sm750_sii902x_disable_link() and the
+    shutdown path carry no usable dev pointer and an increment must never
+    depend on dev_get_drvdata(). src/Makefile:3 puts sii902x.o and
+    sm750_drm.o in the same module (sm750hdmidrm-y), so the extern is internal
+    to one .ko and needs no symbol export or module dependency.
+
+Attribute              Event counted                          Increment site
+---------------------  -------------------------------------  --------------------------------
+b8_mode_attempts       one call to the pipe enable            src/sm750_drm.c:4102
+                       (retries from the update path included)
+b8_mode_failures       one failed enable (the fail branch)    src/sm750_drm.c:4255
+b8_mode_retries        one re-enable of a failed pipe from    src/sm750_drm.c:4297-4298
+                       sm750_pipe_update()
+b8_stage_failures      same event as b8_mode_failures, but    src/sm750_drm.c:4257
+                       indexed by sdev->mode_stage
+b8_i2c_write_timeouts  one -ETIMEDOUT from a SiI9024A block   src/sii902x.c:317
+                       write attempt (recovered or not)
+b8_i2c_recoveries      one bus clear performed *because of*   src/sii902x.c:321-322,
+                       a recovered event                      :1164, :1186
+b8_ready_expired       one readiness-gate expiry              src/sii902x.c:675
+b8_ddc_grant_timeouts  one DDC grant timeout (per attempt)    src/sii902x.c:1154
+b8_edid_reads          one entry into the DDC grant protocol  src/sii902x.c:1128
+b8_edid_failures       one EDID sequential-transaction or     src/sii902x.c:1185, :1212
+                       DDC-release failure
+b8_counters_epoch_s    not an event: ktime_get_boottime_      set once at probe
+                       seconds() of the first successful probe
+
+2.1 Mode-side counters
+
+b8_mode_attempts increments at src/sm750_drm.c:4102, the statement
+`sdev->mode_stage = SM750_MODE_STAGE_NONE;` at the top of sm750_pipe_enable().
+It therefore counts enable invocations, including a retry issued from
+sm750_pipe_update() (:4297-4298) and including attempts that fail before the
+hardware is touched (bad scanout offset :4162, frame size :4168, VRAM window
+:4176). This is deliberately NOT incremented inside sm750_program_mode()
+(:1434), because that would let b8_mode_failures exceed b8_mode_attempts and
+destroy invariant I2 below. sm750_program_mode() has exactly one caller,
+src/sm750_drm.c:4183, so the alternative costs nothing except the sanity
+relation.
+
+b8_mode_failures increments once at the `fail:` branch, immediately before the
+existing drm_err at :4255-4257, so the counter and the message can never
+disagree about which failures happened.
+
+b8_mode_retries increments at :4297-4298, before the recursive
+sm750_pipe_enable() call. Each increment is also a b8_mode_attempts increment a
+few microseconds later, so b8_mode_retries <= b8_mode_failures always holds.
+
+b8_stage_failures is six counters, one per enum sm750_mode_stage
+(src/sm750_drm.c:322-333, names at :335-342 in enum order: none,
+sii902x_begin_mode, ddk750_set_display_control, ddk750_set_mode_timing,
+ddk750_set_logical_disp_out, sii902x_enable). The increment at :4257 uses
+sdev->mode_stage as the index after a bound check against
+ARRAY_SIZE(sm750_stage_failures); the file prints six lines, one per stage, in
+that order:
+
+  none 0
+  sii902x_begin_mode 0
+  ddk750_set_display_control 0
+  ddk750_set_mode_timing 0
+  ddk750_set_logical_disp_out 0
+  sii902x_enable 0
+
+Stage "none" is not a B8 stage: a -110 at stage none cannot come from the
+SiI9024A write path (that path is only reachable from stage sii902x_begin_mode
+or sii902x_enable), so a nonzero "none" after a B8-shaped log line means the
+stage bookkeeping and the message disagree.
+
+2.2 SiI9024A-side counters
+
+b8_i2c_write_timeouts increments at src/sii902x.c:317 for every attempt that
+returns -ETIMEDOUT, before the "skip the last attempt" guard at :319-320. Three
+attempts that all time out produce 3, not 1. A recovered transient (attempt 1
+timeout, attempt 2 success) produces 1 with b8_mode_failures unchanged: that is
+the signature the A42-era driver cannot show at all.
+
+b8_i2c_recoveries increments only where a bus clear is performed in response to
+an event:
+  * src/sii902x.c:321-322, the clear between write attempts;
+  * src/sii902x.c:1164, the clear between DDC grant attempts;
+  * src/sii902x.c:1186, the clear after an EDID sequential-read failure.
+The two routine clears are deliberately excluded: sm750_sii902x_begin_mode()
+clears the bus once per mode set (src/sii902x.c:882-891) and
+sm750_sii902x_disable_link()+shutdown clears it once per disable
+(src/sii902x.c:609-610). Counting those would turn the attribute into a mode-set
+counter and make any threshold on "recoveries per hour" meaningless. A soak must
+never read a nonzero b8_i2c_recoveries as "the bus was cleared": it means the
+bus was cleared because something had just gone wrong.
+
+b8_ready_expired increments at src/sii902x.c:675, the dev_warn branch of the
+readiness gate (500 ms budget, 25 ms poll, 100 ms stability, :62-64). The
+success branch at :669-673 is not counted: it is dev_dbg, therefore not
+observable without root, and the soak must not infer latency from it.
+
+b8_ddc_grant_timeouts increments at src/sii902x.c:1154, once per failed grant
+attempt, so a read that exhausts both attempts (SII902X_DDC_GRANT_ATTEMPTS = 2,
+:70) adds 2. It is the only counter on that path that is incremented before the
+`break` at :1158-1160, so a grant-exhausted EDID read is visible even though
+its failure return takes the `release:` path and is not printed as an "EDID
+sequential transaction failed" line.
+
+b8_edid_reads increments at src/sii902x.c:1128, the first statement of the DDC
+protocol (after the -EINVAL guard :1110-1111, the system-control read :1114-1116
+and the powered-down early return :1122-1127). It is the denominator that makes
+a zero in b8_ddc_grant_timeouts interpretable: with b8_edid_reads = 0 an EDID
+soak proves nothing about the DDC path, exactly as with b8_mode_attempts = 0 it
+proves nothing about the modeset path.
+
+b8_edid_failures increments at src/sii902x.c:1185 (sequential transaction
+failed) and :1212 (DDC release failed). The grant-exhausted case is not counted
+here a second time; it is fully described by b8_ddc_grant_timeouts reaching 2,
+which is why the derived rule is: one failed EDID read by grant exhaustion
+contributes 2 to b8_ddc_grant_timeouts and 0 to b8_edid_failures.
+
+2.3 Monotonicity
+
+Every counter is monotonic for the lifetime of the loaded module. Nothing
+resets a counter at runtime: not a mode set, not a hotplug, not a suspend, not
+a disable. There is no ioctl, no write attribute and no module parameter that
+can zero them. The only reset is a module reload, which is why
+b8_counters_epoch_s exists.
+
+------------------------------------------------------------------------------
+3. The unprivileged read path (observed)
+------------------------------------------------------------------------------
+
+The path is the existing attribute group on the PCI device, extended by
+devm_device_add_group(&pdev->dev, &sm750_attr_group) at src/sm750_drm.c:5521.
+Nothing new is needed: a DEVICE_ATTR_RO added to sm750_attrs[] (:5216-5231) is
+published at 0444 like the twelve attributes already there.
+
+Observed on this host, 2026-11-27T23:01Z, as uid 1005, no privilege:
+
+  $ id
+  uid=1005(coder) gid=1006(coder) groups=1006(coder),39(video),1007(vtune)
+
+  $ ls -l /sys/bus/pci/devices/0000:01:00.0/
+  lrwxrwxrwx 1 root root 0 ... 0000:01:00.0 -> ../../../devices/pci0000:00/0000:00:01.0/0000:01:00.0
+  -r--r--r-- 1 root root 4096 Nov 27 23:01 active_crtc
+  -r--r--r-- 1 root root 4096 Nov 27 23:01 active_mode
+  -r--r--r-- 1 root root 4096 Nov 27 23:01 active_mode_pixel_clock_khz
+  -r--r--r-- 1 root root 4096 Nov 27 23:01 active_mode_refresh_hz
+  -r--r--r-- 1 root root 4096 Nov 27 23:01 crc_supported
+  -r--r--r-- 1 root root 4096 Nov 27 23:01 hpd
+  -r--r--r-- 1 root root 4096 Nov 27 23:01 link_state
+  -r--r--r-- 1 root root 4096 Nov 27 23:01 mem_info_vram_total
+  -r--r--r-- 1 root root 4096 Nov 27 23:01 pm_probe            (--w------- 0200)
+  -r--r--r-- 1 root root 4096 Nov 27 23:01 rxsense
+  -r--r--r-- 1 root root 4096 Nov 27 23:01 vblank_count
+  -r--r--r-- 1 root root 4096 Nov 27 23:01 vram_total_bytes
+  -r--r--r-- 1 root root 4096 Nov 27 23:01 vram_used_bytes
+
+  (pm_probe prints as --w------- in the same listing; the rest are 0444. The
+  listing above is abridged to the driver's own attributes plus the symlink;
+  the full directory also holds the generic PCI files.)
+
+  $ for f in active_mode vblank_count link_state hpd; do \
+        printf '%s = ' "$f"; cat /sys/bus/pci/devices/0000:01:00.0/$f; done
+  active_mode = 1024x768
+  vblank_count = 4493
+  link_state = connected
+  hpd = 1
+
+  $ readlink -f /sys/class/drm/card0/device
+  /sys/devices/pci0000:00/0000:00:01.0/0000:01:00.0
+  $ cat /sys/class/drm/card0/device/active_mode
+  1024x768
+
+  $ cat /sys/bus/pci/devices/0000:01:00.0/b8_mode_attempts
+  cat: ...: No such file or directory
+  rc=1
+
+The mode that makes this readable by uid 1005 is 0444 on a file owned root:root:
+the "other" read bit alone is sufficient, so no group membership, no ACL and no
+sudoers line is involved. uid 1005 is in groups video (39) and vtune (1007);
+neither is needed for this read, and a soak must not depend on them either --
+the plan's "a counter that needs root to read is a design failure" is satisfied
+by file mode alone.
+
+The two equivalent paths a soak may use:
+  /sys/bus/pci/devices/0000:01:00.0/<name>            (device, canonical)
+  /sys/class/drm/card0/device/<name>                  (stable by card index)
+Both resolve to the same inode tree; the class path is the one tests and tools
+already use (tests/check-sysfs-attributes.sh, tools/sm750-smi), so the soak tool
+should use the class path and fall back to the PCI path.
+
+Cost and side effects of a read: the b8_* show functions touch only memory
+(atomic64_read) plus sysfs_emit; no I2C transaction, no register read, no lock.
+Sampling eleven files once a minute therefore cannot perturb the timing it is
+measuring. This matters: a probe that read the transmitter over I2C to ask "are
+you healthy" would be a second writer on the bus B8 is about.
+
+Host facts the soak relies on, all observed (see also
+docs/evidence/runtime/56-dmesg-restrict-off.txt):
+  /sys/module/sm750hdmidrm/version      = 0.6.10
+  /sys/module/sm750hdmidrm/srcversion   = 6DA22404EEA85B6D6535912
+  /proc/sys/kernel/dmesg_restrict       = 0, plain dmesg runs unprivileged
+  ring at uptime 2292 s                 = 1772 lines, 135143 bytes over 1747 s
+                                          ~ 77 B/s ~ 277 KB/h, so 48 h is ~13 MB
+
+The last figure is a hard constraint on the soak design: no ring buffer on this
+host holds 48 h of output, so a single end-of-run dmesg read cannot cover the
+window. The soak must sample dmesg (or `journalctl -k -b --no-pager`, which on
+this host returns no entries unprivileged) every minute and keep the delta, the
+same cadence as the counters, so a log line and a counter step can be tied to
+the same interval.
+
+------------------------------------------------------------------------------
+4. Reset, reload and instrumentation-idle semantics
+------------------------------------------------------------------------------
+
+Counters are per module load. probe() allocates sdev with devm_drm_dev_alloc,
+which zeroes it, and the src/sii902x.c statics are zeroed when the .ko is
+loaded. b8_counters_epoch_s is set once, in probe, to
+ktime_get_boottime_seconds(), so every sample carries the boot second at which
+the counters started. boottime rather than wall clock: an NTP step or a manual
+clock set must not look like a reset.
+
+Rules for the soak sampler (T6) and the verdict (T12):
+  R1  Each sample records all eleven values, b8_counters_epoch_s, the module
+      srcversion and the sample time, in one record.
+  R2  Any counter that decreases between consecutive samples is a reset. The
+      verdict is INVALID for the hours before it, not PASS.
+  R3  A changed b8_counters_epoch_s is a reload even if every counter happens to
+      be higher (a fast reload can do that). It also invalidates the hours
+      before it.
+  R4  A reload is only acceptable as an explained event when the same sample
+      interval shows it (modprobe through the allowlisted helper, or a
+      dmesg delta containing the module unload/load lines). Even then the soak
+      window restarts at the reload; hours are counted from the last load.
+  R5  The epoch is the reset detector, never evidence of health; a constant
+      epoch plus zero counters over covered time is evidence, an epoch alone is
+      not.
+
+Idle semantics (the state this build will be in most of the time):
+  * With no mode set and no EDID read, no counter moves. b8_mode_attempts and
+    b8_edid_reads stay flat, and every other counter stays at zero.
+  * A flat line is indistinguishable from a broken increment at the sample
+    level. That is why the verdict needs b8_mode_attempts > 0 (section 7): the
+    counters are only proven live by having moved at least once in the covered
+    window or by T5's source-level gate (the planted "increment moved off the
+    retry path" control, which makes tests/check-sysfs-attributes.sh exit 1).
+  * Reading the attributes while idle still works: eleven 0444 files, memory
+    only, no card access, no side effect. A soak must be able to prove the
+    instrumentation is present and readable without provoking anything.
+  * The show functions are correct while the pipe is down: they read counters,
+    not pipe state, so they neither sleep nor return an error when nothing is
+    scanning out. There is no "n/a" case for a b8_* attribute; a b8_* attribute
+    that prints anything other than a decimal u64 (or the six-line stage block
+    in the documented order) is a bug.
+
+------------------------------------------------------------------------------
+5. Recurrence signature a soak verdict matches
+------------------------------------------------------------------------------
+
+One sample interval is 60 s. A sample "fires" when any of S1..S5 is true for
+that interval. Firing is not a verdict by itself; it is a recurrence.
+
+  S1  delta b8_i2c_write_timeouts >= 1
+      The B8 transport event itself, recovered or not. This is the primary
+      witness and the only one that exists for a retried transient.
+  S2  delta b8_i2c_recoveries >= 1
+      A bus clear performed in response to an event (sites :322, :1164,
+      :1186). Confirms the transient was bad enough to need recovery.
+  S3  delta b8_ready_expired >= 1
+      The A42 readiness gate expired: the sink was not ready within 500 ms.
+      This is the original A42 symptom and it is the one stage that still
+      prints a warning line.
+  S4  delta b8_mode_failures >= 1 AND the matching b8_stage_failures delta is in
+      sii902x_begin_mode or sii902x_enable
+      A hard B8-class failure: the timeout was not recoverable.
+  S5  a dmesg delta line matching any of the patterns below, in the same
+      interval as the sample
+
+Exact log text of the current tree (verbatim format strings; the numbers are
+placeholders). The soak must match the stable prefix and capture the fields, not
+paste a whole message with example numbers:
+
+  src/sii902x.c:351-353
+    SiI9024A %s write timed out at stage %s (transient I2C timeout, retried %u times); enabling for compatibility
+  src/sii902x.c:675-679
+    SiI9024A receiver not ready after %u ms: HPD=%u RSEN=%u status=%02x; enabling for compatibility
+  src/sii902x.c:1154-1156
+    DDC grant timeout: last-read=%d system-control=%02x
+  src/sii902x.c:1161-1163
+    SiI9024A DDC grant timed out (attempt %u of %u); clearing the bus and retrying
+  src/sii902x.c:1185
+    EDID sequential transaction failed: %d
+  src/sii902x.c:1187
+    DDC lines remained busy after bus clear
+  src/sii902x.c:1212
+    failed to release SiI9024A DDC bus
+  src/sii902x.c:885-887
+    SiI9024A pre-mode bus clear failed: %ld; continuing
+  src/sm750_drm.c:4255-4257
+    failed to enable HDMI mode: %d at stage %s (pipe left down; commit event not armed)
+  src/sm750_drm.c:4265-4268
+    enable-fail state: PANEL_DISPLAY_CTRL=%#08x PANEL_PLL_CTRL=%#08x SYSTEM_CTRL=%#08x PANEL_CURRENT_LINE=%#08x
+
+The stable regexes (POSIX ERE, ASCII), which survive wording changes at the end
+of a line:
+  SiI9024A .* write timed out at stage .* transient I2C timeout
+  SiI9024A receiver not ready after [0-9]+ ms
+  DDC grant timeout: last-read=-?[0-9]+ system-control=[0-9a-f]+
+  SiI9024A DDC grant timed out [(]attempt [0-9]+ of [0-9]+[)]
+  EDID sequential transaction failed: -?[0-9]+
+  DDC lines remained busy after bus clear
+  failed to release SiI9024A DDC bus
+  SiI9024A pre-mode bus clear failed: -?[0-9]+
+  failed to enable HDMI mode: -?[0-9]+ at stage (sii902x_begin_mode|sii902x_enable)
+
+Drift warning, load-bearing for the verdict: docs/evidence/EVIDENCE-GAPS.md:753
+and docs/evidence/gap-b8/01-stage-instrumentation.txt:59 quote the failure line
+with the suffix "(commit finished, event consumed)". The 0.6.10 binary prints
+"(pipe left down; commit event not armed)" (src/sm750_drm.c:4256). A grep copied
+from either document matches nothing today, and a soak that attests "no line
+matched" from such a grep would report silence it never measured. This is exactly
+why S1-S4 are counters: they do not depend on prose.
+
+Interval semantics:
+  * A counter step and a log line are only correlated if they land in the same
+    60 s record. A line without a step, or a step without a line, is still a
+    firing and is reported with both facts.
+  * No counter may fire without a matching line where a line is guaranteed: the
+    readiness expiry (S3) always logs at :675, the final write timeout always
+    logs at :351, the DDC grant timeout always logs at :1154. A counter step
+    with no line in the interval means the log sampled late or the ring lost
+    the line: the sample is marked unverified, not clean.
+  * A line with no counter step in a build that has the counters is an
+    instrumentation gap and makes the verdict INVALID: it means the counter was
+    not on the path that produced the line.
+
+What a recurrence looks like as a burst, from the A42 record (DEFECTS.md A42):
+one monitor power cycle produced 20 "receiver not ready after 2000 ms" lines in
+2.5 minutes on the pre-A42 build. On 0.6.10 the same physical event should show
+as b8_ready_expired stepping once per enable attempt that follows the cycle, and
+possibly b8_i2c_write_timeouts stepping on the first writes after it, rather
+than as a burst of 20: the budget is 500 ms now, not 2000 ms, so one power cycle
+is a handful of expiries around the enable that follows, not twenty.
+
+------------------------------------------------------------------------------
+6. Expected values after 48 h with no recurrence
+------------------------------------------------------------------------------
+
+Let N = b8_mode_attempts over the window and M = b8_edid_reads.
+
+  b8_mode_attempts           N, monotonic, N >= 1 for any working panel
+  b8_mode_failures           0
+  b8_mode_retries            0
+  b8_stage_failures          all six 0, printed in enum order
+  b8_i2c_write_timeouts      0
+  b8_i2c_recoveries          0
+  b8_ready_expired           0
+  b8_ddc_grant_timeouts      0
+  b8_edid_failures           0
+  b8_edid_reads              M, monotonic; may be 0 if nothing asked for EDID
+  b8_counters_epoch_s        constant for the whole window, equal to the boot
+                             second of the last load
+
+Sanity invariants that must hold at every sample (a violation is INVALID, not
+PASS):
+  I1  sum over the six b8_stage_failures lines == b8_mode_failures
+  I2  b8_mode_attempts >= b8_mode_failures
+  I3  b8_mode_retries <= b8_mode_failures
+  I4  b8_i2c_recoveries <= b8_i2c_write_timeouts + b8_ddc_grant_timeouts +
+      (b8_edid_failures at :1185)    -- a recovery needs a cause, except for the
+      :1186 clear, which is counted under the same EDID failure; treat a
+      recovery count above that sum as INVALID
+  I5  all eleven attributes readable, decimal, no "n/a", no empty file
+
+48 h wall clock is not the same as 48 h covered time. The verdict's window is
+the union of sample intervals with no gap above 60 s, and it is reported as
+covered hours, not elapsed hours. An idle host yields N of a handful (boot, the
+console taking over the pipe, a resume): with no client driving modesets, N can
+legitimately be 1 or 2 in 48 h.
+
+------------------------------------------------------------------------------
+7. The smallest honest set, and what makes a claim dishonest
+------------------------------------------------------------------------------
+
+Smallest set that lets a verdict say "B8 did not recur" without ambiguity
+(five attributes):
+  b8_mode_attempts        the exposure denominator for the modeset path
+  b8_i2c_write_timeouts   the event itself, including recovered transients
+  b8_i2c_recoveries       the recovery action
+  b8_ready_expired        the A42 readiness expiry
+  b8_counters_epoch_s     the reset detector
+
+Everything else sharpens the verdict (which stage, whether the EDID path ran,
+whether the timeout was fatal) but does not change the pass/fail meaning of
+those five. If a single attribute had to be picked, it is b8_i2c_write_timeouts:
+it is the only quantity that moves when a transient is silently recovered.
+
+Coverage floor. The recorded rate is 1 in 206 attempts (plan.yaml:15,
+EVIDENCE-GAPS.md:786); the spawn brief and earlier notes also cite 1 in 446
+mode sets. At p = 1/206, the number of attempts for a 95% chance of seeing at
+least one event is n = ln(0.05)/ln(1 - 1/206) = 614. The 95% upper bound on the
+rate when zero events are seen in n attempts is 1 - 0.05^(1/n):
+
+  n = 1      p_up = 0.95      (no information)
+  n = 2      p_up = 0.78
+  n = 10     p_up = 0.26
+  n = 100    p_up = 0.030
+  n = 614    p_up = 0.0049
+  n = 1340   p_up = 0.0022    (the 1-in-446 reading at 95%)
+
+A 48 h idle soak supplies n = 1 or 2, which leaves a bound near 78%: it is
+consistent with the same failure rate that produced the original event. Such a
+run may report "no failure observed in N attempts" and must not report "B8 did
+not recur" or "B8 is fixed". Reaching a bound near 0.5% needs ~614 attempts,
+which an idle host cannot supply; T12 must either drive mode sets (a client, a
+mode change per hour) or lower the claim to "no recurrence under idle
+operation".
+
+What would make the claim dishonest, in the order a reviewer would catch it:
+  1  Concluding from b8_mode_failures == 0 alone. Since A42 the recovered
+     transient is non-fatal; that counter is 0 during a recurrence.
+  2  Concluding from the absence of "failed to enable HDMI mode" lines. The
+     recovered case prints nothing at all (src/sii902x.c:349-350).
+  3  Reporting a 48 h run with N below the pre-registered floor, or without
+     stating N. The claim then has no coverage, only calendar time.
+  4  Reading dmesg only at the end. The ring holds roughly 3 h of this host's
+     output (135143 bytes in 1747 s, ~277 KB/h), so the first 45 h of a 48 h
+     window are gone; any "no line matched" from a single final read is a
+     statement about the last hours.
+  5  Ignoring a counter decrease, or a changed epoch, and reporting the run as
+     one window. Counters reset on reload; the hours before it are not evidence
+     about the counter values after it.
+  6  Counting the routine bus clears at src/sii902x.c:883 and :609-610 as
+     recoveries. That inflates b8_i2c_recoveries to N and makes any threshold on
+     it look satisfied.
+  7  Quoting readiness latency from the dev_dbg success line (:669-673). Without
+     dynamic debug it is not in the log; the soak has no readiness latency data,
+     only expiry counts.
+  8  Grepping the pre-0.6.10 "(commit finished, event consumed)" suffix, or the
+     pre-A42 "receiver not ready after 2000 ms" text, and reporting silence.
+  9  Claiming DDC-path health while b8_edid_reads == 0, or modeset health while
+     b8_mode_attempts == 0: a zero denominator is not a zero rate.
+
+------------------------------------------------------------------------------
+8. Exact deliverable for T5 (names, sites, gate and doc edits)
+------------------------------------------------------------------------------
+
+Eleven DEVICE_ATTR_RO, all in the existing marked region
+(src/sm750_drm.c:4878 "BEGIN sysfs monitoring attributes" to :5237 "END"), all
+camped in sm750_attrs[] (:5216-5231) and published by the existing
+devm_device_add_group at :5521. No new group, no debugfs, no module parameter.
+(The module-parameter alternative -- /sys/module/sm750hdmidrm/parameters, 0444
+and no gate edit -- was rejected: module parameters are configuration, not
+counters, and T2's acceptance criterion is the existing sysfs group.)
+
+  Attribute names, exactly:
+    b8_mode_attempts
+    b8_mode_failures
+    b8_mode_retries
+    b8_stage_failures
+    b8_i2c_write_timeouts
+    b8_i2c_recoveries
+    b8_ready_expired
+    b8_ddc_grant_timeouts
+    b8_edid_reads
+    b8_edid_failures
+    b8_counters_epoch_s
+
+  Increment sites, exactly (one site per counter, all on existing paths):
+    b8_mode_attempts        src/sm750_drm.c:4102, before the existing assignment
+    b8_mode_failures        src/sm750_drm.c:4255, immediately before the drm_err
+    b8_mode_retries         src/sm750_drm.c:4297, inside the if, before the call
+    b8_stage_failures       src/sm750_drm.c:4257, index sdev->mode_stage,
+                            bounded by ARRAY_SIZE(sm750_stage_failures)
+    b8_i2c_write_timeouts   src/sii902x.c:317, inside the -ETIMEDOUT branch
+    b8_i2c_recoveries       src/sii902x.c:321 (before the routine-clear call at
+                            :322), :1164, :1186
+    b8_ready_expired        src/sii902x.c:675, the dev_warn branch
+    b8_ddc_grant_timeouts   src/sii902x.c:1154, before the dev_err
+    b8_edid_reads           src/sii902x.c:1128, first DDC-path statement
+    b8_edid_failures        src/sii902x.c:1185 and :1212
+    b8_counters_epoch_s     src/sm750_drm.c, set once in probe to
+                            ktime_get_boottime_seconds()
+
+  Show-function shape (T5 acceptance criteria and
+  tests/check-sysfs-attributes.sh:125-159):
+    static ssize_t b8_mode_attempts_show(struct device *dev,
+                                         struct device_attribute *attr, char *buf)
+    {
+        struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+
+        if (!sdev)
+            return -ENODEV;
+        return sysfs_emit(buf, "%llu\n", (unsigned long long)atomic64_read(&sdev->b8_mode_attempts));
+    }
+    No sleep, no mutex (mode_lock included), no spinlock, no register read, no
+    I2C, no dev_get_drvdata on a NULL-unsafe path. The SiI-side show functions
+    read through the src/sii902x.h accessor and still take dev_get_drvdata and
+    the NULL guard, because the gate requires that shape in every show function.
+
+  Prefixed names are not for tidiness: tools/sm750-smi iterates a fixed list and
+  prints "n/a (driver attribute not present in this version)" for names it knows
+  and cannot find, so a b8_ prefix keeps the SMI output unchanged and makes the
+  new files unmistakable in an ls.
+
+  Gate and documentation edits T5 owns (the counters cannot land without them):
+    * tests/check-sysfs-attributes.sh:42-44 add the eleven names to the list the
+      gate checks for DEVICE_ATTR_RO plus array entry;
+    * :93-95 the expected count of "&dev_attr_" in the marked region becomes 24
+      (12 monitoring + pm_probe + 11);
+    * :96-105 the allowed extras become pm_probe plus the eleven b8_ names;
+    * :284 the summary line says 23 monitoring attributes, not 12;
+    * docs/PARAMETERS.md:95-100 says "twelve" and states "one value per file";
+      the count becomes 23 and the b8_stage_failures row documents the one
+      documented exception to one-value-per-file (six lines, enum order, ASCII
+      stage name, one space, decimal count);
+    * docs/TEST-STRATEGY.md:100 and :565, docs/DELIVERABLES.md:449,
+      docs/RELEASE-NOTES.md:135 all pin "twelve" and the gate's 12+1 count.
+  These are required edits, not conflicts: the plan's T2 acceptance criterion 5
+  ("reuse the existing twelve-attribute group") is satisfied by reusing the
+  group, and the group's size changes as a consequence, which is exactly the
+  kind of number the five documents above exist to keep true.
+
+  T5's own control for the counters is the one the plan already asks for: move
+  an increment off the retry path (for example delete the increment at
+  src/sii902x.c:317 and put it after the loop) and the gate must exit 1. That
+  control is what proves at source level that the counter is on the path and not
+  merely present.
+
+------------------------------------------------------------------------------
+9. Gaps in this design
+------------------------------------------------------------------------------
+
+  * No counter measures readiness latency or readiness polls. Only expiry is
+    counted, because only expiry is observable without dynamic debug. A slow but
+    successful ready (for example 450 ms of a 500 ms budget) is invisible. If a
+    future task needs that distribution, it needs a counter incremented in the
+    success branch at :667-673, which is cheap but would encode a bucket
+    boundary that has to be chosen first.
+  * The instrumented binary does not exist yet: every value in sections 2 and 6
+    is a design statement, not a measurement. T5 produces the attributes; T6 the
+    sampler; T12 the verdict. This file commits to the semantics and the exact
+    names so those three can be checked against it.
+  * The rate is recorded twice in the repository (1 in 206 in plan.yaml:15 and
+    EVIDENCE-GAPS.md:786, 1 in 446 in the T2 brief). Section 7 computes the
+    coverage floor from 1 in 206, the higher rate, which yields the smaller and
+    therefore the conservative floor; if the true rate is 1 in 446 the floor
+    should be ~1340 attempts. The pre-registered floor for the soak should be
+    written down before the run, not chosen after it.
+  * GAP-B8's original trigger is a mode set during sink power-up; a 48 h run
+    with a stable panel exercises the code path far less than the original
+    reproduction. Nothing in this design changes that; it only makes the path
+    observable when it is exercised.
