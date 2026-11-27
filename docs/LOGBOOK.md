@@ -4267,3 +4267,51 @@ rows. A65 stays OPEN with no root cause; these tools change what is possible nex
 what happened. Lesson: a guard belongs on the operation that wedged the machine, and a capture
 helper belongs on the evidence that was missing - writing the record without either would
 leave the same hole open.
+
+### 2026-11-27T11:55Z | orchestrator | the PM cycle was refused by our own readback parser
+
+The first ordered pm_test run after the reboot did not suspend anything. It exited 1 with
+
+    sm750-pmtest: pm_test armed at devices (readback: none)
+    sm750-pmtest: pm_test did not read back devices (got 'none')
+    sm750-pmtest: pm_test readback after cleanup: none
+
+so the trap fired, pm_test stayed none, and no suspend happened. The driver was never reached:
+the helper refused because its own readback parser was line-anchored.
+
+read_pm_test() matched the bracketed level with s/^\[([^]]*)\].*/ and fell back to the first
+field. The kernel prints the level list with the current level bracketed, and the bracket is at
+the start of the line only when that level is the first entry, so every other level parsed as
+none. Measured with the real code on three fixtures: "[none] core processors platform devices
+freezer" -> none, "none core processors platform [devices] freezer" -> none (wrong, must be
+devices), "[devices] core processors platform freezer" -> devices.
+
+Fixed in tools/sm750-pmtest.sh: the match is now s/.*\[([^]]*)\].*/ so the bracketed token
+decides wherever it sits; the first-field fallback stays only for a bracket-free file that holds
+a plain single value, and the comment at :85-92 says exactly that. No control flow, arming
+order, trap or verdict rule changed.
+
+The gate hole was the same shape: tests/check-pmtest-helper.sh exercised the parser with the
+bracket at the start and with a bracket-free file, never with the bracket in the middle. Added
+sections e2 (mid-list and last-position brackets, first-field result rejected), e3 (bracket-free
+none, unreadable file -> ?), e4 (the readback assignment must precede the armed print), e5
+(readable journal with no driver pm: line names that case), e6 (a failing or empty journalctl
+keeps the permission hint), e7 (the success line stays indented and byte-compatible). The gate
+runs the extracted real function bodies against fixtures and a stubbed journalctl instead of
+duplicating the logic, and now holds 16 assertions and 8 planted controls, among them
+readback-line-anchored and armed-before-readback, both rejected.
+
+A second defect surfaced while reading the same subcommand: status told the operator the kernel
+log needs root even when it had been read successfully and simply held no driver pm: line, which
+sends a reader after a permission problem that does not exist. The decision is now a separate
+function pm_log_block() that names the two empty cases apart.
+
+Host state at this point: kernel 0.6.8 loaded (srcversion 3AC8D0650636E51E7169158), pm_test
+none, vtcon1 bound, HDMI-A-1 connected at 1024x768 75 Hz, suspend_stats success 0. The installed
+/usr/local/sbin/sm750-pmtest is still the old build, so the refusal reproduces until it is
+reinstalled; that is a root action for the owner.
+
+Lesson: a readback must parse the format the kernel actually emits, not the format that is
+convenient at the first value, and a gate that tests a parser must include the position where
+the interesting token is not first. The refusal itself was the good outcome - the helper printed
+an armed line before proving it, and the comparison still stopped the run.

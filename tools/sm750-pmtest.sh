@@ -83,13 +83,16 @@ EOF
 }
 
 # read_pm_test - the selected level, or `?` when the file cannot be read.
-# /sys/power/pm_test prints the level list with the current one bracketed,
-# `[none] core processors platform devices freezer`, so the brackets decide the
-# value; the first field is the fallback for a plain single-value file. Every
-# write in this helper is followed by this read, never by the value written.
+# /sys/power/pm_test prints the level list with the current one bracketed, and
+# the bracket sits wherever that level falls in the list, e.g.
+# `none core processors platform [devices] freezer`, so the bracketed token
+# decides the value regardless of its position. The first-field fallback is
+# only for a bracket-free file that carries a plain single value; it must never
+# be reached for the kernel's bracketed list. Every write in this helper is
+# followed by this read, never by the value written.
 read_pm_test() {
 	raw=$(cat "$PMTEST" 2>/dev/null) || raw=
-	cur=$(printf '%s\n' "$raw" | sed -n 's/^\[\([^]]*\)\].*$/\1/p')
+	cur=$(printf '%s\n' "$raw" | sed -n 's/.*\[\([^]]*\)\].*$/\1/p')
 	[ -n "$cur" ] || cur=$(printf '%s\n' "$raw" | awk 'NF { print $1; exit }')
 	printf '%s\n' "${cur:-?}"
 }
@@ -137,18 +140,30 @@ reset_cmd() {
 	}
 }
 
+# pm_log_block - the indented last four driver `pm: ` lines of this boot, or a
+# one-line reason there are none. The two empty cases are named apart: a journal
+# that cannot be read at all keeps the permission hint, while a readable journal
+# with no matching line is expected before the first PM cycle.
+pm_log_block() {
+	if ! all=$(journalctl -k -b --no-pager 2>/dev/null) || [ -z "$all" ]; then
+		printf '  none readable; the kernel log needs root (kernel.dmesg_restrict=1)\n'
+		return 0
+	fi
+	lines=$(printf '%s\n' "$all" | grep -F 'sm750' | grep -F 'pm: ' | tail -n 4)
+	if [ -n "$lines" ]; then
+		printf '%s\n' "$lines" | sed 's/^/  /'
+	else
+		printf '  no sm750 pm: line in this boot; expected before the first PM cycle\n'
+	fi
+}
+
 status_cmd() {
 	printf 'pm_test:      %s\n' "$(read_pm_test)"
 	printf 'levels:       %s\n' "$LEVELS"
 	printf 'state:        %s\n' "$(cat "$STATE" 2>/dev/null || echo '?')"
 	printf 'mem_sleep:    %s\n' "$(cat "$SLEEP" 2>/dev/null || echo '?')"
 	printf 'pm lines (last 4, this boot):\n'
-	if lines=$(journalctl -k -b --no-pager 2>/dev/null |
-		grep -F 'sm750' | grep -F 'pm: ' | tail -n 4) && [ -n "$lines" ]; then
-		printf '%s\n' "$lines" | sed 's/^/  /'
-	else
-		printf '  none readable; the kernel log needs root (kernel.dmesg_restrict=1)\n'
-	fi
+	pm_log_block
 	printf 'suspend_stats:\n'
 	if [ -d "$STATS" ]; then
 		for entry in "$STATS"/*; do

@@ -182,6 +182,114 @@ has "$readbody" "awk 'NF { print \$1; exit }'" \
 	"e: the readback must fall back to the first field of a plain single-value file"
 ok "e. the EXIT trap always writes none and every write is read back"
 
+# --- e2. the parser finds the bracketed level wherever the kernel puts it ---
+# The kernel brackets the current level in the list, and the bracket is at the
+# start of the line only when that level is the first entry, so a line-anchored
+# match reads the first field for every other level. The real function body is
+# extracted and run against fixtures; the parse is not duplicated here.
+{
+	printf '#!/bin/sh\n'
+	printf 'read_pm_test() {\n'
+	func "$helper" read_pm_test
+	printf '}\n'
+	printf 'read_pm_test\n'
+} > "$scratch/read_pm_test.sh"
+
+resolve_pm_test() { # TEXT - the level the helper's own parser resolves
+	printf '%s\n' "$1" > "$scratch/pm_test.fixture"
+	PMTEST=$scratch/pm_test.fixture sh "$scratch/read_pm_test.sh"
+}
+
+for want_case in \
+	'none core processors platform [devices] freezer|devices' \
+	'none core processors platform devices [freezer]|freezer' \
+	'[none] core processors platform devices freezer|none'
+do
+	want_text=${want_case%|*}
+	want_level=${want_case##*|}
+	got_level=$(resolve_pm_test "$want_text")
+	[ "$got_level" = "$want_level" ] ||
+		bad "e2: '$want_text' resolved to '$got_level', not '$want_level': the bracket may sit anywhere in the list"
+done
+ok "e2. read_pm_test resolves the bracketed level wherever it sits in the list"
+
+# --- e3. a bracket-free file keeps the single-value fallback ----------------
+# The first-field fallback exists only for a file with no brackets at all; an
+# unreadable file must still yield ?, never an empty level.
+if [ "$(resolve_pm_test 'none')" != none ]; then
+	bad "e3: a bracket-free 'none' must resolve to none, got '$(resolve_pm_test 'none')'"
+fi
+if [ "$(PMTEST=$scratch/no-such-pm_test sh "$scratch/read_pm_test.sh")" != '?' ]; then
+	bad "e3: an unreadable pm_test must resolve to ?, got '$(PMTEST=$scratch/no-such-pm_test sh "$scratch/read_pm_test.sh")'"
+fi
+ok "e3. a bracket-free single value resolves and an unreadable file yields ?"
+
+# --- e4. the armed line is printed after its readback is taken --------------
+# The armed line reports a measured value, so the readback assignment must come
+# first; printing it before the read is the false-success shape this pins out.
+readback_line=$(lineno 'got=$(read_pm_test)' "$runbody")
+armed_line=$(lineno 'pm_test armed at %s (readback: %s)' "$runbody")
+if [ -z "$readback_line" ] || [ -z "$armed_line" ]; then
+	bad "e4: run must read the level back and print it"
+elif [ "$readback_line" -ge "$armed_line" ]; then
+	bad "e4: the readback at line $readback_line must precede the armed line at line $armed_line"
+fi
+ok "e4. the armed line is printed only after the level has been read back"
+
+# --- e5. the two empty journal cases are named apart ------------------------
+# status once printed the permission hint both when journalctl failed and when
+# a readable journal held no driver `pm: ` line, sending the operator after a
+# permission problem that did not exist. The decision is extracted into
+# pm_log_block and exercised against a stub journalctl, never the real log.
+{
+	printf '#!/bin/sh\n'
+	printf 'journalctl() {\n'
+	printf '\tcat "${STUB_LOG:-/dev/null}" 2>/dev/null\n'
+	printf '\treturn "${STUB_RC:-0}"\n'
+	printf '}\n'
+	printf 'pm_log_block() {\n'
+	func "$helper" pm_log_block
+	printf '}\n'
+	printf 'pm_log_block\n'
+} > "$scratch/pm_log_block.sh"
+
+readable=$scratch/pm_log_readable.txt
+printf '%s\n' \
+	'clocksource: acpi_pm: timekeeping: ...' \
+	'sm750hdmidrm 0000:01:00.0: probe ok' > "$readable"
+
+no_lines=$(STUB_LOG=$readable STUB_RC=0 sh "$scratch/pm_log_block.sh")
+case $no_lines in
+*'no sm750 pm: line'*) ;;
+*) bad "e5: a readable log with no driver pm: line must say so, got '$no_lines'" ;;
+esac
+case $no_lines in
+*'needs root'*) bad "e5: a readable log must not claim the kernel log needs root" ;;
+esac
+ok "e5. a readable log with no driver pm: line names that, not permissions"
+
+unreadable=$(STUB_RC=1 sh "$scratch/pm_log_block.sh")
+case $unreadable in
+*'needs root'*) ;;
+*) bad "e6: a failing journalctl must keep the permission hint, got '$unreadable'" ;;
+esac
+case $unreadable in
+*'no sm750 pm: line'*) bad "e6: a failing journalctl must not claim the log was read" ;;
+esac
+empty=$(STUB_RC=0 sh "$scratch/pm_log_block.sh")
+case $empty in
+*'needs root'*) ;;
+*) bad "e6: an empty journal must keep the permission hint, got '$empty'" ;;
+esac
+ok "e6. a failing or empty journalctl keeps the permission hint"
+
+hit=$scratch/pm_log_hit.txt
+printf '%s\n' 'sm750hdmidrm 0000:01:00.0: pm: suspend entry' > "$hit"
+hit_out=$(STUB_LOG=$hit STUB_RC=0 sh "$scratch/pm_log_block.sh")
+[ "$hit_out" = '  sm750hdmidrm 0000:01:00.0: pm: suspend entry' ] ||
+	bad "e7: a driver pm: line must print indented and unchanged, got '$hit_out'"
+ok "e7. a driver pm: line still prints indented, byte-compatible with status"
+
 # --- f. the journal snapshot is taken before the freeze write ---------------
 has "$runbody" 'journal_before=' "f: the journal length must be snapshotted"
 has "$body" 'journalctl -k -b --no-pager' \
@@ -333,6 +441,30 @@ open(p, 'w').write(s.replace(old, ''))
 MUT
 }
 
+plant_pmtest_readback_line_anchored() { # the bracket only matches at line start
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = ('\tcur=$(printf \'%s\\n\' "$raw" | sed -n \'s/.*\\[\\([^]]*\\)\\].*$/\\1/p\')\n')
+assert s.count(old) == 1, s.count(old)
+open(p, 'w').write(s.replace(old, old.replace('s/.*\\[', 's/^\\[')))
+MUT
+}
+plant_pmtest_armed_before_readback() { # the armed line is printed before the read
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = ('\tgot=$(read_pm_test)\n'
+       "\tprintf '%s: pm_test armed at %s (readback: %s)\\n' \"$PROG\" \"$level\" \"$got\"\n")
+assert s.count(old) == 1, s.count(old)
+new = ("\tprintf '%s: pm_test armed at %s (readback: %s)\\n' \"$PROG\" \"$level\" \"$got\"\n"
+       '\tgot=$(read_pm_test)\n')
+open(p, 'w').write(s.replace(old, new))
+MUT
+}
+
 control() {
 	local name=$1
 	local planted=$scratch/sm750-pmtest.sh
@@ -353,6 +485,8 @@ control() {
 control trap-removed plant_trap_removed
 control level-validation-removed plant_level_validation_removed
 control readback-removed plant_readback_removed
+control readback-line-anchored plant_pmtest_readback_line_anchored
+control armed-before-readback plant_pmtest_armed_before_readback
 control verdict-without-completion plant_verdict_without_completion
 control journal-snapshot-removed plant_journal_snapshot_removed
 control stats-file-only plant_stats_file_only
@@ -365,7 +499,7 @@ fi
 printf 'negative control pristine: accepted\n'
 
 [ "$fail" -eq 0 ] || exit 1
-controls=6
+controls=8
 if [ "$self_test" -eq 1 ]; then
 	printf 'PM test helper checks passed (%s assertions, %s planted controls, self-test)\n' "$assertions" "$controls"
 else
