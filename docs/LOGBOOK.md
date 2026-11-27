@@ -4566,3 +4566,15 @@ Lesson: a document that states the current environment will always drift. When t
 - Within the same second the owner's session re-probed the card on its own: `comm="kwin_wayland", pid=2402` opened `minor=128` and issued `DRM_IOCTL_VERSION` calls. Nothing in the helper had to ask it to.
 
 Lesson: a capture taken on the safe path is still worth its file. It tells you the instrumentation is complete and ordered, and it can hand you a fact you were arguing about for a defect you have not reproduced yet.
+
+### 2026-11-27T20:45Z | orchestrator | the reload helper can no longer walk into the wedge
+
+- A52 asked for a bounded poll in `tools/sm750-vt.sh` back on 2026-11-26. The owner chose that over a deliberate A65 reproduction (answered "2."), so the helper was hardened instead of the defect being chased.
+- Five changes, all in the helper: `off` refuses before the bind check when the module already reads `refcount` -1, because detaching the console in that state only makes the panel darker; the single refcount read after the PCI unbind became `poll_refcnt_zero 20 0.1`; `refcnt_diagnostics()` runs on all three refusal paths and prints the module count, `holders/`, the userspace holders by pid and node, every vtconsole bind and the resolved driver dir; `modprobe -r` is preceded by a fresh read; `show` prints `state: live` or `state: Unloading (wedged; only a reboot clears this)`.
+- The gate grew a section `m` rather than extending `l`, because `l` is the holder-scan section that the A50/A51/A52 rows cite by name. Six new planted controls: `wedge-guard-removed`, `wedge-guard-after-detach`, `poll-unbounded`, `poll-single-read`, `diagnostics-removed`, `pre-modprobe-reread-removed`. Counts are now 18 assertions and 16 planted controls.
+- One assertion was dropped rather than kept passing vacuously: the literal `[ "$rc_after" != 0 ]` test no longer exists in the source because the poll replaced the read it guarded. The neighbouring assertions on the two refcount prints still cover the same intent.
+- The cause of A52 is now measured, not inferred: `sm750-vt show` printed `holders: 2` with two `chromium-browse` pids on `renderD128`, and after the owner closed them the count read 0 on the first sample and the reload succeeded. Each open DRM file handle pins the module through the fops owner. The one reading that still does not fit - 1 at 08:35Z with an empty holder scan - is recorded as an open question instead of being explained away.
+- Also fixed: `src/sm750_drm.c:305` pointed the A65 comment at an evidence file that does not exist. It now names both the marks file and the mitigated-path capture. One-line comment change, no version bump, no behaviour.
+- Installed copy is still the older body (`26f9fb71...`) while the tree is `1cdb0902...`; the refresh command is in `docs/ROOT-ACTIONS.md` 3.12.
+
+Lesson: when a guard has to run before other guards, the gate must assert the ORDER of the two blocks, not just their presence. A control that removes the guard passes a presence check; a control that moves it below the first side effect is the one that catches a regression.

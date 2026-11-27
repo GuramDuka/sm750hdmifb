@@ -302,7 +302,8 @@ MODULE_PARM_DESC(shadow_dma_min_bytes,
 MODULE_PARM_DESC(crc_window_bytes,
 	"Bytes of the visible scanout region read per CRC (default 262144, minimum 4096, clamped to the visible frame; writable at runtime)");
 /* Defect A65 teardown marks; see docs/evidence/runtime/
- * 51-a65-teardown-trace.txt. Default off, writes no state. */
+ * 52-a65-teardown-trace.txt and 54-a65-trace-mitigated-reload.txt.
+ * Default off, writes no state. */
 static bool a65_trace;
 module_param(a65_trace, bool, 0644);
 MODULE_PARM_DESC(a65_trace,

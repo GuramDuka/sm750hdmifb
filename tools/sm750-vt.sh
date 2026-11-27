@@ -89,6 +89,51 @@ refcnt() {
 	cat "$MODDIR/refcnt" 2>/dev/null || printf '%s\n' '-'
 }
 
+# poll_refcnt_zero MAX SECONDS_EACH - wait, with a hard bound, for the module
+# refcount to read 0. The wait is bounded because a holder can appear at any
+# moment: giving up and saying so is the only safe answer, and it is never
+# inferred later from a modprobe error. Never loops without a counter and never
+# calls modprobe.
+poll_refcnt_zero() {
+	max=$1
+	each=${2:-0.1}
+	i=0
+	while [ "$i" -lt "$max" ]; do
+		if [ "$(refcnt)" = 0 ]; then
+			echo "$PROG: refcount reached 0 after $i waits"
+			return 0
+		fi
+		i=$((i + 1))
+		sleep "$each" 2>/dev/null || sleep 1
+	done
+	echo "$PROG: the module refcount did not reach 0 within $max waits" >&2
+	return 1
+}
+
+# refcnt_diagnostics - on stderr, everything needed to understand a refusal to
+# unload: the number, who might hold it, the console bindings, and the device's
+# current driver. The refcount is read first so the labels agree.
+refcnt_diagnostics() {
+	n=$(refcnt)
+	echo "$PROG: module refcount: $n" >&2
+	echo "$PROG: holders directory: $(ls -A "$MODDIR/holders" 2>/dev/null | tr '\n' ' ')" >&2
+	h=$(holders || true)
+	if [ -z "$h" ]; then
+		echo "$PROG: userspace holders: none" >&2
+	else
+		echo "$PROG: userspace holders:" >&2
+		printf '%s\n' "$h" | sed 's/^/  /' >&2
+	fi
+	for vc in "$VTCLASS"/vtcon*; do
+		[ -d "$vc" ] || continue
+		echo "$PROG: $(basename "$vc") name=$(cat "$vc/name" 2>/dev/null || echo '?') bind=$(cat "$vc/bind" 2>/dev/null || echo '?')" >&2
+	done
+	echo "$PROG: device binding: $(readlink -f "$DRIVER_ATTR" 2>/dev/null || echo none)" >&2
+	if [ "$n" = -1 ]; then
+		echo "$PROG: sm750hdmidrm is stuck in Unloading (refcount -1); only a reboot clears this state" >&2
+	fi
+}
+
 # dev_bound - true when the device's driver link resolves to our driver dir.
 dev_bound() {
 	[ "$(readlink -f "$DRIVER_ATTR" 2>/dev/null || echo none)" = "$DRVDIR" ]
@@ -241,6 +286,11 @@ show_state() {
 		printf 'target:       unresolvable (see the message above)\n'
 	fi
 	module_line
+	if [ "$(refcnt)" = -1 ]; then
+		printf 'state:        Unloading (wedged; only a reboot clears this)\n'
+	else
+		printf 'state:        live\n'
+	fi
 	printf 'active tty:   %s\n' "$(cat "$TTYACTIVE" 2>/dev/null || echo '?')"
 	printf 'card:         %s -> %s inode %s\n' "$CARD" \
 		"$(readlink -f "$CARD" 2>/dev/null || echo '?')" "$(card_inode)"
@@ -333,6 +383,17 @@ if [ "$mode" = on ]; then
 fi
 
 # off
+# The A65 wedge: a modprobe -r on a module whose framebuffer reference is still
+# held can leave it in state Unloading with refcount -1 forever. Nothing this
+# helper can do clears that, and detaching the console first only makes the
+# panel darker, so refuse before changing anything.
+if [ "$(refcnt)" = -1 ]; then
+	echo "$PROG: sm750hdmidrm is already stuck in Unloading (refcount -1); only a reboot clears this state, and detaching the console now would only make the panel darker" >&2
+	echo "$PROG: record this line: $(grep -m 1 '^sm750hdmidrm ' /proc/modules 2>/dev/null || echo 'no /proc/modules line')" >&2
+	echo "$PROG: set a65_trace=1 to mark the stop point on the next attempt" >&2
+	exit 1
+fi
+
 bind=$(cat "$TARGET/bind" 2>/dev/null || echo '?')
 if [ "$bind" != 1 ]; then
 	echo "$PROG: fbcon is already unbound from $TARGET (bind=$bind); run '$PROG on' to restore it" >&2
@@ -388,13 +449,33 @@ dev_unbound=1
 rc_after=$(refcnt)
 echo "$PROG: device unbound, refcnt after the unbind: $rc_after"
 
-if [ "$rc_after" != 0 ]; then
-	echo "$PROG: the module refcount is still $rc_after after unbinding the device, so something other than the framebuffer holds it (holders directory: $(ls -A "$MODDIR/holders" 2>/dev/null | tr '\n' ' ' || true)); modprobe -r cannot succeed" >&2
+# A52: the refcount can be held by a userspace fd and can also clear by itself
+# a moment after the remove path runs, so wait a bounded time for it instead of
+# reading once. A refusal here restores everything through the EXIT trap.
+if ! poll_refcnt_zero 20 0.1; then
+	echo "$PROG: the module refcount is still $(refcnt) after unbinding the device, so something other than the framebuffer holds it; modprobe -r cannot succeed" >&2
+	refcnt_diagnostics
+	exit 1
+fi
+
+# A holder can appear between the poll and the unload, and modprobe -r on a
+# still-held module is the one call that can wedge it in Unloading forever, so
+# re-read immediately before it and refuse the same way.
+rc=$(refcnt)
+if [ "$rc" != 0 ]; then
+	echo "$PROG: the module refcount is $rc immediately before modprobe -r, so a holder appeared after the wait; modprobe -r cannot succeed" >&2
+	refcnt_diagnostics
 	exit 1
 fi
 
 if ! "$MODPROBE" -r sm750hdmidrm; then
-	echo "$PROG: modprobe -r sm750hdmidrm failed even though the refcount read 0" >&2
+	rc=$(refcnt)
+	if [ "$rc" = -1 ]; then
+		echo "$PROG: modprobe -r left the module in Unloading; this is the A65 state and only a reboot clears it" >&2
+	else
+		echo "$PROG: modprobe -r sm750hdmidrm failed even though the refcount read 0" >&2
+		refcnt_diagnostics
+	fi
 	exit 1
 fi
 mod_down=1

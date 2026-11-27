@@ -190,8 +190,9 @@ has "$body" 'refcnt before any change' \
 	"k: the module refcount must be printed before anything is touched"
 has "$body" 'refcnt after the unbind' \
 	"k: the module refcount must be printed again right after the unbind"
-has "$body" 'if [ "$rc_after" != 0 ]; then' \
-	"k: a refcount that did not drop to zero must fail the run with that number"
+# The single-read test was replaced by poll_refcnt_zero; section m pins the
+# bounded wait and its refusal, so the old `[ "$rc_after" != 0 ]` literal is
+# deliberately no longer asserted here.
 has "$body" 'if ! dev_bound; then' \
 	"k: off must refuse when the device is not bound to its driver"
 
@@ -232,6 +233,100 @@ fi
 has "$trap_body" 'mod_down' "k: the restore must reload a module this run unloaded"
 has "$trap_body" 'dev_unbound' "k: the restore must re-bind a device this run unbound"
 ok "k. the trap restores module, then device, then console, and never on success"
+
+# --- m. the A65 reload guard: refuse a wedge, wait bounded, diagnose --------
+# A65: a modprobe -r on a module whose framebuffer reference is still pinned
+# left it in Unloading with refcount -1 forever, panel dark, reboot the only
+# remedy. The guard must therefore run before anything is detached; the wait
+# for the refcount must be bounded because a holder can appear at any moment;
+# and every refusal between the detach and the load must print the full
+# diagnosis (module refcount, holders, vtconsole bindings, device binding).
+
+guard=$(lineno 'already stuck in Unloading (refcount -1)' "$offbody")
+bindcheck=$(lineno 'if [ "$bind" != 1 ]; then' "$offbody")
+detach=$(lineno 'write_bind "$TARGET" 0' "$offbody")
+if [ -z "$guard" ]; then
+	bad "m: off must refuse a module already stuck in Unloading (refcount -1)"
+elif [ -n "$bindcheck" ] && [ "$guard" -ge "$bindcheck" ]; then
+	bad "m: the -1 guard at line $guard must precede the bind check at line $bindcheck"
+elif [ -n "$detach" ] && [ "$guard" -ge "$detach" ]; then
+	bad "m: the -1 guard at line $guard must precede the detach at line $detach"
+fi
+has "$offbody" 'only a reboot clears this state, and detaching the console now would only make the panel darker' \
+	"m: the -1 refusal must say that detaching cannot help"
+has "$offbody" 'a65_trace=1' \
+	"m: the -1 refusal must say how to mark the stop point on the next attempt"
+has "$offbody" '/proc/modules' \
+	"m: the -1 refusal must read the module line from /proc/modules"
+ok "m. off refuses a wedged module before the bind check and names the record to collect"
+
+# poll_refcnt_zero must carry a counter bound and must not be a bare loop. The
+# single-read test is gone: a read once, after the unbind, cannot distinguish a
+# reference that clears a moment later from one that never does.
+pollfn=$(func "$helper" poll_refcnt_zero)
+has "$pollfn" '[ "$i" -lt "$max" ]' \
+	"m: the refcount wait must have a hard iteration bound"
+if printf '%s\n' "$pollfn" | grep -qE '^[[:space:]]*while[[:space:]]+(true|:)([[:space:]]|;|$)'; then
+	bad "m: the refcount wait must not loop without a counter"
+fi
+has "$offbody" 'if ! poll_refcnt_zero 20 0.1; then' \
+	"m: off must gate the unload on a bounded refcount wait"
+poll_line=$(lineno 'poll_refcnt_zero 20 0.1' "$offbody")
+if [ -n "$poll_line" ] && [ -n "$pci_unbind" ] && [ "$poll_line" -le "$pci_unbind" ]; then
+	bad "m: the wait at line $poll_line must follow the PCI unbind at line $pci_unbind"
+fi
+if grep -qF 'rc_after" != 0' "$helper"; then
+	bad "m: the single refcount read must be replaced by the bounded wait"
+fi
+ok "m. the refcount wait is bounded and its result replaces the single read"
+
+# Every refusal between the detach and the load prints the diagnosis within a
+# few lines of its message, so an operator never has to guess who holds what.
+diag_follows() { # diag_follows ANCHOR - refcnt_diagnostics shortly after ANCHOR
+	printf '%s\n' "$offbody" | awk -v a="$1" '
+		index($0, a) && !hit { hit = NR }
+		hit && NR > hit && NR <= hit + 3 && /refcnt_diagnostics/ { found = 1 }
+		END { exit(found ? 0 : 1) }
+	'
+}
+for anchor in 'after unbinding the device' 'immediately before modprobe -r' \
+	'even though the refcount read 0'; do
+	if ! diag_follows "$anchor"; then
+		bad "m: refcnt_diagnostics must follow the refusal after '$anchor'"
+	fi
+done
+diagfn=$(func "$helper" refcnt_diagnostics)
+has "$diagfn" 'ls -A "$MODDIR/holders"' \
+	"m: the diagnosis must list the holders directory"
+has "$diagfn" 'userspace holders' \
+	"m: the diagnosis must list userspace holders"
+has "$diagfn" '"$VTCLASS"/vtcon*' \
+	"m: the diagnosis must list every vtconsole and its bind"
+has "$diagfn" 'device binding' \
+	"m: the diagnosis must name the device's current driver"
+has "$diagfn" 'only a reboot clears this state' \
+	"m: the diagnosis must repeat the reboot-only sentence for refcount -1"
+ok "m. every refusal between detach and load prints the full refcount diagnosis"
+
+# A holder can appear between the bounded wait and the unload, and modprobe -r
+# on a still-held module is the one call that can wedge it forever.
+reread=$(lineno 'immediately before modprobe -r' "$offbody")
+unload_line=$(lineno '"$MODPROBE" -r sm750hdmidrm' "$offbody")
+if [ -z "$reread" ]; then
+	bad "m: the refcount must be re-read immediately before modprobe -r"
+elif [ -n "$unload_line" ] && [ "$reread" -ge "$unload_line" ]; then
+	bad "m: the re-read at line $reread must precede modprobe -r at line $unload_line"
+fi
+has "$offbody" 'if [ "$rc" != 0 ]; then' \
+	"m: a non-zero re-read must refuse the unload"
+ok "m. modprobe -r is preceded by a fresh refcount read that refuses on non-zero"
+
+# show is the read-only way to see the state, so it must name the wedge.
+has "$body" 'state:        Unloading (wedged; only a reboot clears this)' \
+	"m: show must name the wedged Unloading state"
+has "$body" 'state:        live' \
+	"m: show must name the live state otherwise"
+ok "m. show names the wedged Unloading state and the live state"
 
 # --- l. the holder scan is pinned to node identity, not to a node name -------
 # The scan globbed `*card0*`, but the DRM node name is not stable: after a
@@ -406,6 +501,89 @@ assert s.count(old) == 1, s.count(old)
 open(p, 'w').write(s.replace(old, new))
 MUT
 }
+plant_wedge_guard_removed() { # the A65 -1 refusal gone, so off detaches into a wedge
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '''if [ "$(refcnt)" = -1 ]; then
+\techo "$PROG: sm750hdmidrm is already stuck in Unloading (refcount -1); only a reboot clears this state, and detaching the console now would only make the panel darker" >&2
+\techo "$PROG: record this line: $(grep -m 1 '^sm750hdmidrm ' /proc/modules 2>/dev/null || echo 'no /proc/modules line')" >&2
+\techo "$PROG: set a65_trace=1 to mark the stop point on the next attempt" >&2
+\texit 1
+fi
+'''
+assert s.count(old) == 1, s.count(old)
+open(p, 'w').write(s.replace(old, ''))
+MUT
+}
+plant_wedge_guard_after_detach() { # the guard moved below the detach, where it is worthless
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '''if [ "$(refcnt)" = -1 ]; then
+\techo "$PROG: sm750hdmidrm is already stuck in Unloading (refcount -1); only a reboot clears this state, and detaching the console now would only make the panel darker" >&2
+\techo "$PROG: record this line: $(grep -m 1 '^sm750hdmidrm ' /proc/modules 2>/dev/null || echo 'no /proc/modules line')" >&2
+\techo "$PROG: set a65_trace=1 to mark the stop point on the next attempt" >&2
+\texit 1
+fi
+'''
+anchor = '\nunbound=1\n'
+assert s.count(old) == 1, s.count(old)
+assert s.count(anchor) == 1, s.count(anchor)
+s = s.replace(old, '', 1).replace(anchor, anchor + old, 1)
+open(p, 'w').write(s)
+MUT
+}
+plant_poll_unbounded() { # the wait turned into a bare loop that can never give up
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = 'while [ "$i" -lt "$max" ]; do'
+new = 'while :; do'
+assert s.count(old) == 1, s.count(old)
+open(p, 'w').write(s.replace(old, new))
+MUT
+}
+plant_poll_single_read() { # the bounded wait replaced by one read that cannot see a late drop
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = 'if ! poll_refcnt_zero 20 0.1; then'
+new = 'if [ "$(refcnt)" != 0 ]; then'
+assert s.count(old) == 1, s.count(old)
+open(p, 'w').write(s.replace(old, new))
+MUT
+}
+plant_diagnostics_removed() { # every refusal loses the reason it refused
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '\trefcnt_diagnostics\n'
+assert s.count(old) == 3, s.count(old)
+open(p, 'w').write(s.replace(old, ''))
+MUT
+}
+plant_pre_modprobe_reread_removed() { # a holder appearing after the wait reaches modprobe -r
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '''rc=$(refcnt)
+if [ "$rc" != 0 ]; then
+\techo "$PROG: the module refcount is $rc immediately before modprobe -r, so a holder appeared after the wait; modprobe -r cannot succeed" >&2
+\trefcnt_diagnostics
+\texit 1
+fi
+'''
+assert s.count(old) == 1, s.count(old)
+open(p, 'w').write(s.replace(old, ''))
+MUT
+}
 
 control() {
 	local name=$1
@@ -434,6 +612,12 @@ control pci-rebind-dropped plant_pci_rebind_dropped
 control refcount-not-reported plant_refcount_not_reported
 control trap-restores-fbcon-only plant_trap_restores_fbcon_only
 control holder-scan-name-glob plant_holder_scan_name_glob
+control wedge-guard-removed plant_wedge_guard_removed
+control wedge-guard-after-detach plant_wedge_guard_after_detach
+control poll-unbounded plant_poll_unbounded
+control poll-single-read plant_poll_single_read
+control diagnostics-removed plant_diagnostics_removed
+control pre-modprobe-reread-removed plant_pre_modprobe_reread_removed
 
 # The pristine copy must still pass, otherwise the controls prove nothing.
 cp "$helper" "$scratch/pristine.sh"
@@ -443,7 +627,7 @@ fi
 printf 'negative control pristine: accepted\n'
 
 [ "$fail" -eq 0 ] || exit 1
-controls=10
+controls=16
 if [ "$self_test" -eq 1 ]; then
 	printf 'VT helper checks passed (%s assertions, %s planted controls, self-test)\n' "$assertions" "$controls"
 else

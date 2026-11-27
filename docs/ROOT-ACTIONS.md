@@ -1210,12 +1210,14 @@ in `docs/DEFECTS.md`; the five log directories are under
 
 ### 3.12 `/usr/local/sbin/sm750-vt` (hot module reload without a reboot; allowlist present, installed body is the OLD one and must be refreshed)
 
-Source `tools/sm750-vt.sh`: 448 lines, 16688 bytes, sha256
-`26f9fb7105ece6cf7a2d81d32d32b9f7a957e5d4d478e7940f8f9ad1fc0404f9` as measured
-2026-11-26; static gate `tests/check-vt-helper.sh` (450 lines, sha256
-`17a4390fc46614c061ba362819909b900bf8148cb7b2755cf702f0a6bd668efb`, part of
-`make check` through `tests/check-drm-policy.sh`, 13 assertions and 10 planted
-controls). The holder scan matches the card and render nodes on their
+Source `tools/sm750-vt.sh`: 529 lines, 19964 bytes, sha256
+`1cdb0902a235577847726d83b83a08f94665540b7e4ad7a2941edddecb2920fd` as measured
+2026-11-27; static gate `tests/check-vt-helper.sh` (634 lines, sha256
+`a522082c9c7130cf5fc2b7a8099bdd048badd71cfe274824629313eeccc431a4`, part of
+`make check` through `tests/check-drm-policy.sh`, 18 assertions and 16 planted
+controls). The installed copy measured 2026-11-27 is still sha256
+`26f9fb7105ece6cf7a2d81d32d32b9f7a957e5d4d478e7940f8f9ad1fc0404f9`, the older
+body described below, so the refresh command is still pending. The holder scan matches the card and render nodes on their
 `dev:inode` identity through the by-path links, never on a node name: the node
 is `card0` before a reload and `card4` after it on this host, so a name glob
 reported no holder while the module was really held.
@@ -1326,6 +1328,20 @@ The `card:` and `render:` lines are diagnostic, not decoration: the node names
 change on every probe (`card0` before a reload, `card4` after it, and
 `renderD131` / `renderD132` likewise), so the helper prints what the by-path
 links currently resolve to together with the `dev:inode` pair it scans for.
+
+Guard rail added 2026-11-27 (defect A65): `off` now refuses to touch anything
+when the module is already wedged in `Unloading` (`refcount` reads `-1`), because
+the only thing a detach can still achieve in that state is a darker panel. The
+refusal prints the `/proc/modules` line, the reboot-only sentence and the
+`a65_trace=1` reminder. The single refcount read after the PCI unbind was
+replaced by a bounded wait (`20` polls, `0.1` s each) so an unattended reload
+succeeds when a transient reference clears within two seconds instead of
+giving up on the first sample. Every refusal between the detach and the load
+now prints the full diagnosis - module refcount, `holders/` contents, the
+userspace holders or none, the `bind` value of every vtconsole and the resolved
+driver directory - and `modprobe -r` is preceded by a fresh refcount read.
+`show` distinguishes `state: live` from `state: Unloading (wedged; only a
+reboot clears this)`.
 
 Guard rails, in the order `off` applies them: it refuses when fbcon is already
 unbound (`run 'sm750-vt on'`), when any process holds the card (it prints

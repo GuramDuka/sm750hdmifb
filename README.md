@@ -75,14 +75,14 @@ packaged tarball.
 | Measure | Value |
 | --- | --- |
 | Driver source | 11252 lines of C and headers under `src/` |
-| Defect findings tracked | 66, from A01 to A67, each with a disposition |
+| Defect findings tracked | 67, from A01 to A67, each with a disposition |
 | Acceptance criteria | 6 PASS, 0 FAIL, 1 GAP - the gap is pixel-level capture at the panel, which needs a human or capture hardware |
-| Project gates | 34 gate scripts, 18 commands in `make check`, seven opt-in verification targets with planted-defect controls |
+| Project gates | 35 gate scripts, 18 commands in `make check`, seven opt-in verification targets with planted-defect controls |
 | Kernel and format matrix | 9 combinations, kernel 6.17.1 through the 7.4 daily headers |
 | IGT KMS subset | 26 pass, 14 skip, 1 fail by design |
 | GL path | `kmscube`, 299 frames in 5.07 s, 59.01 fps on llvmpipe |
 | Vblank rate | 60.43 per second measured over 120 events |
-| Evidence | 57 runtime transcripts, 28 build transcripts and 7 packaging transcripts under `docs/evidence/` |
+| Evidence | 60 runtime transcripts, 28 build transcripts and 14 packaging transcripts under `docs/evidence/` |
 | Documentation | 22 documents under `docs/`, plus the specification archive and the deck |
 
 ### How a claim is checked
