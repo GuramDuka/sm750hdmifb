@@ -1,6 +1,26 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Release notes
 
+## 0.6.9 - The sleep path becomes measurable
+
+- **A root-only `pm_probe` attribute drives the PM callbacks directly.**
+  Writing `suspend`, `resume` or `cycle` to
+  `/sys/bus/pci/devices/0000:01:00.0/pm_probe` calls the driver's suspend and
+  resume bodies once and logs each result with the `pm probe: ` prefix. The
+  file is mode 0200, refuses to run while a DRM client holds master or the
+  device is not registered, and holds the device with `drm_dev_enter()` for
+  the duration.
+- **A callback failure is now a failed write.** A successful invocation
+  returns the byte count and a non-zero callback return is passed back to the
+  caller, so `echo cycle > pm_probe` fails visibly and a script under `set -e`
+  stops. An unknown word is still `-EINVAL`.
+- **This is a measurement aid, not a system sleep.** No PCI config space is
+  saved or restored, the device never enters D3hot and no power state changes,
+  so a pass here says nothing about system sleep. The real devices-level cycle
+  is still unmeasured: two neighbouring Tesla P100s refuse it with
+  `PreserveVideoMemoryAllocations=1` (`docs/DEFECTS.md` A66), and the cycle is
+  owed after a reboot with `nvidia.NVreg_PreserveVideoMemoryAllocations=0`.
+
 ## 0.6.8 - What a production-readiness review found
 
 - **The direct scanout path can no longer be pointed outside its buffer.**

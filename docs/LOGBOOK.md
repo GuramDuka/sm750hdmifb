@@ -4358,3 +4358,48 @@ pin state of the SM750 on a system sleep remains unmeasured, and the honest reco
 Lesson: on a multi-device host, a devices-level PM test is only as good as its worst-behaved
 device; the verdict must therefore name which device failed, and a driver whose callback never
 ran must not be described as passing or failing the sleep path.
+
+### 2026-11-27T13:50Z | orchestrator | 0.6.9: pm_probe measures the callbacks the host refuses to reach
+
+A66 is the defect that the 2026-11-27 armed pm_test cycle left behind: the freeze write never
+reached the SM750, because the two neighbouring Tesla P100s return -5 from nv_pmops_suspend first,
+so sm750_pm_suspend() and sm750_pm_resume() have never executed on this host. 0.6.9 adds a
+root-only write-only sysfs attribute, /sys/bus/pci/devices/0000:01:00.0/pm_probe, which calls those
+same two callback bodies directly: `suspend`, `resume`, `cycle` (resume only after a successful
+suspend). Guards run in order before either callback - dev_get_drvdata() (-ENODEV), a DRM client
+holding master, an unregistered device, drm_dev_enter() (all -EBUSY) - a dedicated mutex serialises
+because the callbacks take mode_lock themselves, and the write's return value carries the outcome:
+the byte count on success, -EINVAL for an unknown command, the callback's own error otherwise, so a
+script under set -e stops on a failed callback. tools/sm750-pm-probe.sh is the allowlisted helper
+that drives it and prints the kernel's own `pm probe: ` lines; its usage text states that a pass is
+not a system sleep.
+
+Two gate defects surfaced while finishing this, both found by running the gates rather than by
+reading the diff:
+
+1. tests/check-drm-policy.sh S1 and S2 failed although the callbacks were correct. The extractor
+   guard_fn() starts at the first line whose prefix matches, and the forward declarations required
+   by pm_probe_store() carry the same prefix as the definitions, so both properties were checked
+   against a prototype. guard_fn() gained a third parameter that skips a line ending in a semicolon,
+   the two PM call sites pass it, and the three plant_pm_* controls now anchor on the full
+   definition line - before that change the controls were hollow, because their mutations landed in
+   the prototype as well.
+2. tests/check-drm-packaging.sh hardcoded PACKAGE_VERSION="0.6.8" and Version: 0.6.8, so the
+   0.6.9 bump failed the gate for a reason that was not a packaging defect. It now reads the
+   version from build-package.sh and compares, which is strictly stronger: the number lives in one
+   place and every consumer is checked against it.
+
+Verification: make check exits 0 with 18 recipe commands; check-pm-probe 11 assertions and 6
+planted controls; check-drm-policy 16 assertions and 16 controls; check-sysfs-attributes 12
+attributes; check-scratch-policy 25 scripts; check-release-version 0.6.9; build-package.sh and
+tests/audit-release.sh exit 0. Counts after staging: 152 payload files, 34 gate scripts, 55 runtime
+transcripts, 65 defect rows (A01 to A66), 124 logbook entries.
+
+Lesson: a source-level extractor keyed on a prefix is silently retargeted by a new prototype, and a
+gate that hardcodes a release number turns a version bump into a false failure. Both were invisible
+in review and obvious in a gate run, which is why the gates run before the commit and not after.
+
+Note for the record: two gem-implementer sessions for this batch died on provider rejections after
+writing most of the code, and I finished the wiring, the gate fixes and the helper myself rather
+than reopening a third session; the deviation from the delegation rule is recorded here because the
+logbook is the audit trail.

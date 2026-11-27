@@ -139,6 +139,7 @@ after (working tree) form of every fixed item. All logs were produced unprivileg
 | A63 | S3 | A VRAM strap reporting 1024..1295 bytes underflowed the DMA test carve (`u32` subtraction) and let the driver treat a buffer smaller than the test as free space | fixed; gate-verified | `SM750_DRM_MIN_VRAM` (`src/sm750_drm.c:125-134`) is the cursor buffer, the DMA test, its guard words and one 640x480 XRGB8888 buffer, and probe refuses a device below it (`:5278-5282`). Guard: `tests/check-drm-policy.sh` assertion D4 (`:348`) with planted control `vram_floor` (`:577`) | `docs/evidence/review/02-production-readiness-runtime.txt` (confirmed defects, D4) |
 | A64 | S3 | A DMA acknowledgement that raced the 5 ms completion timeout made the driver declare `DMA1 shadow upload timed out`, disable DMA and require a reload, although the transfer had completed | fixed; gate-verified | after the IRR ack branch the completion is re-read before the timeout error: `if (irq_completion && completion_done(&sdev->dma_completion))` clears `dma_active` and returns 0 (`src/sm750_drm.c:1668-1675`). Guard: `tests/check-drm-policy.sh` assertion R2 (`:360`) with planted control `completion_recheck` (`:578`) | `docs/evidence/review/02-production-readiness-runtime.txt` (confirmed defects, R2) |
 | A65 | S1 | A hot `modprobe -r sm750hdmidrm` with the fbcon vtconsole bound wedged in `Unloading` and never completed: `/proc/modules` showed `sm750hdmidrm 200704 -1 - Unloading 0xffffffffc0a3d000 (OE-)`, `modprobe -r` sat in `D` state for the rest of the boot, the vtconsole bind went `1 -> 0` and the console left the panel for good. Only a reboot cleared it, and the freshly installed 0.6.8 could not be loaded until then. No stack was captured (`kernel.dmesg_restrict=1`, no hung-task report in the boot journal), so the blocked function is NOT identified | open; no root cause | evidence only: `docs/evidence/runtime/47-hot-reload-hang.txt` (module state, the `D`-state `modprobe`, the last two kernel lines, the three candidate orderings in `sm750_pci_remove()` at `src/sm750_drm.c:5446-5457`). Closes with a controlled reproduction that captures a stack, or with `drm_dbg` lines at every step of the remove callback | `docs/evidence/runtime/47-hot-reload-hang.txt` |
+| A66 | S4 | The driver's system-sleep path has never executed on the reference board: the first armed devices-level `pm_test` cycle was refused before the SM750 was reached. Two neighbouring Tesla P100s (`0000:83:00.0` and `0000:84:00.0`) returned `-EIO` from `nv_pmops_suspend` while `PreserveVideoMemoryAllocations=1`, so writing `freeze` to `/sys/power/state` failed with `Input/output error` and the journal held zero driver `pm:` lines; `suspend_stats` recorded `fail=1`, `failed_suspend=1`, `last_failed_dev=0000:83:00.0`, `last_failed_errno=-5`, `last_failed_step=suspend`. The panel survived and `PANEL_CURRENT_LINE` advanced, so the driver was not disturbed, but neither `sm750_pm_suspend()` nor `sm750_pm_resume()` was ever called | open; measurement pending | the 0.6.9 `pm_probe` attribute drives the callback bodies directly so they can be measured without a system sleep (`docs/PARAMETERS.md`); it is a measurement aid only, not a substitute for the real cycle, and the devices-level cycle is still owed after a reboot with `nvidia.NVreg_PreserveVideoMemoryAllocations=0` | `docs/evidence/runtime/48-pmtest-devices-attempt.txt` |
 
 ## Deferred and accepted items in detail
 
@@ -1685,3 +1686,37 @@ callback returns.
 Disposition: open, no root cause. Recovery requires a reboot; there is no
 userspace remedy. Next step is a controlled reproduction with a stack, or
 `drm_dbg` at every step of the remove callback.
+
+### A66 - the sleep path is unmeasured because nvidia refuses the devices cycle (open)
+
+Observed 2026-11-27 11:55Z on kernel 7.3.4-100.fc43.x86_64 with 0.6.8 loaded.
+`sudo -n /usr/local/sbin/sm750-pmtest run devices` armed `pm_test` at `devices`
+and read it back, then the freeze write failed:
+
+    sm750-pmtest: writing freeze to /sys/power/state returned 1: ... write error: Input/output error
+
+The journal names the blockers, both before the SM750 is reached:
+
+    NVRM: GPU 0000:84:00.0: PreserveVideoMemoryAllocations module parameter is set.
+          System Power Management attempted without driver procfs suspend interface.
+    NVRM: GPU 0000:83:00.0: <same>
+    nvidia 0000:84:00.0: PM: pci_pm_suspend(): nv_pmops_suspend [nvidia] returns -5
+    nvidia 0000:83:00.0: PM: pci_pm_suspend(): nv_pmops_suspend [nvidia] returns -5
+    PM: Some devices failed to suspend, or early wake event detected
+
+`-5` is `-EIO`. The journal holds zero driver `pm:` lines in the window, so
+neither `sm750_pm_suspend()` nor `sm750_pm_resume()` ran: the two P100s fail
+first and the devices phase aborts before the SM750's turn. `suspend_stats`
+moved `fail` and `failed_suspend` from 0 to 1 and recorded `last_failed_dev` =
+`0000:83:00.0`, `last_failed_errno` = -5, `last_failed_step` = suspend. The
+helper restored `pm_test` to `none`, the module stayed loaded, and
+`PANEL_CURRENT_LINE` advanced, so the abort did not disturb the driver.
+
+Measurement aid: the 0.6.9 `pm_probe` attribute (`docs/PARAMETERS.md`) calls the
+callback bodies directly, so their behaviour can be measured while the sleep
+cycle stays blocked. It is not a system sleep, and a pass there is not evidence
+that sleep works.
+
+Owed: reboot with `nvidia.NVreg_PreserveVideoMemoryAllocations=0`, then run the
+real devices-level cycle (`sm750-pmtest run devices`) so the callbacks execute
+inside a genuine suspend and the completion lines exist.

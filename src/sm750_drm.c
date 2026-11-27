@@ -76,12 +76,12 @@ typedef struct drm_atomic_state sm750_atomic_commit;
 #define SM750_DRM_NAME "sm750hdmidrm"
 /* Keep in step with the package version in build-package.sh and dkms.conf;
  * tests/check-release-version.sh fails when the three disagree. */
-#define SM750_DRM_VERSION "0.6.8"
+#define SM750_DRM_VERSION "0.6.9"
 /* modetest reports these as the driver version, so they must track the release
  * number above; tests/check-release-version.sh fails when they drift. */
 #define DRIVER_MAJOR 0
 #define DRIVER_MINOR 6
-#define DRIVER_PATCHLEVEL 8
+#define DRIVER_PATCHLEVEL 9
 #define SM750_DRM_MAX_WIDTH 2560
 #define SM750_DRM_PHYSICAL_MAX_WIDTH 2048
 #define SM750_DRM_PLL PRIMARY_PLL
@@ -5098,6 +5098,103 @@ static ssize_t crc_supported_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(crc_supported);
 
+/*
+ * pm_probe drives the two system-PM callbacks directly. System sleep cannot
+ * be reached on the reference host (two neighbouring Tesla P100s return -EIO
+ * from their .suspend), so sm750_pm_suspend() and sm750_pm_resume() have
+ * never run on this board. This is a measurement aid, not a system sleep: it
+ * saves no PCI config space, requests no D3hot transition and changes no
+ * power state. See docs/PARAMETERS.md and defect A66 in docs/DEFECTS.md.
+ */
+static int sm750_pm_suspend(struct device *dev);
+static int sm750_pm_resume(struct device *dev);
+
+/*
+ * Held for one invocation only. The callbacks take mode_lock themselves, so
+ * this cannot be mode_lock. Nothing else takes this mutex.
+ */
+static DEFINE_MUTEX(sm750_pm_probe_lock);
+
+static ssize_t pm_probe_store(struct device *dev,
+			      struct device_attribute *attr,
+			      const char *buf, size_t count)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct sm750_drm_device *sdev = dev_get_drvdata(dev);
+	int idx;
+	int ret;
+
+	if (!sdev) {
+		pr_info("pm probe: refused: no driver data\n");
+		return -ENODEV;
+	}
+	/*
+	 * Exercising the PM callbacks under a live compositor must not be
+	 * possible by accident. The fbcon client takes no master, so the
+	 * console-only case still works.
+	 */
+	if (READ_ONCE(sdev->drm.master)) {
+		drm_info(&sdev->drm,
+			 "pm probe: refused: a DRM client holds master\n");
+		return -EBUSY;
+	}
+	if (!sdev->drm.dev) {
+		pr_info("pm probe: refused: driver not registered\n");
+		return -EBUSY;
+	}
+	if (!drm_dev_enter(&sdev->drm, &idx)) {
+		drm_info(&sdev->drm,
+			 "pm probe: refused: device is not registered\n");
+		return -EBUSY;
+	}
+
+	mutex_lock(&sm750_pm_probe_lock);
+	if (sysfs_streq(buf, "suspend")) {
+		drm_info(&sdev->drm, "pm probe: command suspend\n");
+		ret = sm750_pm_suspend(&pdev->dev);
+		drm_info(&sdev->drm, "pm probe: suspend returned %d\n", ret);
+	} else if (sysfs_streq(buf, "resume")) {
+		drm_info(&sdev->drm, "pm probe: command resume\n");
+		ret = sm750_pm_resume(&pdev->dev);
+		drm_info(&sdev->drm, "pm probe: resume returned %d\n", ret);
+	} else if (sysfs_streq(buf, "cycle")) {
+		drm_info(&sdev->drm, "pm probe: command cycle\n");
+		ret = sm750_pm_suspend(&pdev->dev);
+		if (ret) {
+			drm_info(&sdev->drm,
+				 "pm probe: cycle suspend failed: %d, resume skipped\n",
+				 ret);
+		} else {
+			ret = sm750_pm_resume(&pdev->dev);
+			if (ret)
+				drm_info(&sdev->drm,
+					 "pm probe: cycle suspend ok, resume failed: %d\n",
+					 ret);
+			else
+				drm_info(&sdev->drm,
+					 "pm probe: cycle suspend ok, resume ok\n");
+		}
+	} else {
+		drm_info(&sdev->drm,
+			 "pm probe: rejected unknown command '%.*s'; accepted: suspend, resume, cycle\n",
+			 (int)strcspn(buf, "\n"), buf);
+		ret = -EINVAL;
+	}
+	mutex_unlock(&sm750_pm_probe_lock);
+	drm_dev_exit(idx);
+	/*
+	 * The log records what happened; the write's return value carries the
+	 * failure. A successful invocation returns the byte count, a rejected
+	 * command returns -EINVAL and a callback that returns non-zero is
+	 * returned as-is, so `echo cycle > pm_probe` fails visibly and a
+	 * script under `set -e` stops there.
+	 */
+	if (ret)
+		return ret;
+	return count;
+}
+static DEVICE_ATTR_WO(pm_probe);
+
 static struct attribute *sm750_attrs[] = {
 	&dev_attr_mem_info_vram_total.attr,
 	&dev_attr_vram_total_bytes.attr,
@@ -5111,6 +5208,7 @@ static struct attribute *sm750_attrs[] = {
 	&dev_attr_active_crtc.attr,
 	&dev_attr_vblank_count.attr,
 	&dev_attr_crc_supported.attr,
+	&dev_attr_pm_probe.attr,
 	NULL,
 };
 

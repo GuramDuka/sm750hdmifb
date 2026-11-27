@@ -19,11 +19,11 @@
 #   tests/check-rpm-dkms.sh
 
 %global dkms_name     sm750hdmifb
-%global dkms_version  0.6.8
+%global dkms_version  0.6.9
 %global module_name   sm750hdmidrm
 
 Name:           sm750hdmifb
-Version:        0.6.8
+Version:        0.6.9
 Release:        1%{?dist}
 Summary:        DKMS source for the SM750G10 SiI9024A HDMI DRM-KMS driver
 License:        GPL-2.0-only
@@ -357,6 +357,16 @@ exit 0
 %doc README.md LICENSE docs/RELEASE-NOTES.md docs/TESTING.md packaging/copyright
 
 %changelog
+* Fri Nov 27 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.9-1
+- Release 0.6.9: a root-only pm_probe attribute beside the DRM device drives
+  the suspend and resume callback bodies directly, because a devices-level
+  pm_test cycle is refused by the two neighbouring Tesla P100s on the
+  reference host and the driver's sleep path has never executed there. The
+  write returns the byte count on success and propagates a callback failure,
+  so a probe script under `set -e` stops on an error. The attribute logs the
+  command and each callback result with the `pm probe: ` prefix. It is a
+  measurement aid, not a system sleep: no PCI config save/restore, no D3hot,
+  no power-state change.
 * Thu Nov 26 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.8-1
 - Release 0.6.8: a production-readiness pass over the whole driver. The direct
   scanout path now rejects a primary plane whose framebuffer does not cover the

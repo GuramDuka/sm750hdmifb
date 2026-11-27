@@ -87,9 +87,22 @@ check_group() {
 		"$file" >/dev/null ||
 		fail "$file does not define sm750_attr_group"
 
+	# Twelve monitoring attributes plus the write-only pm_probe diagnostic
+	# (defect A66), which is deliberately not one of the names above: it is
+	# not read by sm750-smi and must never be read-only.
 	count=$(grep -F '&dev_attr_' <<<"$region" | wc -l)
-	[ "$count" -eq 12 ] ||
-		fail "sm750_attr_group lists $count attributes, expected 12"
+	[ "$count" -eq 13 ] ||
+		fail "sm750_attr_group lists $count attributes, expected 12 monitoring attributes plus pm_probe"
+	extra=$(grep -oE '&dev_attr_[a-z0-9_]+\.attr,' <<<"$region" |
+		sed 's/^&dev_attr_//; s/\.attr,$//' |
+		while IFS= read -r name; do
+			case " $attributes " in
+			*" $name "*) ;;
+			*) printf '%s\n' "$name" ;;
+			esac
+		done)
+	[ "$extra" = pm_probe ] ||
+		fail "sm750_attr_group carries unexpected non-monitoring attributes: $extra"
 
 	count=$(grep -c 'device_add_group(' "$file" || true)
 	[ "$count" -eq 1 ] ||

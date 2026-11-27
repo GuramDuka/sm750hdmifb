@@ -52,6 +52,7 @@ that half of P1.
 | 12 | proposed | reboot with `intel_iommu=on iommu=pt`, then bind `0000:01:00.0` to `vfio-pci` for a guest (section 3.13) | no GAP and no P1: the guest runs its own copies of `sm750_pm_suspend()` / `sm750_pm_resume()`, the host's copies never execute, and the chip stays in D0 from the host's point of view |
 | 13 | proposed | install the PM test helper with `sudo install -m 0755 -o root -g root tools/sm750-pmtest.sh /usr/local/sbin/sm750-pmtest`, add `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-pmtest` (section 3.14), then run `sm750-pmtest run devices` in a maintenance window | the host-wide `pm_test` cycle that P1 needs, still deferred to the owner's window; the helper makes the cycle repeatable and cannot leave `pm_test` armed |
 | 14 | proposed | install the hang capture with `sudo install -m 0755 -o root -g root tools/sm750-hang.sh /usr/local/sbin/sm750-hang`, add `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-hang` (section 3.15), then run `sudo -n /usr/local/sbin/sm750-hang capture` after the next wedge | A65: the 2026-11-26 hot reload wedged the module in `Unloading` with no stack captured, so the blocked function is unknown; this helper exists before the next reproduction so `02-stacks.txt` finally closes it |
+| 15 | proposed | install the pm_probe helper with `sudo install -m 0755 -o root -g root tools/sm750-pm-probe.sh /usr/local/sbin/sm750-pm-probe`, add `coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-pm-probe` (section 3.16), then run `sudo -n /usr/local/sbin/sm750-pm-probe cycle` once the 0.6.9 module is loaded | A66: the 2026-11-27 armed `pm_test=devices` cycle stopped at the two neighbouring Tesla P100s (`-EIO`), so `sm750_pm_suspend()` and `sm750_pm_resume()` have never executed on this host; the helper drives the same two bodies through a 0200 sysfs write and prints the kernel's own `pm probe: ` lines. A pass is not a system sleep |
 
 Sections below are ordered by subject, not by date: allowlist, recovery recipe,
 helpers, udev rule, installed state and re-verification, gap map.
@@ -2036,3 +2037,46 @@ checking `ls /sys/kernel/debug/dri` as root. Enabling and disabling by hand:
 printf 'scanout' | sudo -n tee /sys/kernel/debug/dri/0/crtc-0/crc/control
 printf 'none'    | sudo -n tee /sys/kernel/debug/dri/0/crtc-0/crc/control
 ```
+
+### 3.16 Driving the PM callbacks through pm_probe
+
+Defect A66: on 2026-11-27 an armed `pm_test=devices` cycle never reached the
+SM750. The freeze write failed with `Input/output error` because the two
+neighbouring Tesla P100s at `0000:83:00.0` and `0000:84:00.0` return `-5` from
+`nv_pmops_suspend`, and `suspend_stats` named `last_failed_dev=0000:83:00.0`.
+The driver's `pm: suspend entry` line never appeared, so its sleep path is
+unmeasured rather than broken. The 0.6.9 driver publishes
+`/sys/bus/pci/devices/0000:01:00.0/pm_probe`, mode `0200`, which calls the same
+two callback bodies from a running system (`docs/PARAMETERS.md`).
+
+Install (repo-relative source; the installed copy is byte-identical):
+
+```sh
+sudo install -m 0755 -o root -g root tools/sm750-pm-probe.sh /usr/local/sbin/sm750-pm-probe
+```
+
+One NOPASSWD line, with no colon in the command line (section 1 rule):
+
+```sh
+coder ALL=(root) NOPASSWD: /usr/local/sbin/sm750-pm-probe
+```
+
+Then, with the 0.6.9 module loaded and no DRM client holding master:
+
+```sh
+sudo -n /usr/local/sbin/sm750-pm-probe status
+sudo -n /usr/local/sbin/sm750-pm-probe cycle
+```
+
+`status` writes nothing: it prints the loaded version, the module reference
+count, the attribute mode and every `pm probe: ` line from this boot.
+`cycle` calls suspend and then resume only if suspend returned 0, and prints the
+panel raster position before and after plus the kernel's own result lines. A
+non-zero callback return is reported as FAIL with exit 1.
+
+What a pass proves and what it does not: the callback bodies run and return 0.
+It does not prove that system sleep works, because no PCI config space is saved
+or restored, the device never enters D3hot, no power state changes, and the
+platform wake path and every other device on the bus are untouched. The real
+verification stays the devices-level `pm_test` cycle after a reboot with
+`nvidia.NVreg_PreserveVideoMemoryAllocations=0` (section 3.14).

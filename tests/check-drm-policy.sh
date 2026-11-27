@@ -287,6 +287,18 @@ test "$stage_count" -ge 6 || {
 # command, so the documented count of 17 is unchanged.
 ./tests/check-hang-helper.sh
 ./tests/check-sm750-pkg.sh
+# T63: the pm_probe diagnostic attribute in src/sm750_drm.c. It drives the
+# suspend and resume callback bodies directly, because a devices-level sleep is
+# unreachable on the reference host: two neighbouring Tesla P100s refuse the
+# pm_test cycle before the SM750 is reached (docs/DEFECTS.md A66). The gate pins
+# the three commands, the root-only 0200 mode, the master, registration and
+# drm_dev_enter guards before any callback, the mutex and the dev_enter bracket,
+# the logged callback result, the no-resume-after-failed-suspend rule, and the
+# return value: a success returns the byte count while a callback failure is
+# propagated, so `echo cycle > pm_probe` fails visibly and a script under
+# `set -e` stops. Source-level, with six planted controls; it is invoked from
+# here, so the documented count of 18 `make check` recipe commands is unchanged.
+./tests/check-pm-probe.sh
 # Runtime guard properties found by the 2026-11-26 production-readiness
 # review (docs/evidence/review/02-production-readiness-runtime.txt): D1 (the
 # direct scanout path must not read past the plane object or VRAM), D2 (the
@@ -298,9 +310,16 @@ test "$stage_count" -ge 6 || {
 guard_fn() {
 	local file=$1
 	local head=$2
+	local def_only=${3:-0}
 
-	awk -v head="$head" '
-		index($0, head) == 1 { in_fn = 1 }
+	# def_only=1 skips a line that is a declaration rather than a definition.
+	# A static function that is called before it is defined needs a prototype,
+	# and the prototype carries the same prefix as the definition: without the
+	# semicolon test the extractor would return the prototype and the property
+	# under test would be checked against the wrong lines.
+	awk -v head="$head" -v def_only="$def_only" '
+		!in_fn && index($0, head) == 1 &&
+		    (def_only == 0 || $0 !~ /;[[:space:]]*$/) { in_fn = 1 }
 		in_fn { print }
 		in_fn && /^}/ { exit }' "$file"
 }
@@ -486,7 +505,7 @@ runtime_guard_properties() {
 		failed=1
 	fi
 
-	pm_suspend=$(guard_fn "$file" 'static int sm750_pm_suspend(')
+	pm_suspend=$(guard_fn "$file" 'static int sm750_pm_suspend(' 1)
 	checked=$((checked + 1))
 	if [[ -z $pm_suspend ]] ||
 	   ! grep -qF 'pm: suspend entry' <<<"$pm_suspend" ||
@@ -495,7 +514,7 @@ runtime_guard_properties() {
 		failed=1
 	fi
 
-	pm_resume=$(guard_fn "$file" 'static int sm750_pm_resume(')
+	pm_resume=$(guard_fn "$file" 'static int sm750_pm_resume(' 1)
 	checked=$((checked + 1))
 	if [[ -z $pm_resume ]] ||
 	   ! grep -qF 'pm: resume entry' <<<"$pm_resume" ||
@@ -598,7 +617,7 @@ plant_header_zero_mode() {
 
 plant_pm_no_suspend_entry() {
 	awk '
-		/^static int sm750_pm_suspend\(/ { in_fn = 1 }
+		/^static int sm750_pm_suspend\(struct device \*dev\)$/ { in_fn = 1 }
 		in_fn && index($0, "pm: suspend entry") { next }
 		in_fn && /^}/ { in_fn = 0 }
 		{ print }' "$1" >"$1.tmp"
@@ -606,7 +625,7 @@ plant_pm_no_suspend_entry() {
 }
 plant_pm_no_resume_complete() {
 	awk '
-		/^static int sm750_pm_resume\(/ { in_fn = 1 }
+		/^static int sm750_pm_resume\(struct device \*dev\)$/ { in_fn = 1 }
 		in_fn && index($0, "pm: resume complete") { next }
 		in_fn && /^}/ { in_fn = 0 }
 		{ print }' "$1" >"$1.tmp"
@@ -614,7 +633,7 @@ plant_pm_no_resume_complete() {
 }
 plant_pm_silent_failure() {
 	awk '
-		/^static int sm750_pm_resume\(/ { in_fn = 1 }
+		/^static int sm750_pm_resume\(struct device \*dev\)$/ { in_fn = 1 }
 		in_fn && !done && index($0, "pm: resume failed") { done = 1; next }
 		in_fn && /^}/ { in_fn = 0 }
 		{ print }' "$1" >"$1.tmp"

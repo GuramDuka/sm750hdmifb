@@ -116,3 +116,44 @@ per file.
 the bit-banged i2c bus: two register reads, roughly a millisecond. They never
 clear the latched event bits, so a monitoring read cannot consume a link event,
 but they are not suitable for a tight polling loop.
+
+### pm_probe
+
+`/sys/bus/pci/devices/0000:01:00.0/pm_probe` is the one writable attribute the
+driver publishes. Its mode is `0200`, so only root can write it, and it exists
+only to call the driver's suspend and resume callback bodies from a running
+system. Write one of three words:
+
+| Write | Effect |
+|---|---|
+| `suspend` | Calls `sm750_pm_suspend()` once and logs its return value. |
+| `resume` | Calls `sm750_pm_resume()` once and logs its return value. |
+| `cycle` | Calls suspend, then resume only if suspend returned 0. A failed suspend logs `resume skipped` and nothing is resumed. |
+
+Three guards run before either callback, each refusing with an error and a
+`pm probe: refused: ...` line: a DRM client holds master (`-EBUSY`); the device
+is not registered with DRM, so `sdev->drm.dev` is NULL (`-EBUSY`); or
+`drm_dev_enter()` fails because the device is unplugged or already shutting
+down (`-EBUSY`). A missing driver-data pointer is refused as well (`-ENODEV`);
+that case can only be logged with `pr_info()`, because there is no DRM device
+to name. A dedicated mutex serialises concurrent probes, and the callback runs
+inside the `drm_dev_enter()` / `drm_dev_exit()` bracket.
+
+The write returns the byte count on success, `-EINVAL` for anything that is not
+one of the three words, and the callback's own non-zero return otherwise. A
+failing callback therefore makes `echo cycle > pm_probe` fail, and a script
+under `set -e` stops at that line. The kernel log carries the evidence:
+`pm probe: command ...` before the call and `pm probe: suspend returned N` or
+`pm probe: resume returned N` after it.
+
+This is NOT a system sleep. It calls the driver's callback bodies only: there
+is no PCI config space save and restore, the device never enters D3hot, and no
+power state changes. A pass here says the callbacks run and return 0; it is not
+evidence that system sleep works, because the parts of a real cycle the driver
+does not own - PCI core state, the platform wake path, the firmware and every
+other device on the bus - are not exercised.
+
+Intended use: measure the callbacks while an environmental blocker prevents a
+real devices-level cycle. On the reference host two neighbouring Tesla P100s
+refuse `pm_test=devices` (`docs/DEFECTS.md` A66), so the driver's sleep path
+cannot otherwise be reached.
