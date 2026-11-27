@@ -101,6 +101,8 @@ mkdir -p "$out"
 runtime=$out/runtime
 mkdir -p "$runtime"
 chmod 700 "$runtime"
+in_before=$out/07-input-before.txt
+in_after=$out/08-input-after.txt
 
 # Input isolation. weston 14.0.2 documents --no-input under "Options for x11:"
 # only; its DRM backend options are --seat, --drm-device, --additional-devices,
@@ -142,6 +144,7 @@ x11)
 		cat >&2 <<EOF
 $PROG: refusing to start the x11 arm without SM750_CONSOLE_ACK=1
 $PROG: this arm takes DRM master on the card behind the console, reprograms its mode and can leave the foreground VT moved
+$PROG: while the run holds the console, the owner's mouse and keyboard follow the VT and the screen keeps the last frame, so the machine looks alive but stops responding
 $PROG: run it only when nobody is using the machine: SM750_CONSOLE_ACK=1 $PROG x11 SECONDS
 EOF
 		exit 2
@@ -453,7 +456,104 @@ vt_restore() {
 	echo "$PROG: restored text console on $start_vt after the $mode run by activating the VT it started on (the panel was left with no client)"
 }
 
+# Input handover. The owner's symptom on 2026-11-27 was precise: after a run
+# moved the VT his DVI picture stayed on screen (the compositor's last frame)
+# while his mouse and keyboard stopped working, because input followed the VT.
+# input_scan records which processes hold a /dev/input/event* node before the
+# client starts and again at teardown; input_delta prints the difference.
+# Observation only: nothing under /dev/input is opened, grabbed or signalled.
+input_scan() {
+	: >"$1"
+	skipped=0
+	holders=0
+	for p in /proc/[0-9]*; do
+		# An fd table this account cannot list (EACCES) is never fatal; it is
+		# counted, because a holder could be hiding in one.
+		if ! ls -A "$p/fd" >/dev/null 2>&1; then
+			skipped=$((skipped + 1))
+			continue
+		fi
+		for fd in "$p"/fd/*; do
+			t=$(readlink -f "$fd" 2>/dev/null) || continue
+			case $t in
+			/dev/input/event*) ;;
+			*) continue ;;
+			esac
+			printf 'input-holder pid=%s uid=%s fd=%s node=%s comm=%s\n' \
+				"${p#/proc/}" "$(stat -c %u "$p" 2>/dev/null || echo '?')" \
+				"${fd##*/}" "$t" "$(cat "$p/comm" 2>/dev/null)" >>"$1"
+			holders=$((holders + 1))
+		done
+	done
+	printf '%s: input scan: %s holders, %s unreadable fd tables skipped\n' \
+		"$PROG" "$holders" "$skipped"
+	# The record must exist even with zero holders, otherwise the delta below
+	# cannot tell "nobody held a node" from "no scan was made".
+	printf 'input-skipped %s\n' "$skipped" >>"$1"
+}
+
+# input_delta - compare the two scans and say what changed. A non-empty delta
+# means the owner's input devices may have followed the VT: the machine then
+# looks alive while it stops responding, which is what he reported.
+input_delta() {
+	[ -f "$in_before" ] && [ -f "$in_after" ] || return 0
+	before=$(grep -c '^input-holder ' "$in_before" || true)
+	after=$(grep -c '^input-holder ' "$in_after" || true)
+	printf '%s: input: %s holders before, %s after\n' \
+		"$PROG" "${before:-0}" "${after:-0}"
+	before_pids=$(sed -n 's/^input-holder pid=\([0-9][0-9]*\).*/\1/p' "$in_before")
+	after_pids=$(sed -n 's/^input-holder pid=\([0-9][0-9]*\).*/\1/p' "$in_after")
+	delta=
+	for p in $after_pids; do
+		case " $before_pids " in
+		*" $p "*) ;;
+		*) delta="$delta pid=$p appeared" ;;
+		esac
+	done
+	for p in $before_pids; do
+		case " $after_pids " in
+		*" $p "*) ;;
+		*) delta="$delta pid=$p disappeared" ;;
+		esac
+	done
+	if [ -n "$delta" ]; then
+		printf '%s: input delta:%s\n' "$PROG" "$delta"
+		printf "%s: WARNING: the owner's input devices may now belong to another VT; press Ctrl-Alt-F<N> on the keyboard to get back\n" "$PROG"
+	fi
+}
+
+# progress - one greppable line per interval: elapsed seconds, the mode, the
+# client pid (if one exists) and whether that pid is still alive. One line per
+# interval, never per frame; the last line of a run stays the RESULT: verdict.
+progress() {
+	state=gone
+	if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
+		state=alive
+	fi
+	printf '%s: t=%ss mode=%s pid=%s %s\n' "$PROG" "$1" "$mode" "${pid:-none}" "$state"
+}
+
+# wait_window - hold the card for $seconds, printing a progress line every 10 s
+# so a live run can be told from a hung one without waiting for the end. The
+# compositor arms share this wait; probe and diagnose never reach it.
+wait_window() {
+	elapsed=0
+	while [ "$elapsed" -lt "$seconds" ]; do
+		step=10
+		remaining=$((seconds - elapsed))
+		if [ "$remaining" -lt "$step" ]; then
+			step=$remaining
+		fi
+		sleep "$step"
+		elapsed=$((elapsed + step))
+		progress "$elapsed"
+	done
+}
+
 vt_record
+# Input handover: record who holds the owner's input nodes before any client
+# starts, so the teardown can show what the run changed (see input_scan).
+input_scan "$in_before"
 
 export XDG_RUNTIME_DIR=$runtime
 export LIBGL_ALWAYS_SOFTWARE=1
@@ -482,6 +582,12 @@ cleanup() {
 		kill -KILL "$pid" 2>/dev/null || true
 	fi
 	vt_restore
+	# Input handover report: who held /dev/input/event* before the run and who
+	# holds one now. Observation only, and never fatal.
+	if [ -f "$in_before" ]; then
+		input_scan "$in_after" || true
+		input_delta || true
+	fi
 }
 trap cleanup EXIT INT TERM
 
@@ -587,7 +693,7 @@ PLASMA
 	fi
 fi
 
-sleep "$seconds"
+wait_window
 
 status=0
 survived=1

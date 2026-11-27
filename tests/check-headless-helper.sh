@@ -496,6 +496,77 @@ has "$recovery_body" 'Ctrl-Alt-F' \
 	"o: the recovery hint must also name the key sequence for the operator"
 ok "o5. teardown activates only the recorded start VT and prints the manual recovery command when it cannot"
 
+# --- p. progress lines and the input handover ------------------------------
+# The owner's 2026-11-27 symptom was precise: after a run that moved the VT his
+# DVI picture stayed on screen (the compositor's last frame) while his mouse and
+# keyboard stopped working, because input followed the VT. Two properties are
+# pinned here: a long wait prints one greppable line per 10 s so a live run is
+# not read as a hang, and the helper records which processes hold
+# /dev/input/event* before and after a run so that handover is visible. The
+# record is observation only: nothing under /dev/input may be opened or grabbed.
+wait_body=$(func_body "$helper" wait_window)
+progress_body=$(func_body "$helper" progress)
+has "$wait_body" 'progress "$elapsed"' \
+	"p: the progress line must be printed from inside the wait loop"
+has "$wait_body" 'step=10' \
+	"p: the progress interval must be 10 s, not one line per loop iteration or per second"
+has "$wait_body" 'sleep "$step"' \
+	"p: the wait must sleep the interval it prints, so no burst can happen"
+has "$progress_body" 't=%ss mode=%s pid=%s' \
+	"p: the progress line must carry elapsed seconds, the mode and the client pid"
+has "$progress_body" 'alive' \
+	"p: the progress line must say whether the client pid is alive"
+wait_call=$(grep -nxF 'wait_window' "$helper" | head -n 1 | cut -d: -f1)
+if [ -z "$wait_call" ] || [ -z "$probe_exit" ] || [ -z "$diag_exit" ]; then
+	bad "p: the wait call and both read-only mode exits must exist"
+elif [ "$wait_call" -le "$probe_exit" ] || [ "$wait_call" -le "$diag_exit" ]; then
+	bad "p: probe and diagnose must gain no wait window; wait_window at :$wait_call must follow the probe exit at :$probe_exit and the diagnose exit at :$diag_exit"
+fi
+if grep -nF 'sleep "$seconds"' "$helper" >/dev/null; then
+	bad "p: the silent unbounded sleep must be gone; that silent wait is the hang the progress line exists to expose"
+fi
+ok "p1. the wait prints one greppable line per 10 s interval, and probe and diagnose have no wait window"
+
+scan_body=$(func_body "$helper" input_scan)
+has "$scan_body" '/proc/[0-9]*' \
+	"p: the input scan must walk /proc/*/fd"
+has "$scan_body" '/dev/input/event*' \
+	"p: the input scan must match the owner's /dev/input/event* nodes"
+has "$scan_body" 'uid=' \
+	"p: each input holder must be printed with its uid"
+has "$scan_body" 'skipped' \
+	"p: unreadable fd tables must be counted and reported, never fatal"
+if printf '%s\n' "$scan_body" | grep -qE '>[[:space:]]*/dev/input|</dev/input|EVIOCGRAB'; then
+	bad "p: the input scan is observation only; it must never open or grab anything under /dev/input"
+fi
+scan_call=$(grep -nF 'input_scan "$in_before"' "$helper" | head -n 1 | cut -d: -f1)
+if [ -z "$scan_call" ] || [ -z "$launch_line" ]; then
+	bad "p: the pre-run input scan and the client launch must both exist"
+elif [ "$scan_call" -ge "$launch_line" ]; then
+	bad "p: the input holders must be recorded before the client starts; scan at :$scan_call, launch at :$launch_line"
+fi
+ok "p2. the input-holder scan reads /proc/*/fd for /dev/input/event*, prints pids with uids and counts unreadable fd tables"
+
+delta_body=$(func_body "$helper" input_delta)
+has "$delta_body" 'holders before' \
+	"p: the teardown must print the before/after input-holder delta"
+has "$delta_body" ' %s after' \
+	"p: the delta line must carry the after count as well as the before count"
+has "$delta_body" 'belong to another VT' \
+	"p: the delta warning must say the owner's input devices may now belong to another VT"
+has "$delta_body" 'Ctrl-Alt-F' \
+	"p: the way back must be named: Ctrl-Alt-F<N> on the keyboard"
+if ! printf '%s\n' "$(func_body "$helper" cleanup)" | grep -qF 'input_delta'; then
+	bad "p: cleanup must print the input delta at teardown"
+fi
+ok "p3. teardown prints the before/after input-holder delta and the Ctrl-Alt-F way back"
+
+has "$x11_arm" 'follow the VT' \
+	"p: the refusal must say the owner's mouse and keyboard follow the VT"
+has "$x11_arm" 'looks alive but stops responding' \
+	"p: the refusal must say the machine looks alive but stops responding"
+ok "p4. the refusal states the consequence in the owner's terms: input follows the VT and the screen keeps the last frame"
+
 [ "$fail" -eq 0 ] || exit 1
 
 if [ "$single" -eq 1 ]; then
@@ -663,6 +734,32 @@ plant_console_ack_removed() { # the acknowledgement deleted: a stray run takes t
 	sed -i 's|\[ "\${SM750_CONSOLE_ACK:-}" != 1 \]|:|' "$1"
 }
 
+plant_progress_line_removed() { # the wait goes silent again: a hang reads like a run
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '\t\tprogress "$elapsed"\n'
+assert s.count(old) == 1, s.count(old)
+open(p, 'w').write(s.replace(old, ''))
+MUT
+}
+
+plant_progress_burst() { # the interval collapses to one line per second
+	sed -i 's/step=10/step=1/' "$1"
+}
+
+plant_input_delta_removed() { # the teardown stops reporting the input handover
+	python3 - "$1" <<'MUT'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+old = '\t\tinput_delta || true\n'
+assert s.count(old) == 1, s.count(old)
+open(p, 'w').write(s.replace(old, ''))
+MUT
+}
+
 control() {
 	local name=$1
 	local planted=$scratch/sm750-headless.sh
@@ -703,6 +800,9 @@ control diagnose-card0-only plant_diagnose_card0_only
 control vt-restore-hardcoded-tty2 plant_vt_restore_hardcoded_tty2
 control vt-restore-moved-after-release plant_vt_restore_moved_after_release
 control console-ack-removed plant_console_ack_removed
+control progress-line-removed plant_progress_line_removed
+control progress-burst plant_progress_burst
+control input-delta-removed plant_input_delta_removed
 
 # The pristine copy must still pass, otherwise the controls prove nothing.
 cp "$helper" "$scratch/pristine.sh"
@@ -712,7 +812,7 @@ fi
 printf 'negative control pristine: accepted\n'
 
 [ "$fail" -eq 0 ] || exit 1
-controls=23
+controls=26
 if [ "$self_test" -eq 1 ]; then
 	printf 'Headless helper checks passed (%s assertions, %s planted controls, self-test)\n' "$assertions" "$controls"
 else
