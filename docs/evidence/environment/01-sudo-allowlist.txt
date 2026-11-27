@@ -1,0 +1,109 @@
+sudo -n -l allowlist capture
+date: 2026-11-27T20:36:14Z
+host: 7.3.5-100.fc43.x86_64
+NOPASSWD lines: 78
+
+--- helpers granted ---
+      1 /usr/local/sbin/sm750-console
+      1 /usr/local/sbin/sm750-crc
+      1 /usr/local/sbin/sm750-crc-cycle
+      1 /usr/local/sbin/sm750-hang
+      1 /usr/local/sbin/sm750-headless
+      1 /usr/local/sbin/sm750-lspci
+      1 /usr/local/sbin/sm750-pkg
+      1 /usr/local/sbin/sm750-pm-probe
+      1 /usr/local/sbin/sm750-pmtest
+      1 /usr/local/sbin/sm750-regs
+      1 /usr/local/sbin/sm750-vbios-dump
+      3 /usr/local/sbin/sm750-vt
+
+--- raw output ---
+Matching Defaults entries for coder on deneb:
+    !visiblepw, always_set_home, match_group_by_gid, always_query_group_plugin,
+    env_reset, env_keep="COLORS DISPLAY HOSTNAME HISTSIZE KDEDIR LS_COLORS",
+    env_keep+="MAIL QTDIR USERNAME LANG LC_ADDRESS LC_CTYPE",
+    env_keep+="LC_COLLATE LC_IDENTIFICATION LC_MEASUREMENT LC_MESSAGES",
+    env_keep+="LC_MONETARY LC_NAME LC_NUMERIC LC_PAPER LC_TELEPHONE",
+    env_keep+="LC_TIME LC_ALL LANGUAGE LINGUAS _XKB_CHARSET XAUTHORITY",
+    secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin\:/var/lib/snapd/snap/bin
+
+User coder may run the following commands on deneb:
+
+    (root) NOPASSWD: /usr/local/sbin/sm750-crc
+    (root) NOPASSWD: /usr/local/sbin/sm750-crc-cycle
+    (root) NOPASSWD: /usr/local/sbin/sm750-regs
+    (root) NOPASSWD: /usr/bin/dmesg
+    (root) NOPASSWD: /usr/bin/journalctl -k -b --no-pager
+    (root) NOPASSWD: /usr/bin/journalctl -k -b -q --no-pager
+    (root) NOPASSWD: /usr/local/sbin/sm750-lspci
+    (root) NOPASSWD: /usr/local/sbin/sm750-vbios-dump
+    (root) NOPASSWD: /usr/bin/dkms status
+    (root) NOPASSWD: /usr/bin/dkms install -m sm750hdmifb -v 0.6.0
+    (root) NOPASSWD: /usr/bin/dkms uninstall -m sm750hdmifb -v 0.6.0
+    (root) NOPASSWD: /usr/bin/dkms build -m sm750hdmifb -v 0.6.0
+    (root) NOPASSWD: /usr/bin/dkms remove -m sm750hdmifb -v 0.6.0 --all
+    (root) NOPASSWD: /usr/bin/depmod -a
+    (root) NOPASSWD: /usr/bin/modprobe -r sm750hdmidrm
+    (root) NOPASSWD: /usr/bin/modprobe sm750hdmidrm
+    (root) NOPASSWD: /usr/bin/dnf remove -y sm750hdmifb
+    (root) NOPASSWD: /usr/bin/dkms build -m sm750hdmifb -v 0.6.1
+    (root) NOPASSWD: /usr/bin/dkms install -m sm750hdmifb -v 0.6.1
+    (root) NOPASSWD: /usr/bin/dkms uninstall -m sm750hdmifb -v 0.6.1
+    (root) NOPASSWD: /usr/bin/dkms remove -m sm750hdmifb -v 0.6.1 --all
+    (root) NOPASSWD: /usr/local/sbin/sm750-console
+    (root) NOPASSWD: /usr/bin/sm750-smi
+    (root) NOPASSWD: /usr/bin/modprobe drm_atomic_commit_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_atomic_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_bridge_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_cmdline_parser_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_connector_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_damage_helper_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_dp_mst_helper_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_exec_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_fixp_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_format_helper_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_format_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_framebuffer_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_gem_shmem_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_hdmi_state_helper_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_managed_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_mm_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_modes_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_plane_helper_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_probe_helper_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_rect_test
+    (root) NOPASSWD: /usr/bin/modprobe drm_sysfb_modeset_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_atomic_commit_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_atomic_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_bridge_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_cmdline_parser_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_connector_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_damage_helper_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_dp_mst_helper_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_exec_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_fixp_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_format_helper_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_format_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_framebuffer_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_gem_shmem_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_hdmi_state_helper_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_managed_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_mm_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_modes_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_plane_helper_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_probe_helper_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_rect_test
+    (root) NOPASSWD: /usr/bin/modprobe -r drm_sysfb_modeset_test
+    (root) NOPASSWD: /usr/bin/modprobe -r kunit
+    (root) NOPASSWD: /usr/local/sbin/sm750-headless
+    (root) NOPASSWD: /usr/bin/cat
+    (root) NOPASSWD: /usr/local/sbin/sm750-vt off
+    (root) NOPASSWD: /usr/local/sbin/sm750-vt on
+    (root) NOPASSWD: /usr/local/sbin/sm750-vt show
+    (root) NOPASSWD: /usr/local/sbin/sm750-hang
+    (root) NOPASSWD: /usr/local/sbin/sm750-pm-probe
+    (root) NOPASSWD: /usr/local/sbin/sm750-pkg
+    (root) NOPASSWD: /usr/local/sbin/sm750-pmtest
+    (ALL : ALL) NOPASSWD: /usr/bin/dmidecode
+    (ALL : ALL) NOPASSWD: /usr/local/cuda/bin/ncu
+    (ALL : ALL) NOPASSWD: /usr/local/cuda/bin/nvprof

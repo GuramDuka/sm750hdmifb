@@ -4932,3 +4932,39 @@ action: install the helper, then run it only with him present.
   `src/sii902x.c:74`. T14 should leave the row alone.
 - Not done by this task: no commit and no push; the orchestrator commits this
   file and this entry and runs `git push origin main`.
+
+### 2026-11-27T23:45Z | orchestrator | T3: the strict bar, measured against the documents
+
+T3 (gem-reviewer) returned `warning` with no blockers and delivered
+`docs/evidence/strict/01-strict-bar-inventory.txt` (358 lines, ASCII),
+committed 8790cd2 with the wave-1 closure decision (plan decisions 10).
+
+Strict-bar verdict from the inventory: six of nine elements open. A65 cause
+unmet (T4/T8/T9). GAP-B8 counters unmet - no counter of any kind exists in
+`src/` at 0.6.10 (T5/T7). Soak unmet - `docs/evidence/soak/` does not exist
+and no soak has ever run on this host (T6/T12). Defect closure unmet
+(T9/T13). Gap closure partial: B1/B2/B4/B5/B6/B7 closed, B3 half closed, B8
+open. Packaging met with stale documentation (T14). Kernel coverage unmet -
+runtime evidence exists only for 7.3.4-100 and 7.3.5-100 (T11).
+Documentation unmet (T14). Platform limits partial.
+
+47 unsupported or unresolvable claims, counted by document: DEFECTS 6,
+EVIDENCE-GAPS 5, TEST-STRATEGY 7, ROOT-ACTIONS 7, PACKAGING-RPM 6, README 9,
+ACCEPTANCE-REPORT 7. The three that block completion were not deferred to
+T14: README.md:849-852 asserts an input isolation the installed helper does
+not contain, README.md:164-167 republishes the 6 PASS / 0 FAIL / 1 GAP bar
+the owner rejected, and the GAP-B8 recurrence suffix quoted in
+`docs/evidence/EVIDENCE-GAPS.md:753` no longer matches what
+`src/sm750_drm.c:4254-4257` prints. A bounded documentation task fixes those
+and the broken citations now; the strict argument itself stays with T13.
+
+Correction accepted against my own T2 entry (`docs/LOGBOOK.md:4871`):
+`docs/DEFECTS.md:125` is not drift. `git show ddd8500^:src/sii902x.c`
+contains the literal 2000/25 loop, so the row describes the pre-fix code and
+its own fix column names the 500 ms constant; the 2000 ms that survives is
+`SII902X_DDC_GRANT_BUDGET_MS` at `src/sii902x.c:64`. T14 must leave that row
+alone.
+
+Measured for the privilege-surface row that had no evidence: 78 NOPASSWD
+lines, twelve helpers, captured to
+`docs/evidence/environment/01-sudo-allowlist.txt`.
