@@ -82,7 +82,7 @@ packaged tarball.
 | IGT KMS subset | 26 pass, 14 skip, 1 fail by design |
 | GL path | `kmscube`, 299 frames in 5.07 s, 59.01 fps on llvmpipe |
 | Vblank rate | 60.43 per second measured over 120 events |
-| Evidence | 61 runtime transcripts, 28 build transcripts and 14 packaging transcripts under `docs/evidence/` |
+| Evidence | 62 runtime transcripts, 28 build transcripts and 14 packaging transcripts under `docs/evidence/` |
 | Documentation | 22 documents under `docs/`, plus the specification archive and the deck |
 
 ### How a claim is checked

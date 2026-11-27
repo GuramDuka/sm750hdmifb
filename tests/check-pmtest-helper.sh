@@ -293,7 +293,7 @@ ok "e7. a driver pm: line still prints indented, byte-compatible with status"
 # --- f. the journal snapshot is taken before the freeze write ---------------
 has "$runbody" 'journal_before=' "f: the journal length must be snapshotted"
 has "$body" 'journalctl -k -b --no-pager' \
-	"f: the kernel log must be read through journalctl (dmesg_restrict=1)"
+	"f: the kernel log must be read through journalctl"
 snap_line=$(lineno 'journal_before=' "$runbody")
 freeze_line=$(lineno 'echo freeze > "$STATE"' "$runbody")
 if [ -z "$snap_line" ] || [ -z "$freeze_line" ]; then

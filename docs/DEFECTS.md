@@ -1820,6 +1820,20 @@ prints the diagnosis instead. The first capture on the mitigated path is
 `docs/evidence/runtime/54-a65-trace-mitigated-reload.txt`. The marks are
 unchanged: `a65_trace=1`, one `A65: <step>` line per teardown step.
 
+Capture options as of 2026-11-27T21:24Z: the owner set `kernel.dmesg_restrict`
+to `0` (see `docs/ENVIRONMENT.md` 1.4), so the ring can now be read without
+`sudo`. That does not produce a stack: `/proc/<pid>/stack` is still root-only
+(measured: `Permission denied` for `/proc/self/stack` as the unprivileged
+user), `/proc/<pid>/wchan` gives a symbol name or a number but not the lock,
+and the kernel has no `CONFIG_DETECT_HUNG_TASK`, no `CONFIG_PROVE_LOCKING` and
+no pstore, so nothing prints a stack for a task that sleeps. A reproduction
+therefore still needs root at the instant of the wedge, and that is already
+provided: `tools/sm750-hang.sh` is installed as `/usr/local/sbin/sm750-hang`
+(sha256 `be41e1fcd617c151d8c8cd37cbeb0485ca9b679a5c3781347fce0740ad9fe785`,
+identical to the tree copy, one NOPASSWD line) and writes `02-stacks.txt` with
+`/proc/<pid>/stack` for every `D`-state task. The tool is ready; only the
+reproduction is missing.
+
 ### A66 - the sleep path was unmeasured because nvidia refuses the devices cycle (fixed)
 
 Observed 2026-11-27 11:55Z on kernel 7.3.4-100.fc43.x86_64 with 0.6.8 loaded.

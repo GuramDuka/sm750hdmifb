@@ -139,7 +139,7 @@ suspend | resume | cycle)
 	if [ -n "$lines" ]; then
 		probe_lines | tail -n 6 | sed 's/^/  /'
 	else
-		echo '  (the reader returned no line; kernel.dmesg_restrict=1 needs root)'
+		echo '  (the reader returned no line; journalctl needs root)'
 	fi
 	case "$command:$lines" in
 	suspend:*'pm probe: suspend returned 0'*) ok=1 ;;

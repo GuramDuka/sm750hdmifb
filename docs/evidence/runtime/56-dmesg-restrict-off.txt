@@ -1,0 +1,102 @@
+Evidence 56: dmesg_restrict turned off, and what it does not unlock
+====================================================================
+
+Date:   2026-11-27T21:24Z
+Host:   deneb, kernel 7.3.5-100.fc43.x86_64, module sm750hdmidrm 0.6.10
+Owner:  duka set the sysctl; measurements below are unprivileged reads
+Commit: ca2728e22aa46e527e2c8dd54e23190c32dca8aa at the time of the change
+
+1. The change
+-------------
+
+    $ cat /proc/sys/kernel/dmesg_restrict
+    0
+    $ ls -l /proc/sys/kernel/dmesg_restrict
+    -rw-r--r-- 1 root root 0 Nov 27 21:24 /proc/sys/kernel/dmesg_restrict
+
+The owner reported setting it to 0; the file mode is still root-owned and
+read-only for others, so the value is readable but not writable by the
+unprivileged user. The earlier state recorded across this repository was 1.
+
+2. What it unlocks
+------------------
+
+    $ dmesg | tail -3
+    [18230.514142] [drm:drm_mode_object_put.part.0] OBJ ID: 119 (3)
+    [18230.514149] [drm:drm_mode_object_put.part.0] OBJ ID: 120 (3)
+    [18230.514157] [drm:drm_mode_object_put.part.0] OBJ ID: 122 (3)
+    rc=0
+
+- Plain `dmesg` now runs unprivileged and prints the live ring, including
+  `[drm:...]` lines while `drm.debug=1` is set, so the sudo round trip through
+  `journalctl -k -b --no-pager` is no longer the only way to read kernel
+  output.
+- The ring can be sampled while a situation develops instead of being
+  reconstructed afterwards, which matters on this host because the owner's
+  NVIDIA Wayland session evicts SM750 lines from the ring within seconds.
+- The timestamp above (`18230.5`) also shows the ring was not reset by the
+  change.
+
+3. What it does not unlock
+--------------------------
+
+    $ head -c 200 /proc/self/stack
+    head: cannot open '/proc/self/stack' for reading: Permission denied
+    (the message is localized on this host; the errno is EACCES)
+    $ cat /proc/self/wchan
+    0
+
+- `/proc/<pid>/stack` is still root-only. `dmesg_restrict` governs the log
+  buffer, not per-task kernel stacks, so the A65 question - what a wedged
+  `modprobe -r` is blocked on - still cannot be answered by an unprivileged
+  read.
+- `/proc/<pid>/wchan` is readable but prints `0` here, a number rather than a
+  symbol, and it would not identify a lock in any case.
+- No hung-task stack can appear no matter the sysctl: the kernel has no
+  `CONFIG_DETECT_HUNG_TASK` and no `CONFIG_PROVE_LOCKING`, so a task that
+  sleeps for minutes prints nothing.
+- pstore does not exist on this host, so a panic-time capture is not available
+  either.
+
+4. The capture path that does work
+----------------------------------
+
+    $ sha256sum /usr/local/sbin/sm750-hang tools/sm750-hang.sh
+    be41e1fcd617c151d8c8cd37cbeb0485ca9b679a5c3781347fce0740ad9fe785  /usr/local/sbin/sm750-hang
+    be41e1fcd617c151d8c8cd37cbeb0485ca9b679a5c3781347fce0740ad9fe785  tools/sm750-hang.sh
+    $ ls -l /usr/local/sbin/sm750-hang
+    -rwxr-xr-x 1 root root 6954 Nov 27 11:31 /usr/local/sbin/sm750-hang
+    $ sudo -n -l | grep -c sm750-hang
+    1
+
+`sm750-hang capture` writes six files, and `02-stacks.txt` holds
+`/proc/<pid>/stack` plus `wchan` for every `D`-state task. The installed body
+is byte-identical to the tree and the single NOPASSWD line is present, so root
+access at the moment of a wedge is already arranged; nothing new has to be
+installed for A65.
+
+5. What this changes in the record
+----------------------------------
+
+- `kernel.dmesg_restrict=1` remains a true statement about 2026-11-26 and about
+  every transcript that quotes it; it is no longer true of the host.
+- The A65 blocker is now purely the reproduction: the tool that would capture
+  the stack exists, is current, and is allowlisted.
+- Five source strings still claimed the old value and were corrected in the
+  same batch, because they are messages the operator reads: the two
+  `tools/sm750-pmtest.sh` lines (`:149` "none readable" and `:197` "journalctl
+  is missing"), the `tools/sm750-pm-probe.sh:142` reader hint, and the message
+  text of the assertion at `tests/check-pmtest-helper.sh:296`. Behaviour did
+  not change: both helpers still read the kernel log through
+  `journalctl -k -b --no-pager`, which they run as root, so the stale part was
+  only the claim that nothing else is readable.
+- `tools/sm750-hang.sh:8` keeps its `kernel.dmesg_restrict=1` sentence on
+  purpose: that comment describes the 2026-11-26 capture, when the value was
+  still 1, and rewriting it would falsify the record.
+
+6. Related records
+------------------
+
+- `docs/ENVIRONMENT.md` 1.4 - the current-state description
+- `docs/DEFECTS.md` A65 - capture options as of the same timestamp
+- `docs/ROOT-ACTIONS.md` 3.15 - the helper, its six files and its verdict line

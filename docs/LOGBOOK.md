@@ -4593,3 +4593,22 @@ static gate. Recorded as evidence 55; docs/ROOT-ACTIONS.md 3.12 and table row
 11 moved from "must be refreshed" to current, and the gate counts in
 README.md and docs/DELIVERABLES.md were raised from the stale 13 assertions /
 10 controls to 18 / 16.
+
+### 2026-11-27T21:40Z | orchestrator | dmesg_restrict off: the ring is readable, the stack is not
+
+The owner set `kernel.dmesg_restrict=0` and it is measured: the file reads `0`,
+plain `dmesg` runs as the unprivileged user and prints the live ring with
+`[drm:...]` lines, and the last timestamp (18230.5) shows the ring was not
+reset. What it does not change is the thing A65 needs: `/proc/self/stack` still
+fails with `EACCES`, `/proc/self/wchan` prints `0`, no hung-task report can
+appear without `CONFIG_DETECT_HUNG_TASK`, and pstore is absent. So the A65
+blocker is now only the reproduction, because `tools/sm750-hang.sh` already
+exists, is installed byte-identically (`be41e1fc...`) and is allowlisted.
+Recorded as evidence 56 and in `docs/ENVIRONMENT.md` 1.4. Five stale
+`dmesg_restrict=1` message strings were corrected in the same batch - two in
+`tools/sm750-pmtest.sh`, one in `tools/sm750-pm-probe.sh`, and the message text
+of the assertion at `tests/check-pmtest-helper.sh:296` - with no behaviour
+change, since both helpers read the log through `journalctl` as root anyway.
+`tools/sm750-hang.sh:8` deliberately keeps the old sentence: it describes the
+2026-11-26 capture, and rewriting it would falsify the record. No version bump:
+helpers, gates and docs only.

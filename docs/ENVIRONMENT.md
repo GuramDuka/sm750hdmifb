@@ -176,6 +176,43 @@ To re-enable on GitHub: copy `docs/ci/build.yml` back to
 carries `repo, workflow` (or run `gh auth refresh -h github.com -s workflow`
 first).
 
+### 1.4 `kernel.dmesg_restrict=0` since 2026-11-27
+
+The host owner set `kernel.dmesg_restrict` to `0` at 2026-11-27T21:24Z.
+Measured after the change: `/proc/sys/kernel/dmesg_restrict` reads `0`, the
+file is `-rw-r--r-- root root`, and plain `dmesg` runs as the unprivileged
+user and prints the live ring, including `[drm:...]` debug lines when
+`drm.debug` is set.
+
+What this changes: kernel messages can be read without `sudo` and without the
+allowlisted `journalctl -k -b --no-pager` form, so evidence capture no longer
+depends on the sudo round trip, and a flooded ring can be sampled while a
+situation is developing rather than reconstructed afterwards.
+
+What this does NOT change, and the reason A65 still has no stack:
+
+- `/proc/<pid>/stack` stays root-only. Measured after the change: reading
+  `/proc/self/stack` as the unprivileged user still fails with
+  `Permission denied` (`Отказано в доступе` on this locale). `dmesg_restrict`
+  governs the log buffer, not per-task kernel stacks.
+- `/proc/<pid>/wchan` is readable (`0` for an idle process), but it reports a
+  symbol name in some builds and a number in others, and it never identifies
+  the lock a task is parked on.
+- No hung-task report can appear regardless of the sysctl, because the kernel
+  has no `CONFIG_DETECT_HUNG_TASK` and no `CONFIG_PROVE_LOCKING`, so nothing
+  prints a stack for a task that sleeps for minutes.
+- pstore does not exist on this host, so a panic-time capture is not an option
+  either.
+
+Consequence for A65: obtaining the wedged task's stack still needs root at
+that instant, and that path already exists - `tools/sm750-hang.sh`, installed as
+`/usr/local/sbin/sm750-hang` (sha256
+`be41e1fcd617c151d8c8cd37cbeb0485ca9b679a5c3781347fce0740ad9fe785`, identical to
+the tree copy, one NOPASSWD line, section 3.15 of `docs/ROOT-ACTIONS.md`) writes
+`02-stacks.txt` with `/proc/<pid>/stack` and `wchan` for every `D`-state task.
+What was missing on 2026-11-26 was the tool, and it now exists; what is still
+missing is a reproduction to point it at.
+
 ## 2. Kernel header trees
 
 `/lib/modules/<kver>/build` resolves as follows (refreshed 2026-11-18; the

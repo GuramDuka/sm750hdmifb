@@ -146,7 +146,7 @@ reset_cmd() {
 # with no matching line is expected before the first PM cycle.
 pm_log_block() {
 	if ! all=$(journalctl -k -b --no-pager 2>/dev/null) || [ -z "$all" ]; then
-		printf '  none readable; the kernel log needs root (kernel.dmesg_restrict=1)\n'
+		printf '  none readable; journalctl returned nothing for this boot (it needs root)\n'
 		return 0
 	fi
 	lines=$(printf '%s\n' "$all" | grep -F 'sm750' | grep -F 'pm: ' | tail -n 4)
@@ -194,7 +194,7 @@ run_cmd() {
 		exit 1
 	}
 	command -v journalctl >/dev/null 2>&1 || {
-		echo "$PROG: journalctl is missing; it is the only readable kernel log (kernel.dmesg_restrict=1)" >&2
+		echo "$PROG: journalctl is missing; this helper reads the kernel log through it" >&2
 		exit 1
 	}
 
