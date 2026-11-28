@@ -1,0 +1,28 @@
+A65 / T8 phase A - state immediately before the helper-driven reload (attempt 2, holders clear)
+date_utc: 2026-11-28T09:50:35Z
+
+===== sudo -n /usr/local/sbin/sm750-vt show =====
+vtconsole:    /sys/class/vtconsole
+  vtcon0       bind=0 name=(S) VGA+
+  vtcon1       bind=1 name=(M) frame buffer device
+target:       /sys/class/vtconsole/vtcon1
+basis:        sole framebuffer vtconsole on the host, with the sole sm750hdmidrm card (0000:01:00.0); not by a hardcoded index or a node name
+  bind now:   1
+driver dir:   /sys/bus/pci/drivers/sm750hdmidrm
+module:       version=0.6.11 srcversion=95E21EB1B858C08574A4974 refcnt=0
+state:        live
+active tty:   tty1
+card:         /dev/dri/by-path/pci-0000:01:00.0-card -> /dev/dri/card0 inode 9:297
+render:       /dev/dri/by-path/pci-0000:01:00.0-render -> /dev/dri/renderD128 inode 9:296
+holders:      0 userspace processes hold the card
+
+===== ring baseline =====
+ring_lines_before=2070
+cmd: sudo -n journalctl -k -b --no-pager | wc -l (run with LC_ALL=C)
+
+===== sudo -n journalctl -k -b --no-pager | tail -5 =====
+Nov 28 12:36:24 deneb kernel: Code: Unable to access opcode bytes at 0xffffffffffffffd6.
+Nov 28 12:36:24 deneb kernel:  likely on CPU 28 (core 12, socket 1)
+Nov 28 12:36:24 deneb kernel: Code: Unable to access opcode bytes at 0xffffffffffffffd6.
+Nov 28 12:40:14 deneb kernel: perf: interrupt took too long (2502 > 2500), lowering kernel.perf_event_max_sample_rate to 79000
+Nov 28 12:48:39 deneb kernel: A65: shadow worker enter

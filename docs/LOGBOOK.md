@@ -5159,3 +5159,31 @@ What this means for the strict bar: the ordered teardown is compiled and
 guarded, but it has not yet met a real unload. Until T8 arms the trace and
 attempts the unload, the claim "the unload no longer wedges" would rest on a
 source-level gate alone.
+
+### 2026-11-28T10:30Z | subagent | T8: the ordered teardown survived one raw unload, and no stack exists because nothing blocked
+
+The owner armed `a65_trace=Y` on the loaded 0.6.11 (srcversion
+`95E21EB1B858C08574A4974`, refcnt 0) and I ran the two-phase A65 job in one
+sitting. Phase A, the mitigation control, was the sanctioned helper path
+`sm750-vt off` then `on`: it exited 0 on both calls, detached fbcon, unbound the
+device, unloaded and reloaded the module, and captured 18 marks in
+`docs/evidence/a65/03-reproduction/01-control-transcript.txt`. The first attempt
+at 09:40Z was refused before any write because two chromium processes held
+renderD128; the owner closed them and the second attempt ran. Phase B, the raw
+path, ran once from a detached runner with refcnt 0, bind=1 and the trace
+armed: `modprobe -r sm750hdmidrm` exited 0 in the same second, the module left
+/proc/modules, and 18 marks followed the same order, ending at
+`A65: remove exit` (13:13:52 local). The nineteenth mark, `shadow worker enter`,
+did not fire because the worker never ran between arming and unload.
+
+Consequence for the claim: the T4 ordering did not wedge on this run, and
+`02-stacks.txt` therefore records that no stack exists rather than inventing
+one. One clean run excludes nothing: C1, C2a/C2b and C3 were not exercised as
+failure modes, and a wedge needing concurrency or a busy worker was not
+attempted. The module was restored afterwards with the allowlisted
+`/usr/bin/modprobe sm750hdmidrm` (exit 0; the intermediate `sm750-vt on` exited
+1 on the missing card node, the second call exited 0 with fbcon already bound).
+Post-state: 0.6.11, identical srcversion, refcnt 0, vtcon1 bind=1, holders 0,
+`a65_trace=N` because the parameter resets on load. No reboot. Records:
+`docs/evidence/a65/03-reproduction/` (`00-summary.txt`, `01c-phase-b-transcript.txt`,
+`02-stacks.txt`) and `docs/evidence/runtime/58-a65-reproduction.txt`.

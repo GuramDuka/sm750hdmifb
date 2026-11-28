@@ -76,14 +76,14 @@ packaged tarball.
 | Measure | Value |
 | --- | --- |
 | Driver source | 11252 lines of C and headers under `src/` |
-| Defect findings tracked | 67, from A01 to A67, each with a disposition |
+| Defect findings tracked | 67, from A01 to A68, each with a disposition |
 | Acceptance criteria | 6 PASS, 0 FAIL, 1 GAP - the gap is pixel-level capture at the panel, which needs a human or capture hardware |
-| Project gates | 35 gate scripts, 18 commands in `make check`, seven opt-in verification targets with planted-defect controls |
+| Project gates | 36 gate scripts, 18 commands in `make check`, seven opt-in verification targets with planted-defect controls |
 | Kernel and format matrix | 9 combinations, kernel 6.17.1 through the 7.4 daily headers |
 | IGT KMS subset | 26 pass, 14 skip, 1 fail by design |
 | GL path | `kmscube`, 299 frames in 5.07 s, 59.01 fps on llvmpipe |
 | Vblank rate | 60.43 per second measured over 120 events |
-| Evidence | 62 runtime transcripts, 28 build transcripts and 14 packaging transcripts under `docs/evidence/` |
+| Evidence | 64 runtime transcripts, 29 build transcripts and 14 packaging transcripts under `docs/evidence/` |
 | Documentation | 22 documents under `docs/`, plus the specification archive and the deck |
 
 ### How a claim is checked
@@ -171,7 +171,10 @@ each, in
 Six of its nine elements are open today:
 
 - A65 cause: the unload wedge is survived and its teardown traced, but the
-  blocked function is not named (`docs/DEFECTS.md:149`).
+  blocked function is not named (`docs/DEFECTS.md:150`). A deliberate attempt
+  on 0.6.11 on 2026-11-28 did not reproduce the wedge on either the helper path
+  or one bare `modprobe -r`; one clean run excludes none of the candidates, so
+  the cause remains unnamed.
 - GAP-B8 counters: no attempt, retry, bus-recovery or final-failure counter
   exists in the source, so a `-110` recurrence cannot be counted.
 - Soak: no 24-48 h run with a machine-readable verdict exists; there is no
@@ -217,7 +220,9 @@ Still open, and this driver's own, each with an id in
   `modprobe -r` stuck in `Unloading` with a refcount of `-1`, recoverable only
   by a reboot (A65). `sm750-vt off` detaches the console first, which is why
   the helper's unload path is preferred, and `a65_trace=1` records the
-  teardown marks needed to locate the remaining cause.
+  teardown marks needed to locate the remaining cause. A deliberate attempt on
+  0.6.11 on 2026-11-28 did not reproduce it on either path, which is not a fix:
+  A65 stays open.
 - A KWin Wayland session on a module older than 0.6.7 can start compositing and
   then freeze the scanout: kwin asks for a buffer modifier the plane never
   advertised and the kernel rejects every framebuffer with errno 22

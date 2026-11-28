@@ -1,0 +1,19 @@
+Nov 28 13:13:52 deneb kernel: A65: remove enter
+Nov 28 13:13:52 deneb kernel: A65: before poll_fini
+Nov 28 13:13:52 deneb kernel: A65: after poll_fini
+Nov 28 13:13:52 deneb kernel: A65: before test_pattern_cancel
+Nov 28 13:13:52 deneb kernel: A65: after test_pattern_cancel
+Nov 28 13:13:52 deneb kernel: A65: before vblank_stop
+Nov 28 13:13:52 deneb kernel: A65: after vblank_stop
+Nov 28 13:13:52 deneb kernel: A65: before atomic_shutdown
+Nov 28 13:13:52 deneb kernel: A65: after atomic_shutdown
+Nov 28 13:13:52 deneb kernel: A65: before async_quiesce
+Nov 28 13:13:52 deneb kernel: A65: after async_quiesce
+Nov 28 13:13:52 deneb kernel: A65: after destroy_workqueue
+Nov 28 13:13:52 deneb kernel: Console: switching to colour VGA+ 80x25
+Nov 28 13:13:52 deneb kernel: A65: before unplug
+Nov 28 13:13:52 deneb kernel: A65: after unplug
+Nov 28 13:13:52 deneb kernel: A65: before sii902x_shutdown
+Nov 28 13:13:52 deneb kernel: A65: mode_lock acquired
+Nov 28 13:13:52 deneb kernel: A65: after sii902x_shutdown
+Nov 28 13:13:52 deneb kernel: A65: remove exit

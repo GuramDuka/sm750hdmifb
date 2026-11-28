@@ -1,0 +1,88 @@
+A65 reproduction - T8 strict-production
+
+Date: 2026-11-28, 10:13:52Z (journal local 13:13:52)
+Host kernel: 7.3.5-100.fc43.x86_64
+Driver: sm750hdmidrm 0.6.11, srcversion 95E21EB1B858C08574A4974
+Card: 0000:01:00.0 Silicon Motion SM750, fbcon bound to vtcon1
+
+What ran
+
+1. Phase A control (09:50Z): the sanctioned helper path
+   `sudo -n /usr/local/sbin/sm750-vt off` then `on`. It detached fbcon, unbound
+   the PCI device, unloaded and reloaded the module, and re-bound the device.
+   Both calls exited 0. 18 `A65:` marks, transcript
+   docs/evidence/a65/03-reproduction/01-control-transcript.txt.
+   An earlier attempt at 09:40Z was refused before any change because two
+   chromium processes held renderD128; the owner closed them.
+
+2. Phase B (10:13:52Z): the unmitigated path, once. With the module loaded,
+   refcnt 0, a65_trace=Y and vtcon1 bind=1, a detached runner
+   (/mega/tmp/sm750/a65/phase-b.sh) executed `modprobe -r sm750hdmidrm` through
+   the allowlisted /usr/bin/modprobe. It returned exit 0 in the same second.
+   Transcript: docs/evidence/a65/03-reproduction/01c-phase-b-transcript.txt.
+   Stacks: docs/evidence/a65/03-reproduction/02-stacks.txt (none exist; the
+   unload did not block).
+
+Pre-state
+
+- module: sm750hdmidrm 212992 0 - Live, version 0.6.11,
+  srcversion 95E21EB1B858C08574A4974, refcount 0
+- a65_trace=Y (armed by the owner; the parameter resets to N on every load)
+- vtcon1 bind=1, active tty tty1, holders 0 (no userspace fd on the card)
+
+Phase B marks in order (journal 13:13:52, ring 2071-2142)
+
+ 1. A65: remove enter
+ 2. A65: before poll_fini
+ 3. A65: after poll_fini
+ 4. A65: before test_pattern_cancel
+ 5. A65: after test_pattern_cancel
+ 6. A65: before vblank_stop
+ 7. A65: after vblank_stop
+ 8. A65: before atomic_shutdown
+ 9. A65: after atomic_shutdown
+10. A65: before async_quiesce
+11. A65: after async_quiesce
+12. A65: after destroy_workqueue
+13. A65: before unplug
+14. A65: after unplug
+15. A65: before sii902x_shutdown
+16. A65: mode_lock acquired
+17. A65: after sii902x_shutdown
+18. A65: remove exit
+
+Last mark: `A65: remove exit` at 13:13:52. The nineteenth mark,
+`A65: shadow worker enter`, did not fire: the shadow worker did not run between
+arming and unload, so its absence is a scheduling fact, not a skipped step.
+No WARN, BUG, Oops or hung-task report followed.
+
+Outcome
+
+The unload completed: `modprobe -r` exited 0, /proc/modules no longer listed
+sm750hdmidrm, and vtcon1 bind read 0 while unloaded. The module was restored
+afterwards with the allowlisted `/usr/bin/modprobe sm750hdmidrm` (exit 0); the
+first `sm750-vt on` attempt exited 1 with `/dev/dri/by-path/pci-0000:01:00.0-card
+is missing` because the card node does not exist while the module is unloaded,
+and the second exited 0 with `fbcon is already bound ... nothing to do` because
+fbcon re-bound on the load. Post-state: version 0.6.11, identical srcversion,
+refcount 0, vtcon1 bind=1, holders 0, a65_trace=N.
+
+What this proves
+
+On this host, this kernel and this module, the T4-ordered teardown completed a
+raw `modprobe -r` with fbcon bound and with no userspace holder, reaching
+`remove exit` with no block. The mitigation path and the raw path both produced
+the same 18-mark sequence in the same order.
+
+What this does not prove
+
+One clean run does not prove the wedge is gone. No stack was captured because
+nothing blocked, so C1 (console_sem inside drm_dev_unplug), C2a/C2b (workqueue
+and fb_helper flush) and C3 (mode_lock around sii902x shutdown) remain
+unexercised as failure modes on this run rather than excluded. The shadow
+worker never fired, so the C2b ordering was not tested with the worker busy.
+The control and the raw run differ in exactly one variable - the helper's
+fbcon detach and device unbind before unload - and both completed; nothing in
+this evidence identifies which of the three candidates, if any, was the
+original cause. A wedge that needs concurrency, a busy worker or a holder to
+reproduce was not attempted and was not seen.

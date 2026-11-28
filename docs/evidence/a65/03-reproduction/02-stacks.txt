@@ -1,0 +1,25 @@
+no stack: the unload completed, there was no block to sample
+
+A65 T8 phase B - unmitigated `modprobe -r sm750hdmidrm` run from a detached
+runner (/mega/tmp/sm750/a65/phase-b.sh, setsid, stdin /dev/null). Journal time
+2026-11-28 13:13:52 local = 10:13:52Z. Kernel 7.3.5-100.fc43.x86_64, module
+0.6.11, srcversion 95E21EB1B858C08574A4974, refcnt 0, a65_trace=Y at launch,
+vtcon1 bind=1, holders 0.
+
+phase-b.log (verbatim):
+
+  Sat Nov 28 10:13:52 UTC 2026
+  exit=0
+  0
+  Sat Nov 28 10:13:52 UTC 2026
+
+The runner's `grep ^sm750hdmidrm /proc/modules` printed nothing (the grep
+line in the log produced no output) and `cat /sys/class/vtconsole/vtcon1/bind`
+printed `0`. Both were read after `modprobe -r` returned exit 0.
+
+Ring slice 2071-2142 in 01c-phase-b-transcript.txt: 19 lines, 18 `A65:` marks,
+last mark `A65: remove exit` at 13:13:52, then one line `Console: switching to
+colour VGA+ 80x25`. No WARN, BUG, Oops, hung-task or blocked-task line.
+
+Because the unload returned, the hang helper was not started: sm750-hang
+samples a block, and there was no process in D to sample.

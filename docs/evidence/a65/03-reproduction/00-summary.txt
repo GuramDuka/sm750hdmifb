@@ -1,0 +1,207 @@
+A65 / T8 - gated reproduction, phase A (mitigation control)
+===========================================================
+Plan: docs/plan/20261127-sm750-strict-production/plan.yaml, task T8
+Nature: phase A of a two-phase job. Phase A is the MITIGATION CONTROL: the
+        helper-driven reload (sudo -n /usr/local/sbin/sm750-vt off, then on)
+        run once with a65_trace armed, before the single unmitigated attempt.
+        Phase A does not attempt the wedge. It proves the trace is live and
+        records the mark sequence and count on the safe path, so phase B has a
+        baseline to differ from.
+
+#### pre-state (captured before touching the module)
+
+date_utc:            2026-11-28T09:38:19Z
+kernel:              7.3.5-100.fc43.x86_64
+module_version:      0.6.11
+module_srcversion:   95E21EB1B858C08574A4974
+proc_modules_awk:    awk '/sm750hdmidrm/{print $3, $5}' /proc/modules
+  0 Live
+  1 Live
+  3 Live
+  (first line is sm750hdmidrm itself: refcnt 0, Live; the other two are
+   drm_vram_helper and drm_ttm_helper, which list it as a dependency)
+a65_trace:           Y
+vtcon1_bind:         1
+
+#### helper interface (step 4)
+cmd: sudo -n /usr/local/sbin/sm750-vt   (no arguments)
+result: sudo: a password is required (the no-argument form is not one of
+        the allowlisted commands; the allowlist covers 'off' and 'on', and
+        'show' needs no privilege)
+cmd: /usr/local/sbin/sm750-vt   (no arguments, unprivileged read-only)
+output: usage: sm750-vt show|off|on
+exit: 2
+interface confirmed: show | off | on
+
+#### phase A reload attempt (step 5)
+date_utc: 2026-11-28T09:40:57Z
+cmd: sudo -n /usr/local/sbin/sm750-vt off
+exit: 1
+output:
+  sm750-vt: userspace processes hold the card, so the module cannot be unloaded:
+    523631:chromium-browse renderD128
+    523649:chromium-browse renderD128
+cmd: sudo -n /usr/local/sbin/sm750-vt on
+NOT RUN: off refused before changing anything (the holders scan runs
+        before any write), and the instruction says record the exact
+        output and stop when either step fails. A retry could not change
+        the outcome while those two processes hold renderD128.
+
+#### phase A reload attempt 2 (holders clear)
+
+date_utc:            2026-11-28T09:50:35Z
+kernel:              7.3.5-100.fc43.x86_64
+module_version:      0.6.11
+module_srcversion:   95E21EB1B858C08574A4974
+proc_modules_awk:
+  0 Live
+  1 Live
+  3 Live
+  (first line is sm750hdmidrm itself; the other two are helper modules)
+a65_trace:           Y
+vtcon1_bind:         1
+holders:             0 userspace processes hold the card (owner closed chromium)
+
+fresh ring baseline: see docs/evidence/a65/03-reproduction/01b-before.txt
+
+#### phase A reload attempt 2 - exits
+
+cmd: sudo -n /usr/local/sbin/sm750-vt off
+exit: 0
+output:
+  sm750-vt: target /sys/class/vtconsole/vtcon1 (basis: sole framebuffer vtconsole on the host, with the sole sm750hdmidrm card (0000:01:00.0); not by a hardcoded index or a node name)
+  sm750-vt: driver dir /sys/bus/pci/drivers/sm750hdmidrm
+  sm750-vt: refcnt before any change: 0
+  sm750-vt: detaching fbcon; there will be no text console until the reload ends
+  sm750-vt: fbcon detached, bind=0
+  sm750-vt: unbinding 0000:01:00.0 from sm750hdmidrm to release the framebuffer
+  sm750-vt: device unbound, refcnt after the unbind: 0
+  sm750-vt: refcount reached 0 after 0 waits
+  sm750-vt: module unloaded
+  sm750-vt: device re-bound, /sys/bus/pci/devices/0000:01:00.0/driver -> /sys/bus/pci/drivers/sm750hdmidrm
+  fbcon:        detached then re-bound to /sys/class/vtconsole/vtcon1, bind=1
+  device:       0000:01:00.0 unbound then re-bound to sm750hdmidrm
+  reloaded:     0.6.11 -> 0.6.11 (srcversion=95E21EB1B858C08574A4974 refcnt=1)
+
+cmd: sudo -n /usr/local/sbin/sm750-vt on
+exit: 0
+output:
+  sm750-vt: fbcon is already bound to /sys/class/vtconsole/vtcon1 (bind=1), nothing to do
+
+Note: the helper path completed cleanly. The helper re-bound fbcon itself at the
+end of 'off', so 'on' was a verified no-op rather than a second bind. The
+'refcnt=1' the helper prints for its own run is its own module reference; the
+refcount read after the run is 0 (see post-control state).
+
+#### marks (helper path)
+
+count: 18
+source: docs/evidence/a65/03-reproduction/01-control-transcript.txt, every
+        'A65:' line after ring baseline 2070, in printed order, all stamped
+        12:51:34 except the first line of the slice (a pre-baseline ring line
+        is not included; the slice starts at line 2071).
+ordered list:
+   1. A65: remove enter
+   2. A65: before poll_fini
+   3. A65: after poll_fini
+   4. A65: before test_pattern_cancel
+   5. A65: after test_pattern_cancel
+   6. A65: before vblank_stop
+   7. A65: after vblank_stop
+   8. A65: before atomic_shutdown
+   9. A65: after atomic_shutdown
+  10. A65: before async_quiesce
+  11. A65: after async_quiesce
+  12. A65: after destroy_workqueue
+  13. A65: before unplug
+  14. A65: after unplug
+  15. A65: before sii902x_shutdown
+  16. A65: mode_lock acquired
+  17. A65: after sii902x_shutdown
+  18. A65: remove exit
+
+Absent expected mark: 'A65: shadow worker enter'. It is present in the binary
+(src/sm750_drm.c:2727) but did not fire during this reload: the mark prints only
+when the shadow worker actually runs, and no shadow damage was queued inside the
+teardown window. The last trace-armed worker entry in this boot was at 12:48:39,
+before the attempt-2 baseline (see 01b-before.txt, tail).
+
+Correction to the brief's expectation, stated plainly and without padding: the
+expected count of sixteen (and the premise that three of the nineteen belong to
+the unmitigated raw path) does not match the installed 0.6.11. The three
+sm750_destroy_shadow_workqueue marks (before async_quiesce, after
+async_quiesce, after destroy_workqueue) DID appear on the helper path, because
+T4 moved that teardown from a devres action into .remove. The count on the
+helper path is therefore 18 of 19, not 16. The 0.6.10 evidence 54 recorded
+sixteen only because that build had not yet added the T4 marks (before
+sii902x_shutdown, mode_lock acquired) or the worker-entry mark.
+
+Ordering observation: the sequence shows the T4 contract order, i.e. producers
+stopped (poll_fini, test_pattern_cancel, vblank_stop) and the pipeline shut down
+(atomic_shutdown) BEFORE the shadow queue was destroyed and before unplug, with
+unplug before the SiI902x power-down. This differs from the 0.6.10 order in
+evidence 54, where 'before unplug' preceded test_pattern_cancel. No mark appears
+twice and none out of source order.
+
+#### post-control state
+
+date_utc:          2026-11-28T09:52:22Z
+version:           0.6.11
+srcversion:        95E21EB1B858C08574A4974
+refcnt_awk:        awk '/sm750hdmidrm/{print $3, $5}' /proc/modules
+  0 Live
+  1 Live
+  3 Live
+  (first line is sm750hdmidrm itself: refcnt 0, Live; the others are helpers)
+proc_modules_line: sm750hdmidrm 212992 0 - Live 0xffffffffc0a3d000 (OE)
+vtcon1_bind:       1
+holders:           0 userspace processes hold the card
+a65_trace:         N
+
+A module parameter resets to its default on every load, so the arming that was
+set to Y before this control was consumed by the reload: the freshly loaded
+0.6.11 reads a65_trace=N. Any further trace capture needs a new root write of 1
+to /sys/module/sm750hdmidrm/parameters/a65_trace after the load.
+
+#### non-mark ring lines in the control slice
+
+The 30-line slice (01-control-transcript.txt) holds the 18 marks plus 12 lines:
+the vtconsole detach/re-attach pair ("Console: switching to colour VGA+ 80x25"
+then "Console: switching to colour frame buffer device 128x48"), the module's
+unload/load init lines, the fb0 registration, the DMA1 fallback line, the
+blank-console notice and the test-card notice. The DMA1 line is the documented
+per-load fallback (README.md:680, src/sm750_drm.c:1694-1695) and is not new.
+Scan for WARN/BUG/oops/blocked-for-more-than/call-trace: none in the slice.
+No A65 mark appears after the slice either (ring 2101 onward: 0).
+
+#### phase B (unmitigated unload)
+
+date_utc:          2026-11-28T10:13:32Z
+ring_lines_before: 2123
+a65_trace:         Y
+proc_modules_line: sm750hdmidrm 212992 0 - Live 0xffffffffc0a3d000 (OE)
+vtcon1_bind:       1
+holders:           0 userspace processes hold the card
+module:            version=0.6.11 srcversion=95E21EB1B858C08574A4974 refcnt=0
+hang_helper_usage: usage: sm750-hang capture [OUTDIR]
+                   sm750-hang status
+                   (read-only; refuses an existing OUTDIR; cannot unwedge)
+phase_a_baseline:  18 marks, see '#### marks (helper path)' above
+
+#### phase B result (unmitigated unload)
+
+phase_b_start_utc: 2026-11-28T10:13:52Z (journal local 13:13:52)
+runner:             /mega/tmp/sm750/a65/phase-b.sh, setsid, log /mega/tmp/sm750/a65/phase-b.log
+command:            modprobe -r sm750hdmidrm (allowlisted /usr/bin/modprobe -r, refcnt 0, a65_trace=Y, bind=1)
+exit:               0
+result:             unloaded cleanly; no block, no stack exists (02-stacks.txt)
+ring_slice:         01c-phase-b-transcript.txt, 19 lines, ring 2071-2142
+a65_marks:          18, same order as phase A, last mark "A65: remove exit" at 13:13:52
+absent_mark:        "shadow worker enter" (the worker did not fire between arm and unload)
+warn_scan:          none (no WARN/BUG/Oops/hung task)
+vtcon1_bind_after:  0 (no framebuffer owner while the module was unloaded)
+sm750_vt_on_1:      exit 1, "sm750-vt: /dev/dri/by-path/pci-0000:01:00.0-card is missing" (guard refuses with no loaded card)
+modprobe_load:      exit 0 (/usr/bin/modprobe sm750hdmidrm)
+sm750_vt_on_2:      exit 0, "fbcon is already bound to /sys/class/vtconsole/vtcon1 (bind=1), nothing to do"
+post_state:         version=0.6.11 srcversion=95E21EB1B858C08574A4974 refcnt=0
+                    vtcon1 bind=1, active tty tty1, holders 0, a65_trace=N (reset by load)

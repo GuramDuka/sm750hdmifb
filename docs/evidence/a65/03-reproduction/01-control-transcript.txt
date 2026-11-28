@@ -1,0 +1,30 @@
+Nov 28 12:51:34 deneb kernel: Console: switching to colour VGA+ 80x25
+Nov 28 12:51:34 deneb kernel: A65: remove enter
+Nov 28 12:51:34 deneb kernel: A65: before poll_fini
+Nov 28 12:51:34 deneb kernel: A65: after poll_fini
+Nov 28 12:51:34 deneb kernel: A65: before test_pattern_cancel
+Nov 28 12:51:34 deneb kernel: A65: after test_pattern_cancel
+Nov 28 12:51:34 deneb kernel: A65: before vblank_stop
+Nov 28 12:51:34 deneb kernel: A65: after vblank_stop
+Nov 28 12:51:34 deneb kernel: A65: before atomic_shutdown
+Nov 28 12:51:34 deneb kernel: A65: after atomic_shutdown
+Nov 28 12:51:34 deneb kernel: A65: before async_quiesce
+Nov 28 12:51:34 deneb kernel: A65: after async_quiesce
+Nov 28 12:51:34 deneb kernel: A65: after destroy_workqueue
+Nov 28 12:51:34 deneb kernel: A65: before unplug
+Nov 28 12:51:34 deneb kernel: A65: after unplug
+Nov 28 12:51:34 deneb kernel: A65: before sii902x_shutdown
+Nov 28 12:51:34 deneb kernel: A65: mode_lock acquired
+Nov 28 12:51:34 deneb kernel: A65: after sii902x_shutdown
+Nov 28 12:51:34 deneb kernel: A65: remove exit
+Nov 28 12:51:34 deneb kernel: sm750hdmidrm 0000:01:00.0: [drm] DMA1 IRQ was not delivered; reverting to completion polling
+Nov 28 12:51:34 deneb kernel: sm750hdmidrm 0000:01:00.0: [drm] DMA1 shadow uploads enabled after off-screen transfer verification (minimum 4096 bytes)
+Nov 28 12:51:34 deneb kernel: [drm] Initialized sm750hdmidrm 0.6.11 for 0000:01:00.0 on minor 0
+Nov 28 12:51:34 deneb kernel: Console: switching to colour frame buffer device 128x48
+Nov 28 12:51:34 deneb kernel: sm750hdmidrm 0000:01:00.0: [drm] fb0: sm750hdmidrmdrm frame buffer device
+Nov 28 12:51:34 deneb kernel: sm750hdmidrm 0000:01:00.0: [drm] registered SM750 HDMI DRM device with 16 MiB VRAM (RGB565 bbdither, primary controller)
+Nov 28 12:51:34 deneb kernel: sm750hdmidrm 0000:01:00.0: [drm] 64x64 hardware cursor plane enabled with ARGB palette conversion
+Nov 28 12:51:34 deneb kernel: sm750hdmidrm 0000:01:00.0: [drm] coalesced asynchronous shadow updates enabled
+Nov 28 12:51:34 deneb kernel: sm750hdmidrm 0000:01:00.0: [drm] full-frame backbuffer staging enabled (1572864 bytes per buffer)
+Nov 28 12:51:34 deneb kernel: sm750hdmidrm 0000:01:00.0: [drm] console framebuffer is blank: the panel now scans a frame nobody has painted (is the foreground VT in KD_TEXT?)
+Nov 28 12:51:34 deneb kernel: sm750hdmidrm 0000:01:00.0: [drm] painted a test card: no client has produced a frame (test_pattern=auto)

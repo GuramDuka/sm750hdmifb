@@ -1791,11 +1791,12 @@ needs. The gate `tests/check-hang-helper.sh` pins its properties, and
 reload from re-entering the wedged state while the framebuffer vtconsole is
 still bound.
 
-### 3.16 Reproducing A65 deliberately: prepared, not run
+### 3.16 Reproducing A65 deliberately: prepared, run once on 2026-11-28, not reproduced
 
-Prepared 2026-11-27, not executed. Nothing below runs by default: no gate, no
-script and no helper invokes it, and there is no partial version of it that can
-fire by accident.
+Prepared 2026-11-27; executed once on 2026-11-28 under the owner's
+authorisation and not reproduced (result at the end of this section). Nothing
+below runs by default: no gate, no script and no helper invokes it, and there is
+no partial version of it that can fire by accident.
 
 Cost, stated first. A successful run ends in one reboot. From the moment the
 module wedges until that reboot, the SM750 panel shows nothing, the framebuffer
@@ -1911,8 +1912,27 @@ declined the controlled reproduction twice (most recently 2026-11-27T20:30Z), so
 A65 stays open on this host by his decision and not for want of a procedure. The
 record of that decision is plan decision 113
 (`docs/plan/20261117-sm750-driver-prod/plan.yaml:190`) and the A65 blast-radius
-note (`docs/DEFECTS.md:1815-1821`, which also lists the two helper guards that
-keep the accidental path closed).
+note (the "Blast radius reduced 2026-11-27T20:30Z" paragraph in the A65 detail
+of `docs/DEFECTS.md`, which also lists the two helper guards that
+keep the accidental path closed). The owner later authorised one two-phase run
+on 2026-11-28 - one helper control and one unmitigated unload - which is
+recorded at the end of this section; any further run still needs a new explicit
+request.
+
+Result, 2026-11-28 (T8), not reproduced. Run under that authorisation on kernel
+7.3.5-100.fc43.x86_64 with 0.6.11 (`srcversion 95E21EB1B858C08574A4974`),
+`a65_trace=Y`, refcount 0 and `vtcon1/bind` 1. Phase A, the control
+(`sm750-vt off` then `on`), exited 0 and reloaded 0.6.11 -> 0.6.11; phase B,
+one detached bare `modprobe -r sm750hdmidrm`, exited 0 in the same second and
+the module left `/proc/modules`. Both runs printed the same 18 `A65:` marks in
+source order, ending `A65: remove exit` (10:13:52Z on the raw path). No process
+entered state D, so step 6 was not run and no stack exists; the nineteenth mark,
+`shadow worker enter`, did not fire, so candidate C2b was not exercised under
+load. A65 is NOT fixed: one clean run excludes none of C1, C2a, C2b and C3.
+The procedure above stays the repeatable recipe. Evidence:
+`docs/evidence/a65/03-reproduction/00-summary.txt`,
+`01-control-transcript.txt`, `01c-phase-b-transcript.txt`, `02-stacks.txt`, and
+`docs/evidence/runtime/58-a65-reproduction.txt`.
 
 ## 4. udev ACL rule
 
