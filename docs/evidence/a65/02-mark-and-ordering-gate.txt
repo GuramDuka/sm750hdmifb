@@ -1,0 +1,37 @@
+A65 mark and unload-ordering gate: transcript
+======================================================================
+
+commit:  fd2919580b9868c0738fcf0042705038dcd3645e
+date:    2026-11-28T08:41:28Z
+host:    Linux 7.3.5-100.fc43.x86_64 x86_64
+gate:    tests/check-a65-trace.sh
+loaded:  /sys/module/sm750hdmidrm/version = 0.6.11
+
+Why this file exists: plan task T4 lists it as evidence, and the gate that
+guards the ordered teardown had never had its transcript captured. This is
+the gate's own output at the commit that carries the ordering, recorded
+without editing. It proves the assertions and the nine planted controls; it
+does not prove anything about a real unload, which is T8.
+
+--- output ---
+ok: a. a65_trace is a static bool with mode 0644 and defaults to off
+ok: b. a65_mark() prints A65: through pr_err behind the a65_trace guard
+ok: c. a65_mark() takes no lock and does not sleep
+ok: i. no mark runs with a spinlock held
+ok: d. every expected mark appears exactly once, and the count is documented
+ok: e. the marks bracket their calls and follow the teardown contract
+ok: f. the instrumented lines stay within 80 columns
+ok: g. the remove body follows the teardown contract, not just the mark order
+ok: h. no fbcon-reachable path takes mode_lock blocking (candidate C1)
+negative control mode-0444: rejected: FAIL: a: a65_trace must be declared with mode 0644
+negative control pr-debug: rejected: FAIL: b: a65_mark() does not print through pr_err with the A65: prefix
+negative control guard-removed: rejected: FAIL: b: a65_mark() is not guarded by if (a65_trace)
+negative control unplug-swapped: rejected: FAIL: e: 'before unplug' at 37, 'drm_dev_unplug(&sdev->drm);' at 36 and 'after unplug' at 35 are not in order
+negative control pipe-enable-blocking: rejected: FAIL: h: sm750_pipe_enable() must not take mode_lock blocking: fbcon reaches it under console_sem (candidate C1)
+negative control devres-destroy: rejected: FAIL: g: sm750_destroy_shadow_workqueue must not be a devres action: the queue has to die inside .remove
+negative control detach-dropped: rejected: FAIL: e: the shadow queue must die before the vtconsole detaches (a step is missing)
+negative control queue-after-unplug: rejected: FAIL: e: the shadow queue must die before the vtconsole detaches
+negative control mark-in-spinlock: rejected: FAIL: i: an A65 mark runs with a spinlock held: 607: 	a65_mark("shadow worker enter");
+negative control pristine: accepted
+A65 teardown marks gate checks passed (9 assertions, 9 planted controls)
+exit=0
