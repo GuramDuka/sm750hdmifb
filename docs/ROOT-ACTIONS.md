@@ -1896,9 +1896,9 @@ other command is a current sudoers allowlist entry, measured on this host on
    reboot, confirm the driver is back:
 
    ```sh
-   sudo -n /usr/local/sbin/sm750-pkg install     # installs 0.6.10 again
+   sudo -n /usr/local/sbin/sm750-pkg install     # installs the current pair, 0.6.11
    sudo -n /usr/local/sbin/sm750-vt show         # expect state: live, bind now: 1
-   cat /sys/module/sm750hdmidrm/version          # expect 0.6.10
+   cat /sys/module/sm750hdmidrm/version          # expect 0.6.11
    ```
 
    If the unload in step 5 completed instead of wedging, there is nothing to

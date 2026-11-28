@@ -131,7 +131,7 @@ to `src/*.c` or `src/*.h` (`docs/evidence/builds/11-warnings-scan.log`).
 ```
 
 Expected: exit 0. The script rebuilds the noarch RPM from a fresh `_topdir`,
-asserts the payload against `git ls-files` (154 payload files in the current
+asserts the payload against `git ls-files` (156 payload files in the current
 tree; the same command the script uses is `git ls-files -- . ':(exclude)docs/plan'
 ':(exclude)docs/evidence' ':(exclude)docs/images' ':(exclude)docs/notes' |
 wc -l`), the `%files` list
@@ -561,6 +561,7 @@ list.
 | `docs/evidence/runtime/54-a65-trace-mitigated-reload.txt` | A65 first capture: with `a65_trace=Y` and `drm.debug=1`, a controlled `sm750-vt off` reload (fbconsole detached first, the ordering A65 names as the difference) reached all sixteen teardown marks in order inside one second and completed 0.6.10 -> 0.6.10; the same journal slice shows the one condition yet observed where `dev->open_count` reaches zero (`drm_file_free comm="sm750-vt" ... open_count=0`), which corroborates A54 from the other side; explicitly not a reproduction of the 2026-11-26 wedge, which needs fbconsole attached during the unload |
 | `docs/evidence/runtime/55-vt-helper-refresh.txt` | 2026-11-27T21:09Z: the hardened `sm750-vt` installed by the host owner and read back - `sha256sum` prints `1cdb0902...` for both `/usr/local/sbin/sm750-vt` and `tools/sm750-vt.sh`, so the installed body is the tree body; `show` prints `state: live`, `refcnt=0`, `bind now: 1`, `version=0.6.10 srcversion=6DA22404EEA85B6D6535912`, 0 userspace holders, and `card0` / `renderD128` through the by-path links; the replaced body was `26f9fb71...` (448 lines, no wedge guard, one refcount sample); section 5 states that `off` was not exercised and that the A65 cause is untouched |
 | `docs/evidence/runtime/56-dmesg-restrict-off.txt` | 2026-11-27T21:24Z: the owner set `kernel.dmesg_restrict` to `0` and the measurements that follow - `/proc/sys/kernel/dmesg_restrict` reads `0` at mode `-rw-r--r-- root root`, plain `dmesg` now runs unprivileged and prints the live ring with `[drm:...]` lines (last timestamp 18230.5, so the ring was not reset), while `/proc/self/stack` still fails with `EACCES` and `/proc/self/wchan` prints `0`; records that no hung-task stack can appear without `CONFIG_DETECT_HUNG_TASK`, that pstore is absent, that `/usr/local/sbin/sm750-hang` is byte-identical to `tools/sm750-hang.sh` (`be41e1fc...`) with its one NOPASSWD line, that the A65 blocker is now only the reproduction, and that five stale `dmesg_restrict=1` message strings in the two PM helpers and one gate assertion were corrected without a behaviour change |
+| `docs/evidence/runtime/57-instrumented-load.txt` | T7: the install-time deferral (refcount 1, two `chromium-browse` descriptors on `renderD128`, `sm750-pkg install` exit 1 with `loaded module reports '0.6.10'`), the boot at 2026-11-28T07:52:12Z that loaded 0.6.11 (`srcversion 95E21EB1B858C08574A4974`, matching the installed `.ko.xz`), the eleven `b8_*` attributes read live with `b8_mode_attempts=2`, `b8_edid_reads=1` and `b8_counters_epoch_s=3` from boot activity, `a65_trace` = N with zero `A65:` lines, the helper re-run that now exits 0, and what stays unclaimed (no hot remove, no suspend, no monotonicity run; A65 capture still needs the owner to write `a65_trace` as root) |
 | `docs/evidence/packaging/06-posttrans-missing-headers.log` | missing-header branch of `%posttrans`, plus the stale-purge run whose `dkms remove` fails (exit 4) and the dangling-link run (A40) |
 | `docs/evidence/packaging/07-check-rpm-dkms.log` | full `tests/check-rpm-dkms.sh` run |
 | `docs/evidence/packaging/0.5.9/01-rpmbuild.log` | `rpmbuild -ba` at 0.5.9, exit 0, frozen: produced before the T45 `LC_ALL=C` capture, non-ASCII lines left unedited as the historical record |
@@ -602,6 +603,7 @@ list.
 | `docs/evidence/builds/26-audit-release.log` | T18: `build-package.sh` and `tests/audit-release.sh` after the A29 fix |
 | `docs/evidence/builds/27-source-archive-manifest.log` | T18: tarball manifest after the A29 fix, with the development-only directory counts |
 | `docs/evidence/builds/28-static-determinism.log` | T24: the spatch non-determinism cause, the twelve-patch matrix and the controls |
+| `docs/evidence/builds/30-instrumented-install.log` | T7: the 0.6.11 version sites, the build from the tree, both RPMs rebuilt from the same tarball (`dist` and `SOURCES` hash `b54643a4...`), the install through `sm750-pkg`, and the per-kernel `.ko.xz` sha256 plus one shared `srcversion 95E21EB1B858C08574A4974`; includes the correction that the first pair in that round embedded a `docs/PACKAGING-RPM.md` predating the version sed |
 
 ### 5.5 Images and plan
 

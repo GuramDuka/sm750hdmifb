@@ -101,8 +101,9 @@ per file.
 
 Eleven more read-only attributes on the same node, the GAP-B8 retry and
 failure counters, are documented in "GAP-B8 retry and failure counters" below.
-They are additive: a module without them, such as the 0.6.10 load this
-document was last verified against, has no `b8_*` file at all.
+They are additive: a module without them, 0.6.10 and older, has no `b8_*` file
+at all. The 0.6.11 load on this host has all eleven, and
+`docs/evidence/runtime/57-instrumented-load.txt` reads each one.
 
 | Attribute | Format | Meaning |
 |---|---|---|

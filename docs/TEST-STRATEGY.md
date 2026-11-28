@@ -597,16 +597,20 @@ LD_LIBRARY_PATH=$IGT/usr/lib64:/mega/tmp/sm750/t10/gsl/gsl-2.8-2.fc43.x86_64/usr
   of both sources and must exit non-zero naming the defect.
 - Status: PASS, `Sysfs attribute checks passed (12 monitoring attributes, 11
   GAP-B8 counters, 9 planted controls)`, re-run 2026-11-27 with the counters.
-  The eleven counters are source-level only on this host: the loaded 0.6.10
+  At that date the eleven counters were source-level only: the loaded 0.6.10
   module predates them, so `docs/evidence/gap-b8/03-counter-observed.txt`
   records the `ENOENT` for each name as uid 1005 and the absent retry over four
-  ring samples. The gate is source-level and no capture of the live attribute
-  values exists in this tree: there is no `docs/evidence/runtime/31-*` file (the
-  `31-` slot is unused; the sequence runs `30-sii9024a-readiness-and-timeout.txt`
-  then `32-sii9024a-ddc-grant.txt`). Two individual values are captured, not the
-  set: `active_mode_refresh_hz` in
-  `docs/evidence/runtime/34-vblank-idle-freeze.txt:23,101-108` and `active_crtc`
-  in `docs/evidence/runtime/39-smi-inactive-crtc.txt`.
+  ring samples. That gap is closed as of 2026-11-28: the 0.6.11 module loaded on
+  this host's 07:52Z boot and
+  `docs/evidence/runtime/57-instrumented-load.txt` reads all eleven attributes
+  from `/sys/bus/pci/devices/0000:01:00.0/`, eight of them 0 and three non-zero
+  from boot activity (`b8_mode_attempts=2`, `b8_edid_reads=1`,
+  `b8_counters_epoch_s=3`). One snapshot is not a monotonicity run; the soak
+  helper is what can claim that.
+  Two individual values of the monitoring set are captured in
+  `docs/evidence/runtime/34-vblank-idle-freeze.txt:23,101-108`
+  (`active_mode_refresh_hz`) and
+  `docs/evidence/runtime/39-smi-inactive-crtc.txt` (`active_crtc`).
 
 ### S20: headless helper gate
 

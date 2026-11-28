@@ -17,6 +17,16 @@ module is `0.6.10` (`/sys/module/sm750hdmidrm/version`), and DKMS reports
 7.3.5-100. Values that were true at an earlier date are labelled as such in
 place; nothing earlier is deleted.
 
+Refreshed 2026-11-28: 0.6.11 replaced 0.6.10. The loaded module is `0.6.11`
+(`srcversion 95E21EB1B858C08574A4974`, loaded by the host boot at
+2026-11-28T07:52:12Z), DKMS reports `sm750hdmifb/0.6.11` installed for
+7.2.15-100, 7.3.3-100, 7.3.4-100 and 7.3.5-100, and the eleven GAP-B8 counter
+attributes plus `a65_trace` are present in the live module. The installed pair is
+`sm750hdmifb-0.6.11-1.fc43.noarch` and `sm750hdmifb-tools-0.6.11-1.fc43.x86_64`;
+evidence `docs/evidence/builds/30-instrumented-install.log` and
+`docs/evidence/runtime/57-instrumented-load.txt`. Everything below about module
+0.6.10 describes the state before that install.
+
 Artifacts that could not be read without privileges are not guessed here. They
 are recorded with their exact closing command in `docs/evidence/EVIDENCE-GAPS.md`.
 

@@ -769,10 +769,11 @@ retry: a retry of a half-progressed modeset can corrupt state, and this branch
 identifies, it does not recover. `tests/check-drm-policy.sh` asserts that every
 stage has a name and an assignment on the modeset path.
 
-The instrumentation has been loaded. Module 0.6.10, which carries the
+The instrumentation has been loaded. Module 0.6.11, which carries the
 stage-name format, is installed and live on this host
-(`srcversion 6DA22404EEA85B6D6535912`), and the guarded unload path was
-exercised sixteen times in one second on the mitigated reload
+(`srcversion 95E21EB1B858C08574A4974`, `docs/evidence/runtime/57-instrumented-load.txt`);
+module 0.6.10 carried it too and the guarded unload path was exercised sixteen
+times in one second on the mitigated reload
 (`docs/evidence/runtime/54-a65-trace-mitigated-reload.txt`). What has not
 happened is the `-110` itself: the trigger has not been re-raised since the
 instrumentation went in, so no `at stage <name>` line has been produced and this
@@ -794,7 +795,7 @@ Status: `GAP`.
 | B5 | config space > 0x40 | `Capabilities: <access denied>` unprivileged; allowlisted `sudo -n /usr/local/sbin/sm750-lspci` returns the full space (T14) | `CLOSED` |
 | B6 | EDID checksum detail | none | `CLOSED` |
 | B7 | RPM install/erase, DKMS hooks | `dkms install` needs root; `rpm -i --root=` cannot chroot; install, `%preun` erase and reinstall all executed as root (T11) | `CLOSED` |
-| B8 | which `sm750_program_mode` call returns `-110` | that path had zero `dev_dbg`/`drm_dbg`, and dynamic debug is root-only; T27 instruments the five calls instead (the next occurrence prints `failed to enable HDMI mode: -110 at stage <name>`, see `docs/evidence/gap-b8/01-stage-instrumentation.txt`); the instrumented build is loaded and live (0.6.10, `srcversion 6DA22404EEA85B6D6535912`, `docs/evidence/runtime/54-a65-trace-mitigated-reload.txt`), but the trigger itself reproduced only 1/206 and has not been re-raised | `GAP` |
+| B8 | which `sm750_program_mode` call returns `-110` | that path had zero `dev_dbg`/`drm_dbg`, and dynamic debug is root-only; T27 instruments the five calls instead (the next occurrence prints `failed to enable HDMI mode: -110 at stage <name>`, see `docs/evidence/gap-b8/01-stage-instrumentation.txt`); the instrumented build is loaded and live (0.6.11, `srcversion 95E21EB1B858C08574A4974`, `docs/evidence/runtime/57-instrumented-load.txt`; the 0.6.10 load that first proved it is `docs/evidence/runtime/54-a65-trace-mitigated-reload.txt`), but the trigger itself reproduced only 1/206 and has not been re-raised | `GAP` |
 
 One further fact, recorded rather than resolved: the handoff anticipated a
 `journalctl -k -b` substitute for `dmesg`. It exits 0 on this host but yields

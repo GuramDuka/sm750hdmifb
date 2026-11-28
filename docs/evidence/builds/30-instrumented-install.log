@@ -1,0 +1,404 @@
+# utc: 2026-11-28T08:10:00Z
+# host: Fedora 43, running kernel 7.3.5-100.fc43.x86_64, TZ Europe/Moscow (UTC+3)
+# scope: task T7 (install half) of docs/plan/20261127-sm750-strict-production/plan.yaml
+# tree: HEAD 13f36d594d4d86c0d3422ee1aa87785bc62adfbd plus the T7 working-tree edits
+# scratch: /mega/tmp/sm750/t7/ ; RPM build root /mega/tmp/sm750/t6/rpmbuild
+# locale: LC_ALL=C LANG=C for every capture quoted below
+# what: the 0.6.11 version bump, a build from the tree, both RPMs rebuilt from that
+#       tree, the install through /usr/local/sbin/sm750-pkg, and the per-kernel
+#       payload verification. The module reload is NOT part of this task and was
+#       not performed here; the load that is now live is a boot load, recorded in
+#       docs/evidence/runtime/57-instrumented-load.txt.
+# note: the first captures of this round (00:51-00:53 local, 21:51-21:53Z) were
+#       taken under the host locale and contain localized dnf and dpkg-deb lines.
+#       Every transcript below was re-taken under LC_ALL=C; where a run cannot be
+#       repeated harmlessly the localized lines are described, never rewritten.
+
+## 1. version sites, measured at the tree under test
+
+```
+$ grep -n 'SM750_DRM_VERSION' src/sm750_drm.c | head -2
+81:#define SM750_DRM_VERSION "0.6.11"
+6076:MODULE_VERSION(SM750_DRM_VERSION);
+$ grep -n 'DRIVER_MINOR\|DRIVER_PATCHLEVEL' src/sm750_drm.c | head -2
+85:#define DRIVER_MINOR 6
+86:#define DRIVER_PATCHLEVEL 11
+$ grep -n 'readonly version=' build-package.sh
+9:readonly version=0.6.11
+$ grep -n 'PACKAGE_VERSION' dkms.conf
+3:PACKAGE_VERSION="0.6.11"
+$ grep -n 'dkms_version\|^Version:' packaging/sm750hdmifb.spec | head -2
+22:%global dkms_version  0.6.11
+26:Version:        0.6.11
+$ grep -n '^Version:' packaging/sm750hdmifb-tools.spec
+21:Version:        0.6.11
+$ grep -n 'sm750hdmifb-0.6' docs/ci/build.yml | head -2
+63:          name: sm750hdmifb-0.6.11
+67:            dist/sm750hdmifb-0.6.11-source.tar.gz
+$ grep -n '0.6.10' tests/check-soak-helper.sh
+219:	printf '0.6.10\n' >"$mod/version"
+```
+
+`tests/check-soak-helper.sh:219` is the fixture that plants a fake module
+directory; it is deliberately unchanged. The first package it plants is 0.6.10
+so the helper's stale-version path stays covered.
+
+The spec carries a 0.6.11 changelog entry above the 0.6.10 one:
+
+```
+$ sed -n '/^\* Sat Nov 28 2026/,/^$/p' packaging/sm750hdmifb.spec | head -12
+* Sat Nov 28 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.11-1
+- Instrumented release: ordered teardown in sm750_pci_remove() (poll, test
+  pattern, vblank, atomic shutdown, shadow workqueue, vtconsole detach, unplug,
+  panel power-down), the blocking mode_lock removed from the fbcon paths in
+  favour of mutex_trylock() plus a drain before teardown, nineteen A65 marks
+  behind a65_trace=1, and eleven GAP-B8 counters in sysfs.
+```
+
+The tools spec carries the same version and its own 0.6.11-1 entry.
+
+## 2. build from the tree
+
+The build is the release script, not a staged RPM:
+
+```
+$ export PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig
+$ export PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm
+$ date -u +%Y-%m-%dT%H:%M:%SZ
+2026-11-28T08:04:21Z
+$ ./build-package.sh
+dpkg-deb: building package 'sm750hdmifb' in '/home/coder/sm750hdmifb/dist/sm750hdmifb_0.6.11_all.deb'.
+dpkg-deb: building package 'sm750hdmifb-tools' in '/home/coder/sm750hdmifb/dist/sm750hdmifb-tools_0.6.11_amd64.deb'.
+/home/coder/sm750hdmifb/dist/sm750hdmifb_0.6.11_all.deb
+/home/coder/sm750hdmifb/dist/sm750hdmifb-0.6.11-source.tar.gz
+/home/coder/sm750hdmifb/dist/sm750hdmifb-tools_0.6.11_amd64.deb
+/home/coder/sm750hdmifb/dist/SHA256SUMS
+exit=0
+$ sha256sum dist/sm750hdmifb_0.6.11_all.deb dist/sm750hdmifb-tools_0.6.11_amd64.deb dist/sm750hdmifb-0.6.11-source.tar.gz
+8d9cdf808261de90068e4149b1d3cc2b0da09a14dae7660c229aef47040544aa  dist/sm750hdmifb_0.6.11_all.deb
+81d31e1da7eefa0d0e75e4bcb2b8b22709c8e397d30bc6058bb6012a57a0b8e3  dist/sm750hdmifb-tools_0.6.11_amd64.deb
+b54643a46dd3985a7d989e57cf7a1431e7041a686c0cf6018269994ac368c390  dist/sm750hdmifb-0.6.11-source.tar.gz
+```
+
+The libdrm headers are not in the rpmdb on this host (`libdrm-devel` is absent,
+`pkg-config --exists libdrm` fails without `PKG_CONFIG_PATH`). The build uses the
+pinned rootless libdrm tree under `/mega/tmp/sm750/t3/libdrm`, which is the same
+choice recorded in `docs/evidence/packaging/01-rpmbuild.log`. `dnf install` by
+bare package name is not on this host's allowlist and was not attempted.
+
+## 3. both RPMs, from this tree, into the root the helper reads
+
+`sm750-pkg` takes the newest same-version pair from
+`/mega/tmp/sm750/t6/rpmbuild/RPMS`, so the build root is rebuilt as a whole
+(`rm -rf`, then the tarball, then both specs):
+
+```
+$ bash /mega/tmp/sm750/t7/rebuild.sh
+== date
+2026-11-28T08:06:00Z
+== git rev-parse HEAD
+13f36d594d4d86c0d3422ee1aa87785bc62adfbd
+== rm -rf /mega/tmp/sm750/t6/rpmbuild
+== tar SOURCES
+tracked entries: 156
+tar exit=0
+tarball members: 156
+b54643a46dd3985a7d989e57cf7a1431e7041a686c0cf6018269994ac368c390  /mega/tmp/sm750/t6/rpmbuild/SOURCES/sm750hdmifb-0.6.11-source.tar.gz
+dist tarball:
+b54643a46dd3985a7d989e57cf7a1431e7041a686c0cf6018269994ac368c390  dist/sm750hdmifb-0.6.11-source.tar.gz
+== rpmbuild module
+rpmbuild module exit=0
+== rpmbuild tools
+rpmbuild tools exit=0
+== artifacts
+151090 /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.11-1.fc43.noarch.rpm
+28786 /mega/tmp/sm750/t6/rpmbuild/RPMS/x86_64/sm750hdmifb-tools-0.6.11-1.fc43.x86_64.rpm
+790107 /mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-0.6.11-1.fc43.src.rpm
+749095 /mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-tools-0.6.11-1.fc43.src.rpm
+905dbacc5c407aae097a7e58dfaf519ae9ab591793702411189dfbf41ccae78a  /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.11-1.fc43.noarch.rpm
+ee4d02d98db1952ca9f05fdd6843986b881b2ea31fd26895a2e3e60f4f29c1ff  /mega/tmp/sm750/t6/rpmbuild/RPMS/x86_64/sm750hdmifb-tools-0.6.11-1.fc43.x86_64.rpm
+d3f724a5f28d945ab337abaa9ec5745ceacefac6a4f21ce3e2e4d3ee272da9bc  /mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-0.6.11-1.fc43.src.rpm
+d7542c0232b9e9d2a54d4607c1485a21705160b81b745b243e79998f16eee164  /mega/tmp/sm750/t6/rpmbuild/SRPMS/sm750hdmifb-tools-0.6.11-1.fc43.src.rpm
+```
+
+The module spec builds with its BuildRequires satisfied by the pinned tree, so
+it needs no `--nodeps`; the tools spec does (`--nodeps`) because
+`libdrm-devel` is absent, and it is pointed at the same tree through
+`PKG_CONFIG_PATH`, `PKG_CONFIG_SYSROOT_DIR` and `LD_LIBRARY_PATH`.
+
+Correction recorded rather than hidden: the first pair built in this round
+(21:51Z, kept only in `/mega/tmp/sm750/t7/rpmbuild.log`) embedded a
+`docs/PACKAGING-RPM.md` that predated the version sed, because that document was
+edited after the first tarball was cut. `dist/` and `SOURCES` were therefore two
+different byte strings for one release. The rebuild above removes the
+divergence: both tarballs now hash to `b54643a4...`, and an extracted-payload
+diff against the old pair showed `docs/PACKAGING-RPM.md` as the only differing
+member. That file is not in the module RPM's %files, so the installed tree was
+unaffected; the check in section 5 proves it.
+
+## 4. the packaged payload is the instrumented source
+
+Extracted with `rpm2cpio | cpio -idm` into
+`/mega/tmp/sm750/t7/payload2`, then compared to the working tree:
+
+```
+$ diff -r --brief payload2/usr/src/sm750hdmifb-0.6.11/src src
+Only in src: .sii902x.o.cmd
+Only in src: sm750_drm.o
+Only in src: sm750hdmidrm.ko
+... (kbuild artefacts from make check; every source file matched)
+$ diff -q payload2/usr/src/sm750hdmifb-0.6.11/dkms.conf dkms.conf     -> match
+$ diff -q payload2/usr/src/sm750hdmifb-0.6.11/Makefile Makefile       -> match
+$ diff -q payload2/usr/src/sm750hdmifb-0.6.11/README.md README.md     -> match
+$ diff -q payload2/usr/src/sm750hdmifb-0.6.11/LICENSE LICENSE         -> match
+$ sha256sum payload2/usr/src/sm750hdmifb-0.6.11/src/sm750_drm.c src/sm750_drm.c
+eb72303def3c6e774a3bc2167d30a1dc375da3310955f69eab181810fd10c89e  payload2/usr/src/sm750hdmifb-0.6.11/src/sm750_drm.c
+eb72303def3c6e774a3bc2167d30a1dc375da3310955f69eab181810fd10c89e  src/sm750_drm.c
+$ sed -n '81p' payload2/usr/src/sm750hdmifb-0.6.11/src/sm750_drm.c
+#define SM750_DRM_VERSION "0.6.11"
+$ grep -c 'DEVICE_ATTR_RO(b8_' payload2/usr/src/sm750hdmifb-0.6.11/src/sm750_drm.c
+11
+```
+
+The T4 teardown order and the T5 counters are in the payload, quoted from it
+(not from the commit):
+
+```
+5950		sm750_test_pattern_cancel(sdev);
+5951		a65_mark("after test_pattern_cancel");
+5952		a65_mark("before vblank_stop");
+5953		sm750_vblank_timer_stop(sdev, true);
+5954		a65_mark("after vblank_stop");
+5955		/* 2. Shut the pipeline down while its buffer is still allocated. */
+5956		a65_mark("before atomic_shutdown");
+5957		drm_atomic_helper_shutdown(&sdev->drm);
+5958		a65_mark("after atomic_shutdown");
+...
+5969		disable_work_sync(&sdev->mode_defer_work);
+...
+5971		sm750_destroy_shadow_workqueue(sdev);
+5973		sm750_detach_vtconsole(sdev);
+5974		a65_mark("before unplug");
+5975		drm_dev_unplug(&sdev->drm);
+5976		a65_mark("after unplug");
+```
+
+The shadow queue is destroyed at line 5971 while the buffer its worker reads is
+still allocated, and the unplug at 5975 happens with no driver mutex held; the
+blocking `mode_lock` paths in fbcon are gone from the same file
+(`mutex_trylock(&sdev->mode_lock)` at lines 4323 and 4534), and the three
+`WARN_ON(mutex_is_locked(...))` lines after the unplug are in the payload.
+
+## 5. install
+
+`sudo -n /usr/local/sbin/sm750-pkg install` was run twice: once at
+2026-11-27T21:53:18Z under the host locale (the dnf progress and table lines are
+Russian; the helper's own lines are ASCII) and once at 2026-11-27T22:02:07Z under
+`LC_ALL=C`. The first run performed the transaction; the second is the ASCII
+transcript and proved the operation idempotent.
+
+```
+$ LC_ALL=C sudo -n /usr/local/sbin/sm750-pkg install
+pair: sm750hdmifb 0.6.11-1.fc43 /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.11-1.fc43.noarch.rpm
+pair: sm750hdmifb-tools 0.6.11-1.fc43 /mega/tmp/sm750/t6/rpmbuild/RPMS/x86_64/sm750hdmifb-tools-0.6.11-1.fc43.x86_64.rpm
+running: dnf install -y --setopt=gpgcheck=True /mega/tmp/sm750/t6/rpmbuild/RPMS/noarch/sm750hdmifb-0.6.11-1.fc43.noarch.rpm /mega/tmp/sm750/t6/rpmbuild/RPMS/x86_64/sm750hdmifb-tools-0.6.11-1.fc43.x86_64.rpm
+Updating and loading repositories:
+Repositories loaded.
+Package "sm750hdmifb-0.6.11-1.fc43.noarch" is already installed.
+Package "sm750hdmifb-tools-0.6.11-1.fc43.x86_64" is already installed.
+
+Nothing to do.
+== installed packages
+running: rpm -q sm750hdmifb sm750hdmifb-tools
+sm750hdmifb-0.6.11-1.fc43.noarch
+sm750hdmifb-tools-0.6.11-1.fc43.x86_64
+== dkms status
+running: dkms status
+nvidia/580.196.07, 7.3.4-100.fc43.x86_64, x86_64: installed
+nvidia/580.196.07, 7.3.5-100.fc43.x86_64, x86_64: installed
+sm750hdmifb/0.6.11, 7.2.15-100.fc43.x86_64, x86_64: installed (Original modules exist)
+sm750hdmifb/0.6.11, 7.3.3-100.fc43.x86_64, x86_64: installed (Original modules exist)
+sm750hdmifb/0.6.11, 7.3.4-100.fc43.x86_64, x86_64: installed (Original modules exist)
+sm750hdmifb/0.6.11, 7.3.5-100.fc43.x86_64, x86_64: installed (Original modules exist)
+== loaded module
+running: cat /sys/module/sm750hdmidrm/version
+0.6.10
+running: lsmod | grep -E ^sm750hdmidrm
+sm750hdmidrm          208896  1
+sm750-pkg: loaded module reports '0.6.10', installed RPM is '0.6.11'; run: sudo sm750-pkg reload
+exit=1
+```
+
+`exit=1` is the helper's last step, a deliberate guard: it refuses to report a
+successful install while the loaded module is a different version. It is the
+correct verdict at that moment, because the loaded module was still 0.6.10 and
+this task may not reload. The transaction itself succeeded in the first run:
+
+```
+>>> running %posttrans scriptlet: sm750hdmifb-0:0.6.11-1.fc43.noarch
+>>> removing stale DKMS registration: sm750hdmifb/0.6.10
+>>> Error! sm750hdmifb/0.6.10 is broken!
+>>> Missing the source directory or the symbolic link pointing to it:
+>>> /var/lib/dkms/sm750hdmifb/0.6.10/source
+>>> warning: removing broken DKMS registration tree: /var/lib/dkms/sm750hdmifb/0.6.10
+>>> removing dangling DKMS kernel link: /var/lib/dkms/sm750hdmifb/kernel-7.2.15-100.fc43.x86_64
+>>> removing dangling DKMS kernel link: /var/lib/dkms/sm750hdmifb/kernel-7.3.3-100.fc43.x86_64
+>>> removing dangling DKMS kernel link: /var/lib/dkms/sm750hdmifb/kernel-7.3.4-100.fc43.x86_64
+>>> removing dangling DKMS kernel link: /var/lib/dkms/sm750hdmifb/kernel-7.3.5-100.fc43.x86_64
+>>> warning: skipping 6.18.13-200.fc43.x86_64: matching kernel headers are absent
+>>> Creating symlink /var/lib/dkms/sm750hdmifb/0.6.11/source -> /usr/src/sm750hdmifb-0.6.11
+...
+>>> Building module(s).... done.
+>>> Signing module /var/lib/dkms/sm750hdmifb/0.6.11/build/src/sm750hdmidrm.ko
+>>> Installing /lib/modules/7.2.15-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+>>> Installing /lib/modules/7.3.3-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+>>> Installing /lib/modules/7.3.4-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+>>> Installing /lib/modules/7.3.5-100.fc43.x86_64/extra/sm750hdmidrm.ko.xz
+```
+
+(That block is the first run; the localized dnf table between its first and
+last lines is not reproduced here.) The `0.6.10` DKMS registration was already
+broken before this install: its source directory had been replaced by the
+0.6.11 tree, so `dkms remove` failed and the scriptlet deleted the broken tree
+by hand. It also removed four dangling `kernel-*` links and skipped
+`6.18.13-200` because its headers are not installed, which is the documented
+behaviour of the scriptlet, not a failure of this release.
+
+## 6. per-kernel payload, after the install
+
+```
+$ sudo -n dkms status
+nvidia/580.196.07, 7.3.4-100.fc43.x86_64, x86_64: installed
+nvidia/580.196.07, 7.3.5-100.fc43.x86_64, x86_64: installed
+sm750hdmifb/0.6.11, 7.2.15-100.fc43.x86_64, x86_64: installed (Original modules exist)
+sm750hdmifb/0.6.11, 7.3.3-100.fc43.x86_64, x86_64: installed (Original modules exist)
+sm750hdmifb/0.6.11, 7.3.4-100.fc43.x86_64, x86_64: installed (Original modules exist)
+sm750hdmifb/0.6.11, 7.3.5-100.fc43.x86_64, x86_64: installed (Original modules exist)
+```
+
+Per kernel: the installed `.ko.xz`, its sha256, `modinfo -F version`,
+`modinfo -F srcversion`, the identical DKMS build artefact, and the kbuild exit
+code from the DKMS log:
+
+```
+7.2.15-100.fc43.x86_64  77056 bytes
+  130981341edf9148199ad92cea6feb258d350f1a92c5a17a158fd2f49e9801e7
+  version 0.6.11  srcversion 95E21EB1B858C08574A4974
+  /var/lib/dkms/sm750hdmifb/0.6.11/7.2.15-100.fc43.x86_64/x86_64/module/sm750hdmidrm.ko.xz: same sha256
+  make.log: # exit code: 0   # elapsed time: 00:00:05
+
+7.3.3-100.fc43.x86_64   77036 bytes
+  7fcc7401016636bdcba251a8d3fe52a9da6182d4fff3e2b437c766ebc41e9eeb
+  version 0.6.11  srcversion 95E21EB1B858C08574A4974
+  dkms artefact: same sha256; make.log: # exit code: 0   # elapsed time: 00:00:04
+
+7.3.4-100.fc43.x86_64   76944 bytes
+  2ce25ea44415a8a248b2297700c154ef74070a821f04c6d462c01c11072951d6
+  version 0.6.11  srcversion 95E21EB1B858C08574A4974
+  dkms artefact: same sha256; make.log: # exit code: 0   # elapsed time: 00:00:05
+
+7.3.5-100.fc43.x86_64   76940 bytes
+  b7972196c8edb958aacc5947938793ac5200fca4f75dae0d59baf8d1332acc43
+  version 0.6.11  srcversion 95E21EB1B858C08574A4974
+  dkms artefact: same sha256; make.log: # exit code: 0   # elapsed time: 00:00:04
+```
+
+One srcversion for all four kernels is expected: it hashes the source, not the
+configuration, and every kernel was fed the same `/usr/src/sm750hdmifb-0.6.11`
+tree. The four pending kernels are built and installed; the same module is now
+what a boot would load.
+
+The installed source tree and the RPM agree byte for byte:
+
+```
+$ rpm -q sm750hdmifb sm750hdmifb-tools
+sm750hdmifb-0.6.11-1.fc43.noarch
+sm750hdmifb-tools-0.6.11-1.fc43.x86_64
+$ diff -r --brief /mega/tmp/sm750/t7/payload2/usr/src/sm750hdmifb-0.6.11 /usr/src/sm750hdmifb-0.6.11
+(no output; exit 0)
+$ grep -n 'PACKAGE_VERSION' /usr/src/sm750hdmifb-0.6.11/dkms.conf
+3:PACKAGE_VERSION="0.6.11"
+$ sha256sum /usr/src/sm750hdmifb-0.6.11/src/sm750_drm.c src/sm750_drm.c
+eb72303def3c6e774a3bc2167d30a1dc375da3310955f69eab181810fd10c89e  /usr/src/sm750hdmifb-0.6.11/src/sm750_drm.c
+eb72303def3c6e774a3bc2167d30a1dc375da3310955f69eab181810fd10c89e  src/sm750_drm.c
+```
+
+`rpm -ql sm750hdmifb` lists 40 paths: 36 files plus four owned directories
+(`/usr/lib/sm750hdmifb`, `/usr/share/doc/sm750hdmifb`,
+`/usr/src/sm750hdmifb-0.6.11` and `/usr/src/sm750hdmifb-0.6.11/src`).
+`rpm -ql sm750hdmifb-tools` lists one path, `/usr/bin/sm750-smi`.
+`rpm -qpl` of the two RPMs prints the same lists from the packages themselves.
+
+## 7. what this install did not do
+
+The reload. t7 was scoped to the install; `sm750-pkg reload`, `modprobe -r` and
+`sm750-vt off` were forbidden in that session because the module refcount was 1
+with two `/dev/dri/renderD128` descriptors held by the owner's browser. At the
+time of the install the live module therefore still reported 0.6.10 and had no
+`a65_trace` parameter and no `b8_*` attributes; that state is captured in
+`/mega/tmp/sm750/t7/pre-install.txt` and `docs/evidence/runtime/56-dmesg-restrict-off.txt`
+precedes it.
+
+A reboot at 2026-11-28T07:52:12Z (not performed by this task) then loaded the
+installed 0.6.11 tree, and the runtime evidence that had to be deferred is now
+obtainable; it is recorded in `docs/evidence/runtime/57-instrumented-load.txt`.
+
+## 8. gates
+
+All six commands, under `LC_ALL=C`:
+
+```
+$ bash tests/check-release-version.sh
+Release version consistency checks passed: 0.6.11
+exit=0
+
+$ ./tests/check-drm-packaging.sh
+Unified DRM package checks passed
+exit=0
+
+$ ./tests/check-rpm-dkms.sh
+SKIP: modinfo of the installed module: needs root, follows the skipped dnf install
+SKIP: dnf remove sm750hdmifb: needs root and the skipped dnf install
+SKIP: dkms status after erase (registration gone): needs root, follows the skipped dnf remove
+SKIP: closing commands recorded in docs/evidence/EVIDENCE-GAPS.md GAP-B7
+RPM/DKMS checks passed: sm750hdmifb 0.6.11 (+ sm750hdmifb-tools 0.6.11/x86_64), sandbox built, 8 planted controls rejected, root-only steps skipped
+exit=0
+
+$ ./tests/audit-release.sh
+Release audit passed: /home/coder/sm750hdmifb/dist/RELEASE-AUDIT.txt
+exit=0
+
+$ PKG_CONFIG_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64/pkgconfig \
+  PKG_CONFIG_SYSROOT_DIR=/mega/tmp/sm750/t3/libdrm \
+  LD_LIBRARY_PATH=/mega/tmp/sm750/t3/libdrm/usr/lib64 \
+  make CC=/usr/bin/gcc KDIR=/usr/src/kernels/7.3.5-100.fc43.x86_64 check
+...
+sm750-smi checks passed (27 fields, 11 fixtures, 5 planted controls)
+exit=0
+
+$ git diff --check
+exit=0
+$ git diff --cached --check
+exit=0
+```
+
+The first `make check` of this round, without the three libdrm variables, exited
+2 in `check-deps`:
+
+```
+libdrm development files are required by tests/check-vblank.
+  Debian/Ubuntu: sudo apt install libdrm-dev
+  Fedora:        sudo dnf install libdrm-devel
+  Rootless alternative: see docs/ENVIRONMENT.md
+make: *** [Makefile:18: check-deps] Error 1
+```
+
+That is the preflight doing its job: `libdrm-devel` is absent from the rpmdb on
+this host and `dnf install` by bare name is not allowlisted. The second run used
+the rootless recipe of `docs/ENVIRONMENT.md` section 4 and exited 0. No check was
+relaxed and no file was changed to get there.
+
+The rpm-dkms gate's `SKIP` lines are its documented root-only tail: it rebuilds
+the noarch RPM in a sandbox, asserts the payload against `git ls-files`, rejects
+the eight planted controls, and skips the host install/erase, which sections 5
+and 6 of this file cover with root through the allowlisted helper.

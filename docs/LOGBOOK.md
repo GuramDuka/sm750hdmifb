@@ -38,3 +38,59 @@
   would be the widest line in the allowlist. The owner decides.
 - Gate: `soak helper checks passed (111 assertions, 11 planted controls)`, wired
   through `tests/check-drm-policy.sh:330`; the make check recipe count stays 18.
+
+### 2026-11-28T08:35Z | devops | T7 (install half): 0.6.11 built, packaged, installed, and loaded by the boot
+
+- Bumped 0.6.10 -> 0.6.11 at every site measured at HEAD `13f36d5`:
+  `src/sm750_drm.c:81` `#define SM750_DRM_VERSION` (and `DRIVER_PATCHLEVEL` 11),
+  `build-package.sh:9`, `dkms.conf:3`, `packaging/sm750hdmifb.spec:22` `:26`
+  plus a changelog entry, `packaging/sm750hdmifb-tools.spec:21` plus a changelog
+  entry, and the artifact names in `docs/ci/build.yml` that
+  `tests/check-release-version.sh` greps. `tests/check-soak-helper.sh:219` is a
+  fixture and stays at 0.6.10. A 0.6.11 section was added to
+  `docs/RELEASE-NOTES.md`.
+- Built from the tree, not from a staged RPM: `./build-package.sh` under the
+  rootless libdrm recipe produced `dist/sm750hdmifb_0.6.11_all.deb`,
+  `dist/sm750hdmifb-tools_0.6.11_amd64.deb` and the 156-entry source tarball
+  (sha256 `b54643a46dd3...`), then both RPMs were rebuilt in the RPM build root
+  (`sm750hdmifb-0.6.11-1.fc43.noarch.rpm` 151090 B, `sm750hdmifb-tools-0.6.11-1.fc43.x86_64.rpm`
+  28786 B). The tools spec needs `--nodeps` with the pinned libdrm tree because
+  `libdrm-devel` is not in the rpmdb. Verified by extraction, not by trusting the
+  commit: the packaged `src/sm750_drm.c` sha256 `eb72303def3c...` is the tree's,
+  and the payload carries the ordered teardown at `:5957` -> `:5971` -> `:5975`
+  and all eleven `DEVICE_ATTR_RO(b8_*)`.
+- `sudo -n /usr/local/sbin/sm750-pkg install` at 2026-11-27T21:53:18Z replaced
+  both 0.6.10 packages, purged the stale DKMS registration in `%posttrans` and
+  DKMS-built and signed 0.6.11 for all four kernels. It then exited 1 on its own
+  guard, `loaded module reports '0.6.10', installed RPM is '0.6.11'`: correct,
+  because this session was forbidden to reload with the owner's browser holding
+  two `/dev/dri/renderD128` fds (pids 570903, 570922, refcnt 1).
+- The host rebooted at 2026-11-28T07:52:12Z and the boot autoloaded the installed
+  module. The deferral therefore ended without this session touching the module:
+  `/sys/module/sm750hdmidrm/version` reads `0.6.11`, loaded srcversion
+  `95E21EB1B858C08574A4974` equals the installed `.ko.xz`, `sm750-vt show` reports
+  `version=0.6.11` refcnt 0, and `sm750-pkg install` re-run at 08:14:32Z exits 0
+  with `installed, loaded module reports 0.6.11`. All eleven `b8_*` attributes
+  read live (eight zero, `b8_mode_attempts=2`, `b8_edid_reads=1`,
+  `b8_counters_epoch_s=3`); `a65_trace=N` and no `A65:` line is emitted, so the
+  nineteen marks stay owner-gated to a run with the parameter armed.
+- Per-kernel payload, all version 0.6.11 and srcversion `95E21EB1B858C08574A4974`,
+  sha256 `130981341edf...` (7.2.15-100), `7fcc74010166...` (7.3.3-100),
+  `2ce25ea44415...` (7.3.4-100), `b7972196c8ed...` (7.3.5-100); every DKMS
+  artefact hashes the same as the installed file.
+- Evidence: `docs/evidence/builds/30-instrumented-install.log` (build, tarball,
+  RPMs, payload diff, install, per-kernel table, what the install did not do,
+  gates) and `docs/evidence/runtime/57-instrumented-load.txt` (the deferral and
+  its cause with the pre-install `refcnt 1` and the two holders quoted, then the
+  live post-boot identity and the eleven counter reads).
+- Gates, all exit 0: `tests/check-release-version.sh` (`0.6.11`),
+  `tests/check-drm-packaging.sh`, `tests/check-rpm-dkms.sh` (`0.6.11`, 8 planted
+  controls rejected), `tests/audit-release.sh`, `make ... check` under the
+  documented rootless libdrm recipe (its first bare run exits 2 in `check-deps`
+  because `libdrm-devel` is absent; nothing was relaxed), and `git diff --check`.
+- Counts re-measured after `git add -A` and the docs corrected where they had
+  drifted: 156 payload files (was 154/132 in three places). Not achieved and
+  reported as such: the T4 evidence files `docs/evidence/a65/02-mark-and-ordering-gate.txt`
+  and `docs/evidence/builds/29-a65-ordering-build.log` do not exist in the tree
+  even though `tests/check-a65-trace.sh` passes; and the A65 mark capture needs
+  the parameter armed by the owner.

@@ -1,6 +1,42 @@
 <!-- SPDX-License-Identifier: GPL-2.0-only -->
 # Release notes
 
+## 0.6.11 - The teardown is ordered and the bus is counted
+
+- **The remove path follows the contract the A65 analysis measured.** The
+  teardown used to interleave a client-list walk, an atomic shutdown, a
+  workqueue flush and the unplug without a stated order, and a hot remove with
+  fbcon bound could stop in any of them. `sm750_pci_remove()` now takes the
+  client-list mutex first, runs `drm_atomic_helper_shutdown()` before the
+  shadow workqueue teardown, destroys the queue inside `.remove` with its
+  devres action removed, and calls `drm_dev_unplug()` last
+  (`src/sm750_drm.c:5944-5992`). `WARN_ON(mutex_is_locked())` at the unplug
+  site turns a leaked mode, shadow or cursor lock into a visible splat instead
+  of a hang.
+- **The two fbcon-reachable pipe paths no longer wait on `mode_lock`.** A
+  console callback that blocked on the mode lock could not be drained while
+  the teardown path owned it, so both paths use `mutex_trylock()` and defer
+  the register write to the next commit (`src/sm750_drm.c:4323`,
+  `src/sm750_drm.c:4534`, drained at `src/sm750_drm.c:5961`).
+- **The teardown trace grew to nineteen marks.** The 0.6.10 trace had sixteen
+  `A65: <mark>` records and no mark around the shadow-queue destroy or the
+  client teardown. 0.6.11 adds three, names the mode-lock acquisition
+  explicitly, and `tests/check-a65-trace.sh` pins the new order with nine
+  assertions and nine planted controls, every one rejected.
+- **GAP-B8 has eleven readable counters.** `b8_mode_attempts`,
+  `b8_mode_failures`, `b8_mode_retries`, `b8_stage_failures`,
+  `b8_i2c_write_timeouts`, `b8_i2c_recoveries`, `b8_ready_expired`,
+  `b8_ddc_grant_timeouts`, `b8_edid_reads`, `b8_edid_failures` and
+  `b8_counters_epoch_s` join the existing `sm750_attr_group` as `0444`
+  attributes, so a soak can read the mode-path and SiI902x bus counters as
+  the unprivileged user without a new privilege. The epoch attribute stamps
+  when the counters were zeroed, so a recurrence cannot be confused with a
+  reload. Only event-driven bus clears are counted; the housekeeping the
+  counters skip is documented as a lower bound
+  (`docs/evidence/gap-b8/03-counter-observed.txt`). All eleven were read from
+  the live 0.6.11 module on this host after the 0.6.11 boot, eight of them zero
+  and three carrying boot activity (`docs/evidence/runtime/57-instrumented-load.txt`).
+
 ## 0.6.10 - The next wedge becomes observable
 
 - **`a65_trace=1` marks the hot-reload teardown path.** The remove sequence

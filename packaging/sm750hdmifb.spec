@@ -19,11 +19,11 @@
 #   tests/check-rpm-dkms.sh
 
 %global dkms_name     sm750hdmifb
-%global dkms_version  0.6.10
+%global dkms_version  0.6.11
 %global module_name   sm750hdmidrm
 
 Name:           sm750hdmifb
-Version:        0.6.10
+Version:        0.6.11
 Release:        1%{?dist}
 Summary:        DKMS source for the SM750G10 SiI9024A HDMI DRM-KMS driver
 License:        GPL-2.0-only
@@ -357,6 +357,23 @@ exit 0
 %doc README.md LICENSE docs/RELEASE-NOTES.md docs/TESTING.md packaging/copyright
 
 %changelog
+* Sat Nov 28 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.11-1
+- Release 0.6.11: the instrumented build. The remove path now follows the
+  teardown contract measured for A65: the DRM client list is torn down under
+  its mutex, `drm_atomic_helper_shutdown()` runs before the shadow workqueue
+  teardown, the queue is destroyed inside `.remove` with its devres action
+  removed, and `drm_dev_unplug()` is last. The two fbcon-reachable pipe paths
+  no longer block on `mode_lock`: they use `mutex_trylock()` and defer the
+  drain instead of waiting on a lock the teardown path owns.
+- The teardown trace carries nineteen `A65: <mark>` records instead of
+  sixteen, and `tests/check-a65-trace.sh` pins the new order with nine
+  planted controls.
+- Eleven GAP-B8 counters join the existing sysfs group as 0444 attributes:
+  `b8_mode_attempts`, `b8_mode_failures`, `b8_mode_retries`,
+  `b8_stage_failures`, `b8_i2c_write_timeouts`, `b8_i2c_recoveries`,
+  `b8_ready_expired`, `b8_ddc_grant_timeouts`, `b8_edid_reads`,
+  `b8_edid_failures` and `b8_counters_epoch_s`. They are readable without
+  privilege so a soak can match a recurrence without root.
 * Fri Nov 27 2026 kodemunkie <kodemunkie@users.noreply.github.com> - 0.6.10-1
 - Release 0.6.10: a default-off teardown trace that makes the next hot-reload
   capture possible. With `a65_trace=1` the remove path prints sixteen
